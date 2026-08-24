@@ -1,7 +1,7 @@
 ECHO APP (PORTABLE)
 ===================
 
-1) Double-click Start-Echo-App.bat
+1) Double-click Echo-App.vbs (or Start-Echo-App.bat)
 2) Echo opens automatically in app window mode
 3) Optional: run Install-Echo-Desktop-Shortcut.ps1 to put Echo on desktop
 
@@ -18,4 +18,5 @@ NOTES
 =====
 
 - The launcher enables auto-reload and auto-open during development.
+- Echo-App.vbs runs the launcher without showing a terminal window.
 - If Git is not installed, install it first: https://git-scm.com/download/win

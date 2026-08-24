@@ -28,6 +28,7 @@ $itemsToCopy = @(
     'templates',
     'tests',
     'Start-Echo-App.bat',
+    'Echo-App.vbs',
     'Install-Echo-Desktop-Shortcut.ps1',
     'Sync-GitHub.ps1',
     'Sync-GitHub.bat',

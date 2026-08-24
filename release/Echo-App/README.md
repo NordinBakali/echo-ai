@@ -20,12 +20,16 @@ De browser gaat automatisch openen op **http://localhost:5000**
 ## App-modus (zonder URL typen)
 
 ### One-click starten
+Dubbelklik op `Echo-App.vbs` in de app-map.
+
+Alternatief via terminal:
 ```powershell
 cd c:\Users\nordi\Desktop\ai
 Start-Echo-App.bat
 ```
 
 Dit start Echo in app-venster modus, zet auto-reload aan, en opent automatisch bij wijzigingen.
+`Echo-App.vbs` start dezelfde launcher zonder zichtbaar terminalvenster.
 
 ### Desktop-icoon maken
 ```powershell
@@ -33,6 +37,7 @@ powershell -ExecutionPolicy Bypass -File .\Install-Echo-Desktop-Shortcut.ps1
 ```
 
 Dit maakt `Echo App.lnk` op je bureaublad.
+Als `Echo-App.vbs` bestaat, gebruikt de snelkoppeling automatisch die one-click launcher.
 
 ## GitHub auto-sync
 
