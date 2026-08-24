@@ -123,6 +123,7 @@ const closeModal = document.getElementById('closeModal');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const stemSelect = document.getElementById('stemSelect');
 const testVoiceBtn = document.getElementById('testVoiceBtn');
+const aiVoiceSelect = document.getElementById('aiVoiceSelect');
 const taalSelect = document.getElementById('taal');
 const settingsKicker = document.getElementById('settingsKicker');
 const settingsTitle = document.getElementById('settingsTitle');
@@ -138,6 +139,8 @@ const youtubeUrlLabel = document.getElementById('youtubeUrlLabel');
 const googleUrlLabel = document.getElementById('googleUrlLabel');
 const wakeWordLabel = document.getElementById('wakeWordLabel');
 const stemSelectLabel = document.getElementById('stemSelectLabel');
+const aiVoiceSelectLabel = document.getElementById('aiVoiceSelectLabel');
+const aiVoiceSelectNote = document.getElementById('aiVoiceSelectNote');
 const computerBesturingLabelText = document.getElementById('computerBesturingLabelText');
 const computerBesturingNote = document.getElementById('computerBesturingNote');
 const emojiGebruikLabelText = document.getElementById('emojiGebruikLabelText');
@@ -437,6 +440,11 @@ const UI_TEKST = {
         googleUrl: 'Google URL:',
         wakeWord: 'Wake word:',
         chooseVoice: 'Choose voice:',
+        aiVoiceSwitcherLabel: 'AI Voice Switcher:',
+        aiVoiceSwitcherNote: 'Ultra-realistic ElevenLabs voices via secure backend.',
+        aiVoiceAuto: 'Auto (J.A.R.V.I.S. recommended)',
+        aiVoiceBrowserFallback: 'Browser voice fallback',
+        aiVoiceUnavailable: 'Premium voices are unavailable right now. Using browser voice fallback.',
         computerControl: 'Allow advanced computer control',
         computerControlNote: 'This unlocks mouse, keyboard, screenshot, wifi, bluetooth, and app macro commands. You still need to say enable automation mode before Echo can use them.',
         useEmojis: 'Use emojis',
@@ -784,6 +792,11 @@ const UI_TEKST = {
         googleUrl: 'Google-URL:',
         wakeWord: 'Wake word:',
         chooseVoice: 'Kies stem:',
+        aiVoiceSwitcherLabel: 'AI-stem wisselaar:',
+        aiVoiceSwitcherNote: 'Ultra-realistische ElevenLabs-stemmen via beveiligde backend.',
+        aiVoiceAuto: 'Automatisch (J.A.R.V.I.S. aanbevolen)',
+        aiVoiceBrowserFallback: 'Browserstem fallback',
+        aiVoiceUnavailable: 'Premium stemmen zijn nu niet beschikbaar. Browserstem fallback wordt gebruikt.',
         computerControl: 'Sta geavanceerde computerbesturing toe',
         computerControlNote: 'Dit ontgrendelt muis-, toetsenbord-, screenshot-, wifi-, bluetooth- en app-macro-opdrachten. Je moet nog steeds eerst zeggen: schakel automation-modus in.',
         useEmojis: 'Gebruik emoji\'s',
@@ -870,6 +883,14 @@ let voiceOutputLevel = 0;
 let voiceOutputPulse = 0;
 let voiceOutputActive = false;
 let voiceMicDenied = false;
+const ECHO_TTS_BRIDGE_URL = 'http://127.0.0.1:8787';
+const PREMIUM_VOICE_STORAGE_KEY = 'echo.premiumVoiceId';
+const PREMIUM_VOICE_BROWSER_FALLBACK = '__browser_fallback__';
+let premiumVoiceCatalog = [];
+let premiumVoiceId = '';
+let activeVoiceId = '';
+let premiumVoiceLoadFailed = false;
+let premiumAudio = null;
 
 function normaliseerTaalwaarde(taal) {
     return String(taal || '').toLowerCase().startsWith('nl') || String(taal || '').toLowerCase() === 'nederlands'
@@ -2272,6 +2293,8 @@ function pasInterfaceTaalToe() {
     if (googleUrlLabel) googleUrlLabel.textContent = vertaal('googleUrl');
     if (wakeWordLabel) wakeWordLabel.textContent = vertaal('wakeWord');
     if (stemSelectLabel) stemSelectLabel.textContent = vertaal('chooseVoice');
+    if (aiVoiceSelectLabel) aiVoiceSelectLabel.textContent = vertaal('aiVoiceSwitcherLabel');
+    if (aiVoiceSelectNote) aiVoiceSelectNote.textContent = vertaal('aiVoiceSwitcherNote');
     if (computerBesturingLabelText) computerBesturingLabelText.textContent = vertaal('computerControl');
     if (computerBesturingNote) computerBesturingNote.textContent = vertaal('computerControlNote');
     if (emojiGebruikLabelText) emojiGebruikLabelText.textContent = vertaal('useEmojis');
@@ -2281,6 +2304,7 @@ function pasInterfaceTaalToe() {
     if (saveSettingsBtn) saveSettingsBtn.textContent = vertaal('saveSettings');
     if (settingsBtn) settingsBtn.textContent = vertaal('settingsButton');
     if (testVoiceBtn) testVoiceBtn.textContent = vertaal('testVoice');
+    renderPremiumVoiceOptions();
     if (controlLabel) controlLabel.textContent = vertaal('controlLabel');
     if (computerPanelLabel) computerPanelLabel.textContent = vertaal('computerPanelLabel');
     if (computerPanelNote) computerPanelNote.textContent = vertaal('computerPanelNote');
@@ -2377,22 +2401,244 @@ function pasInterfaceTaalToe() {
     updateMicrofoonKnop();
 }
 
+function leesLocalStorageVeilig(key) {
+    try {
+        return window.localStorage.getItem(key) || '';
+    } catch (_err) {
+        return '';
+    }
+}
+
+function schrijfLocalStorageVeilig(key, value) {
+    try {
+        window.localStorage.setItem(key, String(value || ''));
+    } catch (_err) {
+        // Ignore storage write errors.
+    }
+}
+
+function premiumVoiceModusBrowserFallbackGekozen() {
+    return activeVoiceId === PREMIUM_VOICE_BROWSER_FALLBACK;
+}
+
+function scorePremiumVoice(voice) {
+    const labelsText = JSON.stringify(voice?.labels || {}).toLowerCase();
+    const rawText = `${voice?.name || ''} ${voice?.category || ''} ${voice?.description || ''} ${labelsText}`.toLowerCase();
+    let score = 0;
+
+    if (/male|man/.test(rawText)) score += 30;
+    if (/british|uk|england/.test(rawText)) score += 26;
+    if (/narration|conversational|calm|professional|confident|assistant/.test(rawText)) score += 20;
+    if (/deep|clear|smooth|warm/.test(rawText)) score += 14;
+    if (/adam|antoni|josh|sam|george|daniel|callum/.test(rawText)) score += 8;
+    if (/child|cartoon|anime|character/.test(rawText)) score -= 24;
+
+    return score;
+}
+
+function sorteerPremiumVoices(voices) {
+    return [...voices].sort((a, b) => {
+        const scoreVerschil = scorePremiumVoice(b) - scorePremiumVoice(a);
+        if (scoreVerschil !== 0) {
+            return scoreVerschil;
+        }
+        return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+}
+
+function renderPremiumVoiceOptions() {
+    if (!aiVoiceSelect) {
+        return;
+    }
+
+    const vorigeWaarde = activeVoiceId || aiVoiceSelect.value || '';
+    const voices = sorteerPremiumVoices(premiumVoiceCatalog);
+
+    aiVoiceSelect.innerHTML = '';
+
+    const autoOption = document.createElement('option');
+    autoOption.value = '';
+    autoOption.textContent = vertaal('aiVoiceAuto');
+    aiVoiceSelect.appendChild(autoOption);
+
+    const fallbackOption = document.createElement('option');
+    fallbackOption.value = PREMIUM_VOICE_BROWSER_FALLBACK;
+    fallbackOption.textContent = vertaal('aiVoiceBrowserFallback');
+    aiVoiceSelect.appendChild(fallbackOption);
+
+    voices.forEach((voice) => {
+        const option = document.createElement('option');
+        option.value = String(voice.id || '');
+        const accent = String(voice?.labels?.accent || '').trim();
+        const gender = String(voice?.labels?.gender || '').trim();
+        const tags = [accent, gender].filter(Boolean).join(' · ');
+        option.textContent = tags ? `${voice.name} (${tags})` : String(voice.name || voice.id || 'Voice');
+        aiVoiceSelect.appendChild(option);
+    });
+
+    const heeftVorigeWaarde = Array.from(aiVoiceSelect.options).some((option) => option.value === vorigeWaarde);
+    activeVoiceId = heeftVorigeWaarde ? vorigeWaarde : '';
+    premiumVoiceId = activeVoiceId;
+    aiVoiceSelect.value = activeVoiceId;
+}
+
+async function laadPremiumVoices() {
+    if (!aiVoiceSelect) {
+        return;
+    }
+
+    if (!activeVoiceId) {
+        activeVoiceId = leesLocalStorageVeilig(PREMIUM_VOICE_STORAGE_KEY);
+        premiumVoiceId = activeVoiceId;
+    }
+
+    try {
+        const response = await fetch(`${ECHO_TTS_BRIDGE_URL}/api/tts/voices`, {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(payload?.message || payload?.error || 'Unable to load premium voices');
+        }
+
+        premiumVoiceCatalog = Array.isArray(payload.voices) ? payload.voices : [];
+        premiumVoiceLoadFailed = false;
+    } catch (error) {
+        premiumVoiceCatalog = [];
+        premiumVoiceLoadFailed = true;
+        console.warn('Premium voice catalog unavailable:', error);
+    }
+
+    renderPremiumVoiceOptions();
+}
+
+function geselecteerdePremiumVoiceId(voiceId) {
+    const gekozen = String(voiceId || activeVoiceId || '').trim();
+    if (!gekozen || gekozen === PREMIUM_VOICE_BROWSER_FALLBACK) {
+        return '';
+    }
+    return gekozen;
+}
+
+async function playAudio(text, voiceId) {
+    const prompt = String(text || '').trim();
+    if (!prompt) {
+        return;
+    }
+
+    const gekozenVoiceId = geselecteerdePremiumVoiceId(voiceId);
+
+    const response = await fetch(`${ECHO_TTS_BRIDGE_URL}/api/tts/speak`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            text: prompt,
+            voiceId: gekozenVoiceId,
+        }),
+    });
+
+    if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.message || payload?.error || 'Premium TTS request failed');
+    }
+
+    const audioBlob = await response.blob();
+    if (!audioBlob || !audioBlob.size) {
+        throw new Error('Premium TTS returned empty audio');
+    }
+
+    if (premiumAudio) {
+        try {
+            premiumAudio.pause();
+        } catch (_err) {
+            // Ignore stop errors.
+        }
+    }
+
+    const objectUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(objectUrl);
+    premiumAudio = audio;
+
+    await new Promise((resolve, reject) => {
+        let pulseTimer = null;
+
+        const cleanup = () => {
+            if (pulseTimer) {
+                window.clearInterval(pulseTimer);
+            }
+            audio.onended = null;
+            audio.onerror = null;
+            audio.onpause = null;
+            URL.revokeObjectURL(objectUrl);
+        };
+
+        audio.onended = () => {
+            cleanup();
+            resolve();
+        };
+
+        audio.onerror = () => {
+            cleanup();
+            reject(new Error('Audio playback failed'));
+        };
+
+        pulseTimer = window.setInterval(() => {
+            triggerVoiceOutputPulse(0.28 + (Math.random() * 0.24));
+        }, 190);
+
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch((error) => {
+                cleanup();
+                reject(error);
+            });
+        }
+    });
+}
+
+window.playAudio = playAudio;
+
+function moetPremiumTtsProberen() {
+    if (premiumVoiceModusBrowserFallbackGekozen()) {
+        return false;
+    }
+    return !premiumVoiceLoadFailed || premiumVoiceCatalog.length > 0 || Boolean(activeVoiceId);
+}
+
+async function probeerPremiumTts(text) {
+    if (!moetPremiumTtsProberen()) {
+        return false;
+    }
+
+    try {
+        await playAudio(text, activeVoiceId);
+        return true;
+    } catch (error) {
+        console.warn('Premium TTS fallback to browser voice:', error);
+        if (!premiumVoiceModusBrowserFallbackGekozen()) {
+            setTranslatedStatus('aiVoiceUnavailable', {}, 'status listening');
+        }
+        return false;
+    }
+}
+
 function speakText(text) {
-    if (!('speechSynthesis' in window) || !text || !spraakUitgangActief) {
+    if (!text || !spraakUitgangActief) {
         return Promise.resolve();
     }
 
     speechQueue = speechQueue.then(() => new Promise((resolve) => {
-        const startSpraak = () => {
+        const startSpraak = async () => {
             botIsAanHetPraten = true;
             setEchoSpreekAnimatie(true);
             setVoiceOutputActief(true);
             triggerVoiceOutputPulse(0.48);
             updateMicrofoonKnop();
-            window.speechSynthesis.resume();
 
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = actieveSpraakTaal;
             let afgerond = false;
 
             const rondSpraakAf = () => {
@@ -2423,23 +2669,47 @@ function speakText(text) {
                 resolve();
             };
 
-            const fallbackTimer = window.setTimeout(() => {
+            const premiumGeslaagd = await probeerPremiumTts(text);
+            if (premiumGeslaagd) {
                 rondSpraakAf();
-            }, 4000);
-
-            if (gekozenStemUri) {
-                const gekozenStem = window.speechSynthesis
-                    .getVoices()
-                    .find((stem) => stem.voiceURI === gekozenStemUri);
-                if (gekozenStem) {
-                    utterance.voice = gekozenStem;
-                    utterance.lang = gekozenStem.lang || 'en-US';
-                }
+                return;
             }
 
-            utterance.rate = 1;
-            utterance.pitch = 1;
-            utterance.volume = 1;
+            if (!('speechSynthesis' in window)) {
+                rondSpraakAf();
+                return;
+            }
+
+            window.speechSynthesis.resume();
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = actieveSpraakTaal;
+
+            const fallbackMs = Math.max(6000, Math.min(45000, Math.round(String(text).length * 90)));
+            const fallbackTimer = window.setTimeout(() => {
+                rondSpraakAf();
+            }, fallbackMs);
+
+            let gekozenStem = null;
+            if (gekozenStemUri) {
+                gekozenStem = window.speechSynthesis
+                    .getVoices()
+                    .find((stem) => stem.voiceURI === gekozenStemUri);
+            }
+
+            if (!gekozenStem) {
+                gekozenStem = kiesBesteStemObject();
+            }
+
+            if (gekozenStem) {
+                utterance.voice = gekozenStem;
+                utterance.lang = gekozenStem.lang || actieveSpraakTaal;
+            }
+
+            const stemAfstelling = stemAfstellingVoorSpraak(gekozenStem);
+            utterance.rate = stemAfstelling.rate;
+            utterance.pitch = stemAfstelling.pitch;
+            utterance.volume = stemAfstelling.volume;
 
             utterance.onstart = () => {
                 triggerVoiceOutputPulse(0.52);
@@ -2468,9 +2738,11 @@ function speakText(text) {
             } catch (_err) {
                 // Ignore stop errors and continue with speech.
             }
-            setTimeout(startSpraak, 150);
+            setTimeout(() => {
+                void startSpraak();
+            }, 150);
         } else {
-            startSpraak();
+            void startSpraak();
         }
     }));
 
@@ -2529,16 +2801,108 @@ function kiesVrouwenStem() {
         return '';
     }
 
-    const stemmen = window.speechSynthesis.getVoices();
-    const taalPrefix = actieveSpraakTaal.toLowerCase().startsWith('nl') ? 'nl' : 'en';
-    const stemmenVoorTaal = stemmen.filter((stem) => stem.lang && stem.lang.toLowerCase().startsWith(taalPrefix));
-    const kandidaten = stemmenVoorTaal.length ? stemmenVoorTaal : stemmen;
+    const besteStem = kiesBesteStemObject();
+    return besteStem ? besteStem.voiceURI : '';
+}
 
-    const vrouwenPatroon = taalPrefix === 'nl'
-        ? /female|woman|fem|vrouw|marjolein|emma|claire|sophie/i
-        : /female|woman|zira|hazel|aria|jenny|emma|sara|samantha|eva|claire|fem/i;
-    const match = kandidaten.find((stem) => vrouwenPatroon.test(stem.name));
-    return match ? match.voiceURI : '';
+function stemTaalPrefix() {
+    return actieveSpraakTaal.toLowerCase().startsWith('nl') ? 'nl' : 'en';
+}
+
+function stemScoreTekst(stem) {
+    return `${stem.name || ''} ${stem.voiceURI || ''} ${stem.lang || ''}`.toLowerCase();
+}
+
+function scoreStemkwaliteit(stem, taalPrefix) {
+    if (!stem) {
+        return Number.NEGATIVE_INFINITY;
+    }
+
+    const scoreTekst = stemScoreTekst(stem);
+    const stemLang = String(stem.lang || '').toLowerCase();
+    let score = 0;
+
+    if (stemLang.startsWith(taalPrefix)) {
+        score += 120;
+    } else if (scoreTekst.includes(`${taalPrefix}-`)) {
+        score += 50;
+    } else {
+        score -= 45;
+    }
+
+    if (/natural|neural|wavenet|online|studio|premium|enhanced/.test(scoreTekst)) {
+        score += 90;
+    }
+
+    if (/microsoft|google|azure|edge/.test(scoreTekst)) {
+        score += 18;
+    }
+
+    if (taalPrefix === 'nl') {
+        if (/colette|fenna|claire|sophie|emma|xander|nl-nl|nederlands|dutch/.test(scoreTekst)) {
+            score += 42;
+        }
+    } else if (/aria|jenny|emma|sara|samantha|libby|sonia|en-us|en-gb|british/.test(scoreTekst)) {
+        score += 42;
+    }
+
+    if (/female|vrouw|fem|woman/.test(scoreTekst)) {
+        score += 16;
+    }
+
+    if (/desktop|espeak|festival|robot|mssam|sam\b|zira\b/.test(scoreTekst)) {
+        score -= 75;
+    }
+
+    if (stem.default) {
+        score += 6;
+    }
+
+    if (stem.localService === false) {
+        score += 10;
+    }
+
+    return score;
+}
+
+function kiesBesteStemObject() {
+    if (!('speechSynthesis' in window)) {
+        return null;
+    }
+
+    const stemmen = window.speechSynthesis.getVoices();
+    if (!stemmen.length) {
+        return null;
+    }
+
+    const taalPrefix = stemTaalPrefix();
+    const gerangschikt = stemmen
+        .map((stem) => ({
+            stem,
+            score: scoreStemkwaliteit(stem, taalPrefix),
+        }))
+        .sort((a, b) => b.score - a.score);
+
+    return gerangschikt.length ? gerangschikt[0].stem : null;
+}
+
+function stemAfstellingVoorSpraak(stem) {
+    const taalPrefix = stemTaalPrefix();
+    const scoreTekst = stem ? stemScoreTekst(stem) : '';
+
+    if (/desktop|espeak|festival|robot|zira\b|mssam|sam\b/.test(scoreTekst)) {
+        return { rate: 0.9, pitch: 0.92, volume: 1 };
+    }
+
+    if (/natural|neural|wavenet|online|studio|premium/.test(scoreTekst)) {
+        return { rate: 0.98, pitch: 1.0, volume: 1 };
+    }
+
+    if (taalPrefix === 'nl') {
+        return { rate: 0.94, pitch: 1.0, volume: 1 };
+    }
+
+    return { rate: 0.96, pitch: 0.98, volume: 1 };
 }
 
 function updateStandbyTekst() {
@@ -2551,6 +2915,11 @@ function laadStemmenDropdown() {
     }
 
     beschikbareStemmen = window.speechSynthesis.getVoices();
+    if (!beschikbareStemmen.length) {
+        window.setTimeout(laadStemmenDropdown, 180);
+        return;
+    }
+
     stemSelect.innerHTML = '';
 
     const standaardOptie = document.createElement('option');
@@ -2570,12 +2939,16 @@ function laadStemmenDropdown() {
             stemSelect.appendChild(optie);
         });
 
-    if (!gekozenStemUri) {
+    const gekozenStemBestaat = beschikbareStemmen.some((stem) => stem.voiceURI === gekozenStemUri);
+
+    if (!gekozenStemUri || !gekozenStemBestaat) {
         gekozenStemUri = kiesVrouwenStem();
     }
 
-    if (gekozenStemUri) {
+    if (gekozenStemUri && beschikbareStemmen.some((stem) => stem.voiceURI === gekozenStemUri)) {
         stemSelect.value = gekozenStemUri;
+    } else {
+        stemSelect.value = '';
     }
 }
 
@@ -2860,10 +3233,14 @@ async function loadSettings() {
         wakeWord = normaliseerTekst(settings.wake_word || vertaal('defaultWakeWord'));
         document.getElementById('wakeWord').placeholder = vertaal('wakeWordPlaceholder');
         gekozenStemUri = settings.browser_stem || kiesVrouwenStem();
+        activeVoiceId = String(settings.premium_tts_voice_id || leesLocalStorageVeilig(PREMIUM_VOICE_STORAGE_KEY) || '').trim();
+        premiumVoiceId = activeVoiceId;
+        schrijfLocalStorageVeilig(PREMIUM_VOICE_STORAGE_KEY, activeVoiceId);
         if (recognition) {
             recognition.lang = actieveSpraakTaal;
         }
         laadStemmenDropdown();
+        await laadPremiumVoices();
         if (Object.keys(dashboardState || {}).length) {
             renderDashboard(dashboardState);
         }
@@ -2879,6 +3256,9 @@ async function saveSettings() {
 
     gekozenStemUri = stemSelect ? stemSelect.value : '';
     clientNaam = clientNaamInput ? clientNaamInput.value.trim() : '';
+    activeVoiceId = aiVoiceSelect ? String(aiVoiceSelect.value || '').trim() : activeVoiceId;
+    premiumVoiceId = activeVoiceId;
+    schrijfLocalStorageVeilig(PREMIUM_VOICE_STORAGE_KEY, activeVoiceId);
     const wakeWordInvoer = (document.getElementById('wakeWord').value || '').trim() || vertaal('defaultWakeWord');
     wakeWord = normaliseerTekst(wakeWordInvoer);
     spraakUitgangActief = document.getElementById('spraakUitgang').checked;
@@ -2903,7 +3283,8 @@ async function saveSettings() {
         prioriteit_modus: document.getElementById('prioriteitModus').checked,
         spraak_taal: actieveSpraakTaal,
         wake_word: wakeWordInvoer,
-        browser_stem: gekozenStemUri
+        browser_stem: gekozenStemUri,
+        premium_tts_voice_id: activeVoiceId
     };
 
     uiSettingsState = { ...uiSettingsState, ...settings };
@@ -3079,6 +3460,14 @@ if (testVoiceBtn) {
     testVoiceBtn.addEventListener('click', async () => {
         await speakText(vertaal('testVoiceSample'));
         setTranslatedStatus('voiceTestPlayed');
+    });
+}
+
+if (aiVoiceSelect) {
+    aiVoiceSelect.addEventListener('change', () => {
+        activeVoiceId = String(aiVoiceSelect.value || '').trim();
+        premiumVoiceId = activeVoiceId;
+        schrijfLocalStorageVeilig(PREMIUM_VOICE_STORAGE_KEY, activeVoiceId);
     });
 }
 

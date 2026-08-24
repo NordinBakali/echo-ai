@@ -144,6 +144,7 @@ DEFAULT_SETTINGS = {
     "cloud_tts_pitch": os.environ.get("GOOGLE_TTS_PITCH", "0.0"),
     "wake_word": "hey echo",
     "browser_stem": "",
+    "premium_tts_voice_id": "",
     "agent_modus": True,
     "geheugen_modus": True,
     "prioriteit_modus": True,
@@ -1801,25 +1802,54 @@ def registreer_gesprek_uitwisseling(gebruiker_tekst, echo_tekst):
 def kies_stem_voor_taal(engine):
     is_nederlands = instellingen.get("spraak_taal", "en-US").lower().startswith("nl")
     taal_prefix = "nl" if is_nederlands else "en"
-    patronen = (
-        ("female", "zira", "hazel", "aria", "jenny", "emma", "samantha", "eva")
-        if not is_nederlands
-        else ("female", "fem", "vrouw", "marjolein", "claire", "emma", "sophie")
-    )
 
     try:
         stemmen = engine.getProperty("voices")
     except Exception:
         return
 
-    for stem in stemmen:
+    if not stemmen:
+        return
+
+    voorkeursnamen = (
+        ("aria", "jenny", "emma", "samantha", "hazel", "claire", "eva")
+        if not is_nederlands
+        else ("colette", "fenna", "marjolein", "claire", "emma", "sophie")
+    )
+
+    def stem_score(stem):
         beschrijving = f"{getattr(stem, 'name', '')} {getattr(stem, 'id', '')}".lower()
         talen = " ".join(str(taal).lower() for taal in getattr(stem, "languages", []))
-        if any(patroon in beschrijving for patroon in patronen) and (
-            taal_prefix in talen or taal_prefix in beschrijving or not talen
-        ):
-            engine.setProperty("voice", stem.id)
+        score = 0
+
+        if taal_prefix in talen or taal_prefix in beschrijving:
+            score += 120
+        elif not talen:
+            score += 25
+        else:
+            score -= 45
+
+        if any(naam in beschrijving for naam in voorkeursnamen):
+            score += 40
+
+        if any(woord in beschrijving for woord in ("female", "fem", "vrouw", "woman")):
+            score += 18
+
+        if any(woord in beschrijving for woord in ("natural", "neural", "wavenet", "online")):
+            score += 24
+
+        if any(woord in beschrijving for woord in ("zira", "espeak", "festival", "robot", "sam")):
+            score -= 52
+
+        return score
+
+    beste_stem = max(stemmen, key=stem_score, default=None)
+    if beste_stem is not None:
+        try:
+            engine.setProperty("voice", beste_stem.id)
             return
+        except Exception:
+            pass
 
     for stem in stemmen:
         beschrijving = f"{getattr(stem, 'name', '')} {getattr(stem, 'id', '')}".lower()
@@ -1933,6 +1963,17 @@ def spreek_uit(tekst):
     try:
         engine = pyttsx3.init()
         kies_stem_voor_taal(engine)
+        is_nederlands = instellingen.get("spraak_taal", "en-US").lower().startswith("nl")
+        doel_snelheid = 170 if is_nederlands else 176
+        try:
+            huidige_snelheid = int(engine.getProperty("rate") or doel_snelheid)
+            if huidige_snelheid > 0:
+                doel_snelheid = int(round((huidige_snelheid * 0.55) + (doel_snelheid * 0.45)))
+        except Exception:
+            pass
+
+        engine.setProperty("rate", max(145, min(195, doel_snelheid)))
+        engine.setProperty("volume", 1.0)
         engine.say(tekst)
         engine.runAndWait()
     except Exception as e:

@@ -13,6 +13,18 @@
 <body>
     <div class="sound-halo sound-halo--left" aria-hidden="true"></div>
     <div class="sound-halo sound-halo--right" aria-hidden="true"></div>
+    <div class="ai-core-hud" aria-hidden="true">
+        <div class="ai-core">
+            <span class="ai-core__ring ai-core__ring--r1"></span>
+            <span class="ai-core__ring ai-core__ring--r2"></span>
+            <span class="ai-core__ring ai-core__ring--r3"></span>
+            <span class="ai-core__ring ai-core__ring--r4"></span>
+            <span class="ai-core__ring ai-core__ring--r5"></span>
+            <span class="ai-core__ring ai-core__ring--r6"></span>
+            <span class="ai-core__orb"></span>
+            <span class="ai-core__core"></span>
+        </div>
+    </div>
     <div class="container">
         <section class="hero-shell">
             <div class="header">
@@ -586,6 +598,14 @@
                             <select id="stemSelect"></select>
                             <button type="button" class="save-settings-btn" id="testVoiceBtn">🔊 Test voice</button>
                         </div>
+
+                        <div class="setting-item setting-item--voice-switcher">
+                            <label for="aiVoiceSelect" id="aiVoiceSelectLabel">AI Voice Switcher:</label>
+                            <select id="aiVoiceSelect" class="voice-switcher-select">
+                                <option value="">Auto (J.A.R.V.I.S. recommended)</option>
+                            </select>
+                            <p class="setting-item-note setting-item-note--voice-switcher" id="aiVoiceSelectNote">High-quality ElevenLabs voices via secure backend.</p>
+                        </div>
                     </div>
                 </section>
 
@@ -687,6 +707,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='gemini-api-client.js') }}"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

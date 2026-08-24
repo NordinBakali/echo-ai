@@ -2,6 +2,14 @@
 setlocal
 cd /d "%~dp0"
 
+if exist "Sync-Echo-App.ps1" (
+    echo [Echo] Syncing app package files...
+    powershell -NoProfile -ExecutionPolicy Bypass -File ".\Sync-Echo-App.ps1" -Quiet
+    if errorlevel 1 (
+        echo [Echo] Warning: app package sync failed. Continuing startup...
+    )
+)
+
 if not exist ".venv\Scripts\python.exe" (
     echo [Echo] Creating virtual environment...
     where py >nul 2>nul

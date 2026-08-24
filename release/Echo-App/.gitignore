@@ -1,4 +1,5 @@
 .env
+node_modules/
 echo_geheugen.json
 echo_planning.json
 __pycache__/

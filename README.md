@@ -22,6 +22,9 @@ De browser gaat automatisch openen op **http://localhost:5000**
 ### One-click starten
 Dubbelklik op `Echo-App.vbs` in de app-map.
 
+Voor live code-sync tijdens ontwikkelen:
+Dubbelklik op `Echo-App-LiveSync.vbs`.
+
 Alternatief via terminal:
 ```powershell
 cd c:\Users\nordi\Desktop\ai
@@ -30,6 +33,7 @@ Start-Echo-App.bat
 
 Dit start Echo in app-venster modus, zet auto-reload aan, en opent automatisch bij wijzigingen.
 `Echo-App.vbs` start dezelfde launcher zonder zichtbaar terminalvenster.
+`Echo-App-LiveSync.vbs` start Echo en activeert tegelijk continue sync naar `release\Echo-App`.
 
 ### Desktop-icoon maken
 ```powershell
@@ -38,6 +42,7 @@ powershell -ExecutionPolicy Bypass -File .\Install-Echo-Desktop-Shortcut.ps1
 
 Dit maakt `Echo App.lnk` op je bureaublad.
 Als `Echo-App.vbs` bestaat, gebruikt de snelkoppeling automatisch die one-click launcher.
+Daarnaast wordt ook `Echo App (Live Sync).lnk` aangemaakt voor starten met continue code-sync.
 
 ## GitHub auto-sync
 
@@ -166,6 +171,22 @@ Daarna staat je uitpakbare app-package hier:
   python server.py
   ```
   Optioneel kun je ook `OPENAI_BASE_URL` zetten als je een andere OpenAI-compatibele provider gebruikt.
+
+- **Google Gemini via Node bridge**
+  Voor veilige Gemini-integratie (zonder API key in de browser) gebruik je de nieuwe Node backend in `gemini-node/`.
+  ```powershell
+  cd gemini-node
+  Copy-Item .env.example .env
+  # zet daarna GEMINI_API_KEY in .env
+  npm install
+  npm run start
+  ```
+  Standaard draait de bridge op `http://127.0.0.1:8787` met endpoint `POST /api/echo`.
+  In de UI is nu `static/gemini-api-client.js` geladen, met de functie:
+  ```javascript
+  const antwoord = await askEchoWithGemini("Status report");
+  ```
+  De J.A.R.V.I.S.-stijl System Instruction staat in `gemini-node/src/geminiClient.js`.
 
 - **Lokale AI met Ollama**
   Dit project werkt nu ook direct met `Ollama` via dezelfde OpenAI-compatibele route. Een praktische lokale config is:
