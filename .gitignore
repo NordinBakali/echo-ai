@@ -1,0 +1,5 @@
+.env
+echo_geheugen.json
+echo_planning.json
+__pycache__/
+*.pyc

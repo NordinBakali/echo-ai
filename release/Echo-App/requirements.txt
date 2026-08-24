@@ -1,0 +1,5 @@
+Flask
+SpeechRecognition
+pyttsx3
+PyAutoGUI
+faster-whisper
