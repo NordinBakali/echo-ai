@@ -38,7 +38,7 @@ if errorlevel 1 (
 )
 
 if not defined ECHO_PORT set "ECHO_PORT=5000"
-if not defined ECHO_PORT_SPAN set "ECHO_PORT_SPAN=10"
+if not defined ECHO_PORT_SPAN set "ECHO_PORT_SPAN=50"
 if not defined ECHO_WINDOW_MODE set "ECHO_WINDOW_MODE=app"
 if not defined ECHO_AUTO_OPEN set "ECHO_AUTO_OPEN=1"
 if not defined ECHO_AUTO_RELOAD set "ECHO_AUTO_RELOAD=1"

@@ -8502,13 +8502,32 @@ def update_settings():
     return jsonify({'status': 'success', 'message': tekst_voor_taal('Settings saved', 'Instellingen opgeslagen')})
 
 
-def vind_beschikbare_poort(start=5000, eind=5010):
-    for poort in range(start, eind + 1):
+def poort_is_beschikbaar(poort):
+    try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.2)
-            if sock.connect_ex(("127.0.0.1", poort)) != 0:
-                return poort
-    return start
+            sock.bind(("127.0.0.1", int(poort)))
+            return True
+    except OSError:
+        return False
+
+
+def vind_beschikbare_poort(start=5000, eind=5010, uitbreid_tot=5200):
+    start = max(1024, int(start))
+    eind = max(start, int(eind))
+
+    for poort in range(start, eind + 1):
+        if poort_is_beschikbaar(poort):
+            return poort
+
+    extra_eind = max(eind, int(uitbreid_tot))
+    for poort in range(eind + 1, extra_eind + 1):
+        if poort_is_beschikbaar(poort):
+            return poort
+
+    # Last resort: let Windows pick any free local port.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def verwijder_auto_open_marker():
@@ -8585,8 +8604,16 @@ def open_url_in_app_venster(url):
 def open_echo_interface(url, window_mode='browser'):
     mode = str(window_mode or 'browser').strip().lower()
     if mode == 'app' and open_url_in_app_venster(url):
-        return
-    webbrowser.open(url)
+        return True
+
+    try:
+        geopend = bool(webbrowser.open(url))
+    except Exception:
+        geopend = False
+
+    if not geopend:
+        print(f'Kon browser niet automatisch openen. Open handmatig: {url}')
+    return geopend
 
 
 def moet_auto_openen(auto_open, auto_reload, open_on_reload):
@@ -8625,19 +8652,20 @@ def vind_draaiende_echo_poort(start=5000, eind=5010):
     return None
 
 
-def bepaal_runtime_poort(voorkeurs_poort):
+def bepaal_runtime_poort(voorkeurs_poort, max_poort):
     gekozen_poort = os.environ.get('ECHO_SELECTED_PORT')
     if gekozen_poort:
         return begrens_int_waarde(gekozen_poort, voorkeurs_poort, 1024, 65535)
 
-    poort = vind_beschikbare_poort(voorkeurs_poort, min(voorkeurs_poort + 10, 65535))
+    poort = vind_beschikbare_poort(voorkeurs_poort, max_poort, min(max_poort + 200, 65535))
     os.environ['ECHO_SELECTED_PORT'] = str(poort)
     return poort
 
 if __name__ == '__main__':
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
-    max_poort = min(voorkeurs_poort + 10, 65535)
-    poort = bepaal_runtime_poort(voorkeurs_poort)
+    poort_span = begrens_int_waarde(os.environ.get('ECHO_PORT_SPAN', '50'), 50, 0, 2000)
+    max_poort = min(voorkeurs_poort + poort_span, 65535)
+    poort = bepaal_runtime_poort(voorkeurs_poort, max_poort)
     url = f'http://127.0.0.1:{poort}'
     auto_open = parseer_bool_waarde(os.environ.get('ECHO_AUTO_OPEN', 'true'), True)
     auto_reload = parseer_bool_waarde(os.environ.get('ECHO_AUTO_RELOAD', 'false'), False)
