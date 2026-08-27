@@ -1,0 +1,29 @@
+name: Build Echo Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-portable:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build portable package
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          ./Build-Echo-App-Zip.ps1
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Echo-App-Portable
+          path: release/Echo-App-Portable.zip
+          if-no-files-found: error
+          retention-days: 14

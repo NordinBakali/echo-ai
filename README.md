@@ -92,6 +92,17 @@ Daarna staat je uitpakbare app-package hier:
 
 - `release\Echo-App-Portable.zip`
 
+## GitHub Actions download (voor clients)
+
+Na elke push op `main` (of handmatig via workflow dispatch) bouwt GitHub Actions automatisch een downloadbaar artifact:
+
+1. Open je repository op GitHub.
+2. Ga naar **Actions**.
+3. Open workflow **Build Echo Portable**.
+4. Download artifact **Echo-App-Portable**.
+
+Dit artifact bevat `Echo-App-Portable.zip` zodat clients direct kunnen reviewen.
+
 ## Hoe het werkt
 
 - ✍️ **Typ commando's** - Voer commando's in via het invoerveld
