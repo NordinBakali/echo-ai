@@ -3788,8 +3788,11 @@ def categoriseer_actie(actie):
         "press hotkey::",
         "take screenshot",
         "volume ",
+        "brightness ",
         "window ",
-        "wifi ",
+        "wifi on",
+        "wifi off",
+        "wifi toggle",
         "bluetooth ",
     )):
         return "automation"
@@ -3807,6 +3810,7 @@ def categoriseer_actie(actie):
         "system scan start",
         "system scan status",
         "battery status",
+        "wifi quality",
         "disk space",
         "ip address",
         "current time",
@@ -3828,7 +3832,9 @@ def categoriseer_verzoek_tekst(tekst):
         return "browser"
     if any(woord in tekst for woord in ("bestand", "file", "folder", "map", "readme", "zoek", "search", "rename", "copy", "move", "delete", "rewrite", "herschrijf", "overschrijf", "append")):
         return "workspace"
-    if any(woord in tekst for woord in ("automation", "screenshot", "window", "venster", "wifi", "bluetooth", "volume", "mouse", "muis", "keyboard", "toets", "macro", "discord", "steam", "whatsapp", "vscode")):
+    if re.search(r"\b(?:wifi|wi-fi|internet|netwerk)\b", tekst) and re.search(r"\b(?:kwaliteit|quality|speed|snelheid|upload|download|ping|latency|diagnose|check|test)\b", tekst):
+        return "system"
+    if any(woord in tekst for woord in ("automation", "screenshot", "window", "venster", "wifi", "bluetooth", "volume", "brightness", "helderheid", "mouse", "muis", "keyboard", "toets", "macro", "discord", "steam", "whatsapp", "vscode")):
         return "automation"
     if any(woord in tekst for woord in ("why", "what", "how", "compare", "explain", "leg uit", "waarom", "wat is", "hoe werkt", "vergelijk")):
         return "answer"
@@ -5404,6 +5410,22 @@ def maak_informatie_actie(stap):
     if re.fullmatch(r"(?:battery|battery status|batterij|batterij status)", stap):
         return "battery status"
 
+    if re.search(r"\b(?:battery|batterij)\b", stap) and re.search(r"\b(?:status|check|level|percentage|hoeveel|over|remaining|left)\b", stap):
+        return "battery status"
+
+    if re.fullmatch(
+        r"(?:wifi|wi-fi|wifi status|wi-fi status|wifi quality|wifi check|internet speed|speed test|network speed|upload speed|download speed|wifi kwaliteit|wifi checken|internet snelheid|snelheidstest|netwerksnelheid|upload snelheid|download snelheid|downloadsnelheid)",
+        stap,
+    ):
+        return "wifi quality"
+
+    if (
+        re.search(r"\b(?:wifi|wi-fi|internet|netwerk)\b", stap)
+        and re.search(r"\b(?:kwaliteit|quality|speed|snelheid|upload|download|check|diagnose|diagnostic|test|latency|ping)\b", stap)
+        and not re.search(r"\b(?:on|off|aan|uit|toggle)\b", stap)
+    ):
+        return "wifi quality"
+
     if re.fullmatch(r"(?:disk space|free space|storage status|schijfruimte|vrije ruimte|opslagstatus)", stap):
         return "disk space"
 
@@ -6139,6 +6161,15 @@ def voer_systeeminfo_uit(actie):
             "Batterijinformatie is niet beschikbaar."
         )
 
+    if actie == "wifi quality":
+        try:
+            return voer_wifi_kwaliteitscheck_uit()
+        except Exception as e:
+            return tekst_voor_taal(
+                f"Could not check Wi-Fi quality: {e}",
+                f"Kon wifi-kwaliteit niet controleren: {e}"
+            )
+
     if actie == "disk space":
         try:
             basis = Path.cwd().anchor or str(Path.cwd())
@@ -6430,6 +6461,283 @@ def voer_wifi_actie_uit(modus):
     )
 
 
+def parseer_decimaal_getal(waarde):
+    try:
+        return float(str(waarde or "").strip().replace(",", "."))
+    except ValueError:
+        return None
+
+
+def haal_wifi_verbinding_info():
+    resultaat = subprocess.run(
+        ["netsh", "wlan", "show", "interfaces"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+    if resultaat.returncode != 0:
+        raise RuntimeError((resultaat.stderr or resultaat.stdout or "netsh wlan failed").strip())
+
+    output = resultaat.stdout or ""
+    if re.search(r"there is no wireless interface|er is geen draadloze interface", output, re.IGNORECASE):
+        raise RuntimeError("No Wi-Fi interface found")
+
+    info = {
+        "interface": "",
+        "ssid": "",
+        "connected": False,
+        "signal": None,
+        "receive_mbps": None,
+        "transmit_mbps": None,
+        "channel": None,
+        "radio": "",
+    }
+
+    for regel in output.splitlines():
+        naam_match = re.match(r"^\s*(?:name|naam)\s*:\s*(.+)$", regel, re.IGNORECASE)
+        if naam_match:
+            info["interface"] = naam_match.group(1).strip()
+            continue
+
+        status_match = re.match(r"^\s*(?:state|status)\s*:\s*(.+)$", regel, re.IGNORECASE)
+        if status_match:
+            status_tekst = status_match.group(1).strip().lower()
+            verbonden = re.search(r"\b(?:connected|verbonden)\b", status_tekst)
+            niet_verbonden = re.search(r"\b(?:disconnected|niet\s+verbonden)\b", status_tekst)
+            info["connected"] = bool(verbonden and not niet_verbonden)
+            continue
+
+        ssid_match = re.match(r"^\s*ssid\s*:\s*(.+)$", regel, re.IGNORECASE)
+        if ssid_match:
+            info["ssid"] = ssid_match.group(1).strip()
+            continue
+
+        signaal_match = re.match(r"^\s*(?:signal|signaal)\s*:\s*(\d+)\s*%", regel, re.IGNORECASE)
+        if signaal_match:
+            info["signal"] = int(signaal_match.group(1))
+            continue
+
+        rx_match = re.match(r"^\s*(?:receive\s+rate\s*\(mbps\)|ontvangstsnelheid\s*\(mbps\))\s*:\s*([0-9.,]+)", regel, re.IGNORECASE)
+        if rx_match:
+            info["receive_mbps"] = parseer_decimaal_getal(rx_match.group(1))
+            continue
+
+        tx_match = re.match(r"^\s*(?:transmit\s+rate\s*\(mbps\)|verzendsnelheid\s*\(mbps\))\s*:\s*([0-9.,]+)", regel, re.IGNORECASE)
+        if tx_match:
+            info["transmit_mbps"] = parseer_decimaal_getal(tx_match.group(1))
+            continue
+
+        kanaal_match = re.match(r"^\s*(?:channel|kanaal)\s*:\s*(\d+)", regel, re.IGNORECASE)
+        if kanaal_match:
+            info["channel"] = int(kanaal_match.group(1))
+            continue
+
+        radio_match = re.match(r"^\s*(?:radio\s+type|radiotype)\s*:\s*(.+)$", regel, re.IGNORECASE)
+        if radio_match:
+            info["radio"] = radio_match.group(1).strip()
+
+    return info
+
+
+def meet_download_snelheid_mbps():
+    test_urls = [
+        "https://speed.cloudflare.com/__down?bytes=2000000",
+        "https://proof.ovh.net/files/1Mb.dat",
+    ]
+    fouten = []
+
+    for url in test_urls:
+        try:
+            start = time.perf_counter()
+            with urllib.request.urlopen(url, timeout=10) as response:
+                data = response.read()
+            duur = max(0.001, time.perf_counter() - start)
+            if not data:
+                raise RuntimeError("Download test returned no data")
+            return (len(data) * 8.0) / (duur * 1_000_000.0)
+        except Exception as e:
+            fouten.append(f"{url}: {e}")
+
+    raise RuntimeError("; ".join(fouten[:2]) or "Download speed test failed")
+
+
+def meet_upload_snelheid_mbps():
+    test_urls = [
+        "https://speed.cloudflare.com/__up",
+        "https://httpbin.org/post",
+    ]
+    payload = os.urandom(512 * 1024)
+    fouten = []
+
+    for url in test_urls:
+        try:
+            request_obj = urllib.request.Request(
+                url,
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            start = time.perf_counter()
+            with urllib.request.urlopen(request_obj, timeout=10) as response:
+                response.read(128)
+            duur = max(0.001, time.perf_counter() - start)
+            return (len(payload) * 8.0) / (duur * 1_000_000.0)
+        except Exception as e:
+            fouten.append(f"{url}: {e}")
+
+    raise RuntimeError("; ".join(fouten[:2]) or "Upload speed test failed")
+
+
+def meet_ping_latency_ms():
+    resultaat = subprocess.run(
+        ["ping", "1.1.1.1", "-n", "4", "-w", "1000"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+    output = (resultaat.stdout or "") + "\n" + (resultaat.stderr or "")
+    gemiddelde_match = re.search(r"(?:Average|Gemiddelde)\s*=\s*(\d+)\s*ms", output, re.IGNORECASE)
+    if gemiddelde_match:
+        return float(gemiddelde_match.group(1))
+    return None
+
+
+def beoordeel_wifi_kwaliteit(signal=None, download_mbps=None, upload_mbps=None, ping_ms=None):
+    punten = []
+
+    if signal is not None:
+        if signal >= 75:
+            punten.append(3)
+        elif signal >= 55:
+            punten.append(2)
+        elif signal >= 40:
+            punten.append(1)
+        else:
+            punten.append(0)
+
+    if download_mbps is not None:
+        if download_mbps >= 50:
+            punten.append(3)
+        elif download_mbps >= 25:
+            punten.append(2)
+        elif download_mbps >= 10:
+            punten.append(1)
+        else:
+            punten.append(0)
+
+    if upload_mbps is not None:
+        if upload_mbps >= 20:
+            punten.append(3)
+        elif upload_mbps >= 8:
+            punten.append(2)
+        elif upload_mbps >= 3:
+            punten.append(1)
+        else:
+            punten.append(0)
+
+    if ping_ms is not None:
+        if ping_ms <= 25:
+            punten.append(3)
+        elif ping_ms <= 60:
+            punten.append(2)
+        elif ping_ms <= 120:
+            punten.append(1)
+        else:
+            punten.append(0)
+
+    if not punten:
+        return tekst_voor_taal(
+            "I could not determine enough data for a Wi-Fi quality verdict.",
+            "Ik kon niet genoeg data bepalen voor een wifi-kwaliteitsoordeel."
+        )
+
+    score = sum(punten) / len(punten)
+    if score >= 2.4:
+        return tekst_voor_taal(
+            "Verdict: excellent for video calls, cloud uploads, and large downloads.",
+            "Oordeel: uitstekend voor videobellen, cloud uploads en grote downloads."
+        )
+    if score >= 1.6:
+        return tekst_voor_taal(
+            "Verdict: good enough for daily work, video calls, and normal uploads/downloads.",
+            "Oordeel: goed genoeg voor dagelijks werk, videobellen en normale uploads/downloads."
+        )
+    if score >= 0.8:
+        return tekst_voor_taal(
+            "Verdict: usable, but uploads/downloads can be slow or unstable.",
+            "Oordeel: bruikbaar, maar uploads/downloads kunnen traag of instabiel zijn."
+        )
+    return tekst_voor_taal(
+        "Verdict: weak connection quality for reliable uploads/downloads.",
+        "Oordeel: zwakke verbinding voor betrouwbare uploads/downloads."
+    )
+
+
+def voer_wifi_kwaliteitscheck_uit():
+    info = haal_wifi_verbinding_info()
+    if not info.get("connected"):
+        interface_naam = info.get("interface") or "Wi-Fi"
+        return tekst_voor_taal(
+            f"{interface_naam} is available but not connected.",
+            f"{interface_naam} is beschikbaar maar niet verbonden."
+        )
+
+    download_mbps = None
+    upload_mbps = None
+    ping_ms = None
+    fouten = []
+
+    try:
+        download_mbps = meet_download_snelheid_mbps()
+    except Exception as e:
+        fouten.append(tekst_voor_taal(f"download test failed ({e})", f"downloadtest mislukt ({e})"))
+
+    try:
+        upload_mbps = meet_upload_snelheid_mbps()
+    except Exception as e:
+        fouten.append(tekst_voor_taal(f"upload test failed ({e})", f"uploadtest mislukt ({e})"))
+
+    try:
+        ping_ms = meet_ping_latency_ms()
+    except Exception as e:
+        fouten.append(tekst_voor_taal(f"ping test failed ({e})", f"pingtest mislukt ({e})"))
+
+    ssid = info.get("ssid") or tekst_voor_taal("unknown SSID", "onbekende SSID")
+    signaal = info.get("signal")
+    rx = info.get("receive_mbps")
+    tx = info.get("transmit_mbps")
+    kanaal = info.get("channel")
+
+    link_regel = tekst_voor_taal(
+        f"Wi-Fi link: SSID {ssid}, signal {f'{signaal}%' if signaal is not None else 'unknown'}, receive {f'{rx:.1f}' if rx is not None else 'unknown'} Mbps, transmit {f'{tx:.1f}' if tx is not None else 'unknown'} Mbps, channel {kanaal if kanaal is not None else 'unknown'}.",
+        f"Wifi-link: SSID {ssid}, signaal {f'{signaal}%' if signaal is not None else 'onbekend'}, ontvangen {f'{rx:.1f}' if rx is not None else 'onbekend'} Mbps, verzenden {f'{tx:.1f}' if tx is not None else 'onbekend'} Mbps, kanaal {kanaal if kanaal is not None else 'onbekend'}."
+    )
+
+    snelheids_regel = ""
+    if download_mbps is not None or upload_mbps is not None or ping_ms is not None:
+        snelheids_regel = tekst_voor_taal(
+            f"Internet test: download {f'{download_mbps:.1f}' if download_mbps is not None else 'unknown'} Mbps, upload {f'{upload_mbps:.1f}' if upload_mbps is not None else 'unknown'} Mbps, ping {f'{ping_ms:.0f}' if ping_ms is not None else 'unknown'} ms.",
+            f"Internettest: download {f'{download_mbps:.1f}' if download_mbps is not None else 'onbekend'} Mbps, upload {f'{upload_mbps:.1f}' if upload_mbps is not None else 'onbekend'} Mbps, ping {f'{ping_ms:.0f}' if ping_ms is not None else 'onbekend'} ms."
+        )
+
+    oordeel = beoordeel_wifi_kwaliteit(signaal, download_mbps, upload_mbps, ping_ms)
+    regels = [link_regel]
+    if snelheids_regel:
+        regels.append(snelheids_regel)
+    regels.append(oordeel)
+    if fouten:
+        regels.append(tekst_voor_taal(
+            "Note: " + "; ".join(fouten[:2]),
+            "Opmerking: " + "; ".join(fouten[:2])
+        ))
+
+    return " ".join(regels)
+
+
 def haal_bluetooth_adapter_info():
     script = (
         "$device = Get-PnpDevice -Class Bluetooth | Where-Object { $_.FriendlyName -and $_.FriendlyName -notmatch 'Enumerator' } | "
@@ -6678,6 +6986,66 @@ def haal_volume_percentage_uit_tekst(stap):
         return None
 
     return percentage_uit_woordtekst(volume_set_match.group(1))
+
+
+def haal_helderheid_percentage_uit_tekst(stap):
+    helderheid_set_match = re.match(
+        r"^(?:(?:set|zet|schakel)\s+(?:the\s+|het\s+|de\s+)?(?:screen\s+)?(?:brightness|helderheid|schermhelderheid)|(?:brightness|helderheid))(?:\s+(?:to|op|naar))?\s+(.+)$",
+        stap,
+    )
+    if not helderheid_set_match:
+        return None
+
+    return percentage_uit_woordtekst(helderheid_set_match.group(1))
+
+
+def haal_huidige_helderheid():
+    script = """
+$value = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty CurrentBrightness
+if ($null -eq $value) { throw 'Brightness value unavailable' }
+Write-Output $value
+"""
+    resultaat = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+
+    match = re.search(r"(\d{1,3})", resultaat.stdout or "")
+    if not match:
+        raise RuntimeError("Could not read current brightness")
+    return begrens_percentage(match.group(1))
+
+
+def stel_schermhelderheid_in(percentage):
+    percentage = begrens_percentage(percentage)
+    script = f"""
+$target = [byte]{percentage}
+$methods = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue
+if (-not $methods) {{ throw 'Brightness control not available on this device.' }}
+$applied = $false
+foreach ($method in @($methods)) {{
+    try {{
+        Invoke-CimMethod -InputObject $method -MethodName WmiSetBrightness -Arguments @{{ Timeout = 1; Brightness = $target }} -ErrorAction Stop | Out-Null
+        $applied = $true
+    }} catch {{}}
+}}
+if (-not $applied) {{ throw 'Unable to set brightness.' }}
+Write-Output $target
+"""
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+    return percentage
 
 
 def stel_systeemvolume_in(percentage):
@@ -6955,11 +7323,21 @@ def maak_automation_actie(originele_stap, stap):
     if volume_percentage is not None:
         return f"volume set {volume_percentage}"
 
+    helderheid_percentage = haal_helderheid_percentage_uit_tekst(stap)
+    if helderheid_percentage is not None:
+        return f"brightness set {helderheid_percentage}"
+
     volume_match = re.match(r"^(?:(?:volume|geluid)\s+(up|down|mute|omhoog|omlaag|stil)|(?:mute volume|dempen volume|zet volume stil))$", stap)
     if volume_match:
         ruwe_richting = volume_match.group(1) or "mute"
         richting = {"omhoog": "up", "omlaag": "down", "stil": "mute"}.get(ruwe_richting, ruwe_richting)
         return f"volume {richting}"
+
+    if re.fullmatch(r"(?:brightness up|increase brightness|helderheid omhoog|verhoog helderheid|maak (?:het )?(?:scherm )?helderder|scherm helderder|helderder)", stap):
+        return "brightness up"
+
+    if re.fullmatch(r"(?:brightness down|decrease brightness|helderheid omlaag|verlaag helderheid|maak (?:het )?(?:scherm )?donkerder|scherm donkerder|donkerder)", stap):
+        return "brightness down"
 
     if re.fullmatch(r"(?:show desktop|minimize windows|minimaliseer vensters|toon bureaublad)", stap):
         return "window show desktop"
@@ -7041,6 +7419,35 @@ def maak_browser_actie(stap):
         zoekterm = youtube_match.group(1).strip(" ?.")
         if zoekterm:
             return f"search youtube {zoekterm}"
+
+    def schoon_zoekterm(waarde):
+        tekst = str(waarde or "").strip(" ?.!,:;")
+        tekst = re.sub(r"\s+", " ", tekst).strip()
+        tekst = re.sub(r"^(?:naar\s+|op\s+)", "", tekst).strip()
+        tekst = re.sub(r"\s+(?:please|alsjeblieft|aub)$", "", tekst).strip()
+        return tekst
+
+    def heeft_workspace_zoekcontext(waarde):
+        return bool(re.search(r"\b(?:files?|bestanden?|workspace|project|folder|map|directory|bestand)\b", str(waarde or "")))
+
+    if not heeft_workspace_zoekcontext(stap):
+        generieke_zoek_patronen = (
+            r"^(?:zoek\s+(?:eens\s+)?op|zoek\s+(?:eens\s+)?naar)\s+(.+)$",
+            r"^(?:zoek|vind)\s+(.+?)\s+op$",
+            r"^(?:kan|kun|wil|wilt)\s+je\s+(?:voor\s+(?:mij|me)\s+)?opzoek\w*\s+(.+)$",
+            r"^(?:kan|kun|wil|wilt)\s+je\s+(?:voor\s+(?:mij|me)\s+)?(.+?)\s+opzoek\w*(?:\s+voor\s+(?:mij|me))?$",
+            r"^(?:look\s+up|search\s+for)\s+(.+)$",
+            r"^(?:can|could)\s+you\s+look\s+up\s+(.+)$",
+        )
+
+        for patroon in generieke_zoek_patronen:
+            match = re.match(patroon, stap, re.IGNORECASE)
+            if not match:
+                continue
+
+            zoekterm = schoon_zoekterm(match.group(1))
+            if zoekterm:
+                return f"search google {zoekterm}"
 
     if re.search(r"\b(?:new tabs?|nieuw(?:e)? tab(?:blad)?(?:en)?)\b", stap):
         meervoud = bool(re.search(r"\b(?:new tabs|nieuwe? tabbladen|tabbladen)\b", stap))
@@ -7170,9 +7577,9 @@ def actie_prioriteit(stap):
         return 1
     if stap.startswith("calculate::"):
         return 2
-    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "battery status", "disk space", "ip address", "current time")):
+    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "battery status", "wifi quality", "disk space", "ip address", "current time")):
         return 2
-    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "window ", "wifi ", "bluetooth ")):
+    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ")):
         return 3
     if stap.startswith("create folder"):
         return 4
@@ -7383,10 +7790,10 @@ def voer_enkele_actie_uit(actie):
     if actie == "system scan status":
         return system_scan_status_bericht()
 
-    if actie in {"system info", "battery status", "disk space", "ip address", "current time"}:
+    if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "current time"}:
         return voer_systeeminfo_uit(actie)
 
-    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "window ", "wifi ", "bluetooth ")):
+    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ")):
         blokkade = geavanceerde_besturing_geblokkeerd(actie)
         if blokkade:
             return blokkade
@@ -7607,6 +8014,44 @@ def voer_enkele_actie_uit(actie):
                 )
             except Exception as e:
                 return tekst_voor_taal(f"Error changing volume: {e}", f"Fout bij aanpassen van volume: {e}")
+
+    brightness_set_match = re.match(r"^brightness set\s+(\d{1,3})$", actie)
+    if brightness_set_match:
+        percentage = begrens_percentage(brightness_set_match.group(1))
+        try:
+            ingesteld = stel_schermhelderheid_in(percentage)
+            return tekst_voor_taal(
+                f"Brightness set to {ingesteld}%",
+                f"Helderheid ingesteld op {ingesteld}%"
+            )
+        except Exception as e:
+            return tekst_voor_taal(
+                f"Error setting brightness: {e}",
+                f"Fout bij instellen van helderheid: {e}"
+            )
+
+    if actie.startswith("brightness "):
+        richting = re.sub(r"^brightness\s*", "", actie).strip()
+        if richting in {"up", "down"}:
+            try:
+                huidig = haal_huidige_helderheid()
+                delta = 10 if richting == "up" else -10
+                doel = begrens_percentage(huidig + delta)
+                if doel == huidig:
+                    return tekst_voor_taal(
+                        "Brightness is already at the limit.",
+                        "Helderheid staat al op de limiet."
+                    )
+                ingesteld = stel_schermhelderheid_in(doel)
+                return tekst_voor_taal(
+                    f"Brightness {'increased' if richting == 'up' else 'decreased'} to {ingesteld}%",
+                    f"Helderheid {'verhoogd' if richting == 'up' else 'verlaagd'} naar {ingesteld}%"
+                )
+            except Exception as e:
+                return tekst_voor_taal(
+                    f"Error changing brightness: {e}",
+                    f"Fout bij aanpassen van helderheid: {e}"
+                )
 
     if actie == "window show desktop":
         try:
@@ -7846,13 +8291,18 @@ def voer_enkele_actie_uit(actie):
     return kan_niet_oproepen_bericht()
 
 
-def voer_commando_uit(tekst):
+def spreek_uit_als_toegestaan(tekst, spreek_hardop=True):
+    if spreek_hardop:
+        spreek_uit(tekst)
+
+
+def voer_commando_uit(tekst, spreek_hardop=True):
     """Execute a command and return a response."""
     geheugen_bericht = behandel_geheugen_commando(tekst)
     if geheugen_bericht:
         update_routering_context("memory", "memory", "memory", "completed")
         registreer_gesprek_uitwisseling(tekst, geheugen_bericht)
-        spreek_uit(geheugen_bericht)
+        spreek_uit_als_toegestaan(geheugen_bericht, spreek_hardop)
         return geheugen_bericht
 
     routering = analyseer_verzoek_routering(tekst)
@@ -7868,7 +8318,7 @@ def voer_commando_uit(tekst):
             update_routering_context(routering["intent"], "fallback", routering["category"], "fallback")
 
         registreer_gesprek_uitwisseling(tekst, bericht)
-        spreek_uit(bericht)
+        spreek_uit_als_toegestaan(bericht, spreek_hardop)
         return bericht
 
     plan = list(routering.get("plan", []))
@@ -7892,7 +8342,7 @@ def voer_commando_uit(tekst):
                 update_routering_context(routering["intent"], "online_action_planner", routering["category"], "completed")
 
             registreer_gesprek_uitwisseling(tekst, bericht)
-            spreek_uit(bericht)
+            spreek_uit_als_toegestaan(bericht, spreek_hardop)
             return bericht
 
     plan = orden_plan_op_prioriteit(plan)
@@ -7930,7 +8380,7 @@ def voer_commando_uit(tekst):
         update_routering_context(routering["intent"], "local_plan", routering["category"], "completed")
 
     registreer_gesprek_uitwisseling(tekst, bericht)
-    spreek_uit(bericht)
+    spreek_uit_als_toegestaan(bericht, spreek_hardop)
     return bericht
 
 @app.route('/')
@@ -7963,6 +8413,7 @@ def execute_command():
         }), 400
 
     commando = str(data.get('commando', '')).strip()
+    server_speech = bool(data.get('server_speech', False))
     
     if not commando:
         return jsonify({
@@ -7972,7 +8423,7 @@ def execute_command():
     
     start_tijd = time.time()
     try:
-        bericht = voer_commando_uit(commando)
+        bericht = voer_commando_uit(commando, spreek_hardop=server_speech)
         duur_ms = int(round((time.time() - start_tijd) * 1000))
         GESPREK_CONTEXT['laatste_commando'] = str(commando or '').strip()
         GESPREK_CONTEXT['laatste_commando_at'] = time.time()
@@ -8155,6 +8606,25 @@ def moet_auto_openen(auto_open, auto_reload, open_on_reload):
     return markeer_auto_open_uitgevoerd()
 
 
+def runtime_endpoint_bereikbaar(url, timeout=0.7):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload_raw = response.read().decode("utf-8", errors="ignore")
+        payload = json.loads(payload_raw)
+    except Exception:
+        return False
+
+    return isinstance(payload, dict) and ("build_id" in payload or "started_at" in payload)
+
+
+def vind_draaiende_echo_poort(start=5000, eind=5010):
+    for poort in range(start, eind + 1):
+        url = f"http://127.0.0.1:{poort}/api/runtime-version"
+        if runtime_endpoint_bereikbaar(url):
+            return poort
+    return None
+
+
 def bepaal_runtime_poort(voorkeurs_poort):
     gekozen_poort = os.environ.get('ECHO_SELECTED_PORT')
     if gekozen_poort:
@@ -8166,13 +8636,24 @@ def bepaal_runtime_poort(voorkeurs_poort):
 
 if __name__ == '__main__':
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
+    max_poort = min(voorkeurs_poort + 10, 65535)
     poort = bepaal_runtime_poort(voorkeurs_poort)
     url = f'http://127.0.0.1:{poort}'
     auto_open = parseer_bool_waarde(os.environ.get('ECHO_AUTO_OPEN', 'true'), True)
     auto_reload = parseer_bool_waarde(os.environ.get('ECHO_AUTO_RELOAD', 'false'), False)
     open_on_reload = parseer_bool_waarde(os.environ.get('ECHO_OPEN_ON_RELOAD', 'false'), False)
+    reopen_when_running = parseer_bool_waarde(os.environ.get('ECHO_REOPEN_WHEN_RUNNING', 'false'), False)
     window_mode = str(os.environ.get('ECHO_WINDOW_MODE', 'browser') or 'browser').strip().lower()
     is_reloader_child = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+
+    if not (auto_reload and is_reloader_child):
+        bestaande_poort = vind_draaiende_echo_poort(voorkeurs_poort, max_poort)
+        if bestaande_poort is not None:
+            bestaand_url = f'http://127.0.0.1:{bestaande_poort}'
+            print(f'Echo is already running on: {bestaand_url}')
+            if reopen_when_running:
+                open_echo_interface(bestaand_url, window_mode)
+            raise SystemExit(0)
 
     if auto_reload and not is_reloader_child:
         verwijder_auto_open_marker()

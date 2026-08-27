@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Echo Circle Logo</title>
+  <desc id="desc">Circular neon logo with ECHO text</desc>
+  <defs>
+    <radialGradient id="core" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#dffcff" stop-opacity="0.98" />
+      <stop offset="38%" stop-color="#7befff" stop-opacity="0.94" />
+      <stop offset="78%" stop-color="#08a2bf" stop-opacity="0.82" />
+      <stop offset="100%" stop-color="#042430" stop-opacity="1" />
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8efbff" />
+      <stop offset="100%" stop-color="#27b6d4" />
+    </linearGradient>
+  </defs>
+
+  <circle cx="256" cy="256" r="236" fill="#031018" />
+  <circle cx="256" cy="256" r="196" fill="url(#core)" />
+  <circle cx="256" cy="256" r="214" fill="none" stroke="url(#ring)" stroke-width="16" opacity="0.95" />
+  <circle cx="256" cy="256" r="168" fill="none" stroke="#9af7ff" stroke-width="6" opacity="0.72" />
+  <circle cx="256" cy="256" r="136" fill="none" stroke="#b4fbff" stroke-width="3" opacity="0.45" />
+
+  <text x="256" y="278" text-anchor="middle" font-family="Orbitron, 'Segoe UI', sans-serif" font-size="76" letter-spacing="12" fill="#eefeff">ECHO</text>
+</svg>

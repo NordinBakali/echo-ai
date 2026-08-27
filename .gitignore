@@ -1,5 +1,9 @@
 .env
 node_modules/
+.venv/
+release/.echo-sync-watch.lock
+release/Echo-App.__staging/
+release/Echo-App.__backup/
 echo_geheugen.json
 echo_planning.json
 __pycache__/

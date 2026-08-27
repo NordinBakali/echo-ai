@@ -28,5 +28,6 @@
   "cloud_tts_pitch": 0.0,
   "online_ai_modus": true,
   "online_ai_model": "gemini-1.5-flash",
-  "ai_agent_primair": true
+  "ai_agent_primair": true,
+  "premium_tts_voice_id": ""
 }

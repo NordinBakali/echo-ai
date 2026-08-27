@@ -28,8 +28,14 @@ $itemsToCopy = @(
     'gemini-node',
     'Start-Echo-App.bat',
     'Start-Echo-App-LiveSync.bat',
+    'Start-Echo-App-AutoSync.bat',
+    'Start-Echo-WakeListener.bat',
     'Echo-App.vbs',
     'Echo-App-LiveSync.vbs',
+    'Echo-App-AutoSync.vbs',
+    'Echo-Wake-Listener.vbs',
+    'echo_launch_helper.py',
+    'echo_wake_listener.py',
     'Install-Echo-Desktop-Shortcut.ps1',
     'Set-OpenAI-Key.ps1',
     'Sync-GitHub.ps1',
@@ -47,30 +53,68 @@ function Write-SyncMessage {
 
 function Invoke-EchoAppSync {
     $hasSyncMutex = $false
+    $stagingRoot = Join-Path $releaseRoot 'Echo-App.__staging'
+    $backupRoot = Join-Path $releaseRoot 'Echo-App.__backup'
+
     try {
         $hasSyncMutex = $syncMutex.WaitOne([timespan]::FromSeconds(30))
         if (-not $hasSyncMutex) {
             throw 'Could not acquire sync lock within 30 seconds.'
         }
 
-        if (Test-Path $packageRoot) {
-            Remove-Item -Path $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
-        }
-
         if (-not (Test-Path $releaseRoot)) {
             New-Item -Path $releaseRoot -ItemType Directory -Force | Out-Null
         }
 
-        New-Item -Path $packageRoot -ItemType Directory -Force | Out-Null
+        if (Test-Path $stagingRoot) {
+            Remove-Item -Path $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (Test-Path $backupRoot) {
+            Remove-Item -Path $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        New-Item -Path $stagingRoot -ItemType Directory -Force | Out-Null
+
+        $copiedItems = 0
 
         foreach ($item in $itemsToCopy) {
             $source = Join-Path $projectRoot $item
             if (Test-Path $source) {
-                Copy-Item -Path $source -Destination $packageRoot -Recurse -Force
+                Copy-Item -Path $source -Destination $stagingRoot -Recurse -Force
+                $copiedItems++
+            }
+            else {
+                Write-SyncMessage "Skipping missing source item: $item"
             }
         }
 
+        if ($copiedItems -eq 0) {
+            throw 'Sync aborted: no source items were copied into the staging package.'
+        }
+
+        if (Test-Path $packageRoot) {
+            Move-Item -Path $packageRoot -Destination $backupRoot -Force
+        }
+
+        Move-Item -Path $stagingRoot -Destination $packageRoot -Force
+
+        if (Test-Path $backupRoot) {
+            Remove-Item -Path $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
         Write-SyncMessage "Echo app synced to: $packageRoot"
+    }
+    catch {
+        if (Test-Path $stagingRoot) {
+            Remove-Item -Path $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-Path $packageRoot) -and (Test-Path $backupRoot)) {
+            Move-Item -Path $backupRoot -Destination $packageRoot -Force
+        }
+
+        throw
     }
     finally {
         if ($hasSyncMutex) {

@@ -22,8 +22,15 @@ De browser gaat automatisch openen op **http://localhost:5000**
 ### One-click starten
 Dubbelklik op `Echo-App.vbs` in de app-map.
 
+Deze launcher draait Echo in Flask app-modus en voorkomt dubbele instances:
+- als Echo al draait, wordt geen tweede server gestart;
+- bij code-updates blijft dezelfde app-instance actief.
+
 Voor live code-sync tijdens ontwikkelen:
 Dubbelklik op `Echo-App-LiveSync.vbs`.
+
+Voor de nieuwe Auto-Sync launcher:
+Dubbelklik op `Echo-App-AutoSync.vbs`.
 
 Alternatief via terminal:
 ```powershell
@@ -34,6 +41,21 @@ Start-Echo-App.bat
 Dit start Echo in app-venster modus, zet auto-reload aan, en opent automatisch bij wijzigingen.
 `Echo-App.vbs` start dezelfde launcher zonder zichtbaar terminalvenster.
 `Echo-App-LiveSync.vbs` start Echo en activeert tegelijk continue sync naar `release\Echo-App`.
+`Echo-App-AutoSync.vbs` start dezelfde continue sync-flow met een duidelijke aparte launchernaam.
+Bij code-updates blijft nu hetzelfde Echo-venster/tabblad actief; Echo ververst die instance automatisch zonder extra tabbladen te openen.
+
+### Wake listener ("hey echo" opent app als die dicht is)
+Start de wake listener eenmalig:
+```powershell
+Start-Echo-WakeListener.bat
+```
+
+Of verborgen:
+- Dubbelklik `Echo-Wake-Listener.vbs`
+
+Wanneer je "hey echo" zegt:
+- opent Echo als de app dicht is;
+- opent geen extra venster als Echo al zichtbaar open staat.
 
 ### Desktop-icoon maken
 ```powershell
@@ -43,6 +65,8 @@ powershell -ExecutionPolicy Bypass -File .\Install-Echo-Desktop-Shortcut.ps1
 Dit maakt `Echo App.lnk` op je bureaublad.
 Als `Echo-App.vbs` bestaat, gebruikt de snelkoppeling automatisch die one-click launcher.
 Daarnaast wordt ook `Echo App (Live Sync).lnk` aangemaakt voor starten met continue code-sync.
+En er wordt `Echo App (Auto Sync).lnk` aangemaakt voor de nieuwe Auto-Sync launcher.
+Ook wordt `Echo Wake Listener.lnk` aangemaakt voor "hey echo" wake-open gedrag.
 
 ## GitHub auto-sync
 
@@ -79,6 +103,7 @@ Daarna staat je uitpakbare app-package hier:
 
 - `open youtube` - Opent YouTube
 - `open google` - Opent Google
+- `zoek op het weer morgen`, `kan je opzoeken hoe ik ...`, `search for ...` - Zoekt automatisch op Google zonder dat je expliciet "search google" hoeft te typen
 - `maak map` - Maakt een nieuwe map
 - `open kladblok` - Opent Kladblok
 - `open verkenner` - Opent Verkenner
@@ -97,6 +122,9 @@ Daarna staat je uitpakbare app-package hier:
 - `rename old.txt to new.txt` - Hernoemt een bestand of map
 - `delete test.txt` - Verwijdert een bestand of map na bevestiging
 - `system info`, `battery status`, `disk space`, `ip address`, `current time` - Geeft lokale systeeminformatie
+- `how much battery do I have left`, `hoeveel batterij heb ik nog` - Batterijstatus in natuurlijke taal
+- `set brightness to 40`, `zet helderheid op 40 procent`, `maak scherm helderder`, `maak scherm donkerder` - Schermhelderheid bedienen
+- `wifi quality`, `is mijn wifi goed genoeg voor upload en download` - Wifi linkkwaliteit + upload/download diagnose
 - `remember that my name is Nordin` - Slaat je naam of een feit op in langetermijngeheugen
 - `save note buy milk` - Slaat een korte notitie op
 - `what do you remember about me` - Laat Echo zijn opgeslagen langetermijngeheugen samenvatten
@@ -187,6 +215,34 @@ Daarna staat je uitpakbare app-package hier:
   const antwoord = await askEchoWithGemini("Status report");
   ```
   De J.A.R.V.I.S.-stijl System Instruction staat in `gemini-node/src/geminiClient.js`.
+
+- **Lokale computerbesturing via Node (`child_process`)**
+  Echo kan nu ook echte Windows-acties uitvoeren via de Node bridge, aangestuurd door Gemini action-planning.
+
+  Belangrijke endpoints:
+  - `GET /api/device/capabilities`
+  - `POST /api/device/execute`
+
+  Ondersteunde acties (allowlist):
+  - `open_app` (`notepad`, `calculator`, `explorer`, `edge`, `chrome`, `settings`)
+  - `set_volume` (`up`, `down`, `mute`)
+  - `lock_screen` (met bevestigingsflow)
+
+  Voorbeeld directe call vanaf browser of frontend:
+  ```javascript
+  const result = await sendEchoDeviceCommand("open notepad");
+  console.log(result);
+  ```
+
+  Voor lock screen is bevestiging nodig; herhaal dan met `confirm`:
+  ```javascript
+  await sendEchoDeviceCommand("lock screen confirm");
+  ```
+
+  De uitvoering gebeurt in:
+  - `gemini-node/src/deviceControl.js` (Windows command executie via `child_process.execFile`)
+  - `gemini-node/src/geminiClient.js` (Gemini JSON action planner)
+  - `gemini-node/src/server.js` (API-routes en veiligheidschecks)
 
 - **Lokale AI met Ollama**
   Dit project werkt nu ook direct met `Ollama` via dezelfde OpenAI-compatibele route. Een praktische lokale config is:

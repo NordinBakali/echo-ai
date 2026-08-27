@@ -167,3 +167,20 @@ def test_speech_route_uses_mocked_recognition_flow(client, monkeypatch):
     assert payload["status"] == "success"
     assert payload["gesproken"] == "bereken 1+1"
     assert payload["message"] == "Result: 2"
+
+
+def test_normaliseer_actie_parses_battery_check_phrase():
+    assert server.normaliseer_actie("hoeveel batterij heb ik nog") == "battery status"
+
+
+def test_normaliseer_actie_parses_wifi_quality_phrase():
+    assert server.normaliseer_actie("is mijn wifi goed genoeg voor upload en download") == "wifi quality"
+
+
+def test_normaliseer_actie_parses_brightness_set_phrase():
+    assert server.normaliseer_actie("zet helderheid op 65 procent") == "brightness set 65"
+
+
+def test_normaliseer_actie_parses_brightness_step_phrases():
+    assert server.normaliseer_actie("maak scherm helderder") == "brightness up"
+    assert server.normaliseer_actie("maak scherm donkerder") == "brightness down"

@@ -1,711 +1,140 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#1b505d">
+    <meta name="theme-color" content="#00060a">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>{{ instellingen.naam }}</title>
-    <link rel="icon" href="data:,">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
     <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-    <div class="sound-halo sound-halo--left" aria-hidden="true"></div>
-    <div class="sound-halo sound-halo--right" aria-hidden="true"></div>
-    <div class="ai-core-hud" aria-hidden="true">
-        <div class="ai-core">
-            <span class="ai-core__ring ai-core__ring--r1"></span>
-            <span class="ai-core__ring ai-core__ring--r2"></span>
-            <span class="ai-core__ring ai-core__ring--r3"></span>
-            <span class="ai-core__ring ai-core__ring--r4"></span>
-            <span class="ai-core__ring ai-core__ring--r5"></span>
-            <span class="ai-core__ring ai-core__ring--r6"></span>
-            <span class="ai-core__orb"></span>
-            <span class="ai-core__core"></span>
-        </div>
-    </div>
-    <div class="container">
-        <section class="hero-shell">
-            <div class="header">
-                <div class="header-mark" aria-hidden="true">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                <h1>🤖 {{ instellingen.naam }}</h1>
-                <div class="echo-face" id="echoFace" aria-hidden="true">
-                    <span class="echo-face__antenna"></span>
-                    <span class="echo-face__eyes">
-                        <span></span>
-                        <span></span>
-                    </span>
-                    <span class="echo-face__mouth"></span>
-                </div>
-                <p id="subtitleText">Your personal AI assistant</p>
-            </div>
+<body class="booting" data-threat="nominal">
+    <div class="atmo-layer" aria-hidden="true"></div>
+    <div class="hud-grid" aria-hidden="true"></div>
+    <div class="hud-noise" aria-hidden="true"></div>
 
-            <aside class="hero-panel" aria-label="Echo overview">
-                <p class="hero-eyebrow" id="heroEyebrow">Resonance Ready</p>
-                <h2 id="heroTitle">Talk, type, search, and think out loud.</h2>
-                <p class="hero-copy" id="heroCopy">Echo works best when the next action is close: voice commands, quick buttons, and a live conversation area in one flow.</p>
-                <div class="hero-visual" aria-hidden="true">
-                    <span class="hero-visual__pulse"></span>
-                    <span class="hero-visual__pulse hero-visual__pulse--two"></span>
-                    <span class="hero-visual__beam"></span>
-                    <span class="hero-visual__core"></span>
+    <section class="boot-sequence" id="bootSequence" aria-hidden="true">
+        <div class="boot-shell">
+            <p class="boot-kicker" id="bootKicker">ECHO SYSTEM BOOT</p>
+            <h2 class="boot-title" id="bootTitle">ARC CORE INITIALIZING</h2>
+            <p class="boot-log" id="bootLog">Powering reactor lattice...</p>
+            <div class="boot-progress-track">
+                <span id="bootProgressFill"></span>
+            </div>
+            <p class="boot-meta" id="bootMeta">0%</p>
+        </div>
+    </section>
+
+    <main class="echo-interface">
+        <section class="core-stage" id="coreStage">
+            <button class="arc-reactor" id="coreMicBtn" type="button" aria-label="Toggle voice mode listening">
+                <span class="ring ring-outer"></span>
+                <span class="ring ring-mid"></span>
+                <span class="ring ring-inner"></span>
+                <span class="ring ring-scan"></span>
+                <span class="ring ring-lock"></span>
+                <span class="reactor-orb"></span>
+                <span class="reactor-dot"></span>
+                <span class="reactor-sheen"></span>
+            </button>
+
+            <img class="echo-mark" src="{{ url_for('static', filename='echo-circle-logo.svg') }}" alt="Echo circle logo">
+
+            <h1 class="assistant-name" id="assistantName">ECHO</h1>
+            <p class="voice-status" id="voiceStatus">Voice standby</p>
+            <p class="wake-word-hint" id="wakeWordHint">Wake word: hey echo</p>
+            <p class="wake-gate-status" id="wakeGateStatus">Wake gate locked</p>
+
+            <div class="voice-visualizer" id="voiceVisualizer" aria-hidden="true">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </div>
+        </section>
+
+        <section class="hud-panels" id="hudPanels">
+            <aside class="hud-panel hud-panel-left" aria-label="Launch and control panel">
+                <div class="panel-block">
+                    <p class="panel-kicker">App Launchers</p>
+                    <div class="panel-grid">
+                        <button type="button" class="panel-action" data-command="open youtube">Open YouTube</button>
+                        <button type="button" class="panel-action" data-command="open google">Open Google</button>
+                        <button type="button" class="panel-action" data-command="open calculator">Open Calculator</button>
+                        <button type="button" class="panel-action" data-command="open file explorer">Open Explorer</button>
+                        <button type="button" class="panel-action" data-command="show agenda">Show Agenda</button>
+                        <button type="button" class="panel-action" data-command="show tasks">Show Tasks</button>
+                    </div>
                 </div>
-                <div class="hero-tags" aria-hidden="true">
-                    <span id="heroTagVoice">Voice-first</span>
-                    <span id="heroTagActions">Fast actions</span>
-                    <span id="heroTagThink">Think with Echo</span>
+
+                <div class="panel-block">
+                    <p class="panel-kicker">Computer Controls</p>
+                    <div class="panel-grid">
+                        <button type="button" class="panel-action" data-command="enable automation mode">Enable Automation</button>
+                        <button type="button" class="panel-action" data-command="disable automation mode">Disable Automation</button>
+                        <button type="button" class="panel-action" data-command="take screenshot">Take Screenshot</button>
+                        <button type="button" class="panel-action" data-command="maximize window">Maximize Window</button>
+                        <button type="button" class="panel-action" data-command="close window">Close Window</button>
+                        <button type="button" class="panel-action" data-command="focus edge">Focus Edge</button>
+                    </div>
+                </div>
+
+                <div class="panel-block">
+                    <p class="panel-kicker">System Status</p>
+                    <p class="panel-note" id="commandStatus">Awaiting command.</p>
+                    <div class="threat-protocol" id="threatProtocol" aria-live="polite">
+                        <p class="threat-protocol__kicker">Threat Protocol</p>
+                        <p class="threat-protocol__level" id="threatLevelValue">NOMINAL</p>
+                        <p class="threat-protocol__context" id="threatLevelContext">VOICE CHANNEL IDLE</p>
+                    </div>
+                </div>
+            </aside>
+
+            <aside class="hud-panel hud-panel-right" aria-label="Text command panel">
+                <div class="panel-block">
+                    <p class="panel-kicker">Text Channel</p>
+                    <form id="commandForm" class="command-form" autocomplete="off">
+                        <input id="commandInput" type="text" placeholder="Type a command for Echo">
+                        <button id="sendBtn" type="submit">Send</button>
+                    </form>
+                </div>
+
+                <div class="panel-block">
+                    <p class="panel-kicker">Conversation Feed</p>
+                    <div class="messages" id="messages" aria-live="polite">
+                        <div class="message ai">Echo HUD channel ready.</div>
+                    </div>
+                </div>
+
+                <div class="panel-block pending-confirm is-hidden" id="pendingConfirm">
+                    <p class="panel-kicker" id="pendingConfirmKicker">Safety Check</p>
+                    <p class="panel-note" id="pendingConfirmText"></p>
+                    <div class="pending-actions">
+                        <button id="pendingConfirmYes" type="button">Confirm</button>
+                        <button id="pendingConfirmNo" type="button">Cancel</button>
+                    </div>
+                </div>
+
+                <div class="panel-block aux-actions">
+                    <button id="speechBtn" type="button">Start Voice Listening</button>
+                    <button id="clearLogBtn" type="button">Clear Feed</button>
                 </div>
             </aside>
         </section>
-
-        <section class="utility-grid">
-            <div class="commands-list commands-list--wide">
-                <h3 id="commandsTitle">Talk naturally</h3>
-                <p id="commandsText">You do not need exact commands. Tell Echo what you want to open, read, summarize, explain, or plan, and it will pick the best route.</p>
-            </div>
-
-            <div class="commands-list commands-list--compact">
-                <h3 id="microphoneTitle">🎙️ Microphone Mode:</h3>
-                <p id="microphoneText">Click <code>Microphone Always On</code>, say <code>hey echo</code>, then say your command.</p>
-            </div>
-
-            <div class="commands-list commands-list--visualizer" aria-label="Voice activity visualizer">
-                <h3 id="voiceVisualizerTitle">Voice activity</h3>
-                <p id="voiceVisualizerCopy">Watch the waveform respond to your microphone while Echo listens and pulse when Echo speaks back.</p>
-
-                <div class="voice-visualizer" id="voiceVisualizerShell">
-                    <canvas id="voiceVisualizerCanvas" class="voice-visualizer__canvas" aria-hidden="true"></canvas>
-                    <div class="voice-visualizer__meta">
-                        <span class="voice-visualizer__tag" id="voiceVisualizerMicLabel">Microphone</span>
-                        <span class="voice-visualizer__tag" id="voiceVisualizerAiLabel">Echo voice</span>
-                        <span class="voice-visualizer__state" id="voiceVisualizerStatus">Idle</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section class="workspace-shell">
-            <div class="conversation-stage">
-                <div class="composer-card">
-                    <div class="input-group">
-                        <input type="text" id="commandInput" placeholder="Type a command for Echo" autocomplete="off">
-                        <button id="sendBtn" type="button">Send</button>
-                    </div>
-
-                    <div class="quick-actions" id="quickActions" aria-label="Quick commands">
-                        <button type="button" class="quick-action" data-command-key="youtube">Open YouTube</button>
-                        <button type="button" class="quick-action" data-command-key="google">Open Google</button>
-                        <button type="button" class="quick-action" data-command-key="calculator">Open Calculator</button>
-                        <button type="button" class="quick-action" data-command-key="think">Think With Echo</button>
-                        <button type="button" class="quick-action" data-command-key="folder">Create Demo Folder</button>
-                        <button type="button" class="quick-action" data-command-key="explorer">Open Explorer</button>
-                    </div>
-
-                    <section class="intent-shell" id="intentShell" aria-label="Echo routing">
-                        <article class="intent-guide">
-                            <div class="intent-guide__copy">
-                                <p class="intent-guide__eyebrow" data-i18n="intentGuideEyebrow">Start here</p>
-                                <h3 class="intent-guide__title" data-i18n="intentGuideTitle">Tell Echo what kind of help you want</h3>
-                                <p class="intent-guide__text" data-i18n="intentGuideCopy">Echo is more consistent when it knows whether you want an explanation, an action, or both in one pass.</p>
-                            </div>
-
-                            <div class="intent-chip-row" id="intentChipRow">
-                                <button type="button" class="intent-chip" data-intent-key="answer">Explain Something</button>
-                                <button type="button" class="intent-chip" data-intent-key="action">Do a Task</button>
-                                <button type="button" class="intent-chip" data-intent-key="hybrid">Do + Explain</button>
-                                <button type="button" class="intent-chip" data-intent-key="automation">Automation Ready</button>
-                            </div>
-                        </article>
-
-                        <article class="route-panel" id="routePanel" data-state="idle">
-                            <div class="route-panel__head">
-                                <div>
-                                    <p class="route-panel__eyebrow" data-i18n="routePanelEyebrow">Execution path</p>
-                                    <h3 class="route-panel__title" data-i18n="routePanelTitle">See how Echo routed your request</h3>
-                                </div>
-                                <p class="route-panel__status" id="routePanelStatus">Waiting</p>
-                            </div>
-
-                            <div class="route-token-grid">
-                                <span class="route-token" id="routeIntentToken">Intent: --</span>
-                                <span class="route-token" id="routeToolToken">Tool: --</span>
-                                <span class="route-token" id="routeCategoryToken">Category: --</span>
-                                <span class="route-token" id="routeAutomationToken">Automation: --</span>
-                            </div>
-
-                            <p class="route-panel__copy" id="routePanelCopy">Echo will show whether it detected a question, an action, or a mixed request.</p>
-                        </article>
-                    </section>
-
-                    <section class="mode-strip" id="modeStrip" aria-label="Echo modes">
-                        <article class="mode-pill" id="modeAiCard" data-state="neutral">
-                            <p class="mode-pill__label" data-i18n="modeAiLabel">AI</p>
-                            <p class="mode-pill__value" id="modeAiValue">Checking</p>
-                            <p class="mode-pill__meta" id="modeAiMeta">Syncing with settings</p>
-                        </article>
-
-                        <article class="mode-pill" id="modeThinkCard" data-state="neutral">
-                            <p class="mode-pill__label" data-i18n="modeThinkLabel">Thinking</p>
-                            <p class="mode-pill__value" id="modeThinkValue">Checking</p>
-                            <p class="mode-pill__meta" id="modeThinkMeta">Syncing with settings</p>
-                        </article>
-
-                        <article class="mode-pill" id="modeMemoryCard" data-state="neutral">
-                            <p class="mode-pill__label" data-i18n="modeMemoryLabel">Memory</p>
-                            <p class="mode-pill__value" id="modeMemoryValue">Checking</p>
-                            <p class="mode-pill__meta" id="modeMemoryMeta">Syncing with settings</p>
-                        </article>
-
-                        <article class="mode-pill" id="modeAutomationCard" data-state="neutral">
-                            <p class="mode-pill__label" data-i18n="modeAutomationLabel">Automation</p>
-                            <p class="mode-pill__value" id="modeAutomationValue">Checking</p>
-                            <p class="mode-pill__meta" id="modeAutomationMeta">Syncing with settings</p>
-                        </article>
-
-                        <article class="mode-pill" id="modeVoiceCard" data-state="neutral">
-                            <p class="mode-pill__label" data-i18n="modeVoiceLabel">Voice</p>
-                            <p class="mode-pill__value" id="modeVoiceValue">Checking</p>
-                            <p class="mode-pill__meta" id="modeVoiceMeta">Syncing with settings</p>
-                        </article>
-                    </section>
-
-                    <section class="option-deck" id="optionDeck" aria-label="Echo options">
-                        <article class="option-panel option-panel--planner">
-                            <div class="option-panel-head">
-                                <p class="option-panel-label" data-i18n="panelPlannerLabel">Planner</p>
-                                <p class="option-panel-copy" data-i18n="panelPlannerCopy">Jump into tasks, timers, and reminders without typing the full sentence every time.</p>
-                            </div>
-                            <div class="option-panel-grid">
-                                <button type="button" class="feature-action feature-action--planner" data-feature-key="task_list">Show Tasks</button>
-                                <button type="button" class="feature-action feature-action--planner" data-feature-key="agenda_show">Show Agenda</button>
-                                <button type="button" class="feature-action feature-action--planner" data-feature-key="timer_5">Start 5 Min Timer</button>
-                                <button type="button" class="feature-action feature-action--planner" data-feature-key="reminder_break">Stretch Reminder</button>
-                            </div>
-                        </article>
-
-                        <article class="option-panel option-panel--browser">
-                            <div class="option-panel-head">
-                                <p class="option-panel-label" data-i18n="panelBrowserLabel">Browser</p>
-                                <p class="option-panel-copy" data-i18n="panelBrowserCopy">Use the active tab as context for reading, summarizing, and navigation commands.</p>
-                            </div>
-                            <div class="option-panel-grid">
-                                <button type="button" class="feature-action feature-action--browser" data-feature-key="browser_current_url">Current URL</button>
-                                <button type="button" class="feature-action feature-action--browser" data-feature-key="browser_read_page">Read This Page</button>
-                                <button type="button" class="feature-action feature-action--browser" data-feature-key="browser_summarize_page">Summarize This Page</button>
-                                <button type="button" class="feature-action feature-action--browser" data-feature-key="browser_focus_edge">Focus Edge</button>
-                            </div>
-                        </article>
-
-                        <article class="option-panel option-panel--workspace">
-                            <div class="option-panel-head">
-                                <p class="option-panel-label" data-i18n="panelWorkspaceLabel">Workspace</p>
-                                <p class="option-panel-copy" data-i18n="panelWorkspaceCopy">Surface memory, file tools, and system insight from one place.</p>
-                            </div>
-                            <div class="option-panel-grid">
-                                <button type="button" class="feature-action feature-action--workspace" data-feature-key="file_summarize_readme">Summarize README</button>
-                                <button type="button" class="feature-action feature-action--workspace" data-feature-key="workspace_search_ollama">Search Workspace</button>
-                                <button type="button" class="feature-action feature-action--workspace" data-feature-key="memory_show">What Do You Remember?</button>
-                                <button type="button" class="feature-action feature-action--workspace" data-feature-key="system_info">System Info</button>
-                            </div>
-                        </article>
-                    </section>
-
-                    <section class="prompt-studio" id="promptStudio" aria-label="Prompt studio">
-                        <div class="prompt-studio__head">
-                            <p class="prompt-studio__eyebrow" data-i18n="promptStudioEyebrow">Prompt studio</p>
-                            <h3 class="prompt-studio__title" data-i18n="promptStudioTitle">Start from a stronger prompt</h3>
-                            <p class="prompt-studio__copy" data-i18n="promptStudioCopy">Tap a pattern to fill the composer, adjust it if you want, then send it.</p>
-                        </div>
-
-                        <div class="prompt-clusters">
-                            <article class="prompt-card">
-                                <p class="prompt-card__label" data-i18n="promptCardPlanningLabel">Plan</p>
-                                <div class="prompt-chip-list">
-                                    <button type="button" class="prompt-chip" data-prompt-key="plan_day">Plan my day</button>
-                                    <button type="button" class="prompt-chip" data-prompt-key="focus_hour">Help me focus for an hour</button>
-                                    <button type="button" class="prompt-chip" data-prompt-key="set_break_reminder">Set a break reminder</button>
-                                </div>
-                            </article>
-
-                            <article class="prompt-card">
-                                <p class="prompt-card__label" data-i18n="promptCardResearchLabel">Research</p>
-                                <div class="prompt-chip-list">
-                                    <button type="button" class="prompt-chip" data-prompt-key="summarize_tab">Summarize this page</button>
-                                    <button type="button" class="prompt-chip" data-prompt-key="search_workspace">Search the workspace</button>
-                                    <button type="button" class="prompt-chip" data-prompt-key="memory_review">What do you remember?</button>
-                                </div>
-                            </article>
-
-                            <article class="prompt-card">
-                                <p class="prompt-card__label" data-i18n="promptCardBuildLabel">Build</p>
-                                <div class="prompt-chip-list">
-                                    <button type="button" class="prompt-chip" data-prompt-key="rewrite_readme">Rewrite README</button>
-                                    <button type="button" class="prompt-chip" data-prompt-key="system_review">Check my system</button>
-                                    <button type="button" class="prompt-chip" data-prompt-key="automation_ready">Prepare automation</button>
-                                </div>
-                            </article>
-                        </div>
-                    </section>
-
-                    <details class="command-drawer">
-                        <summary class="command-drawer__summary" data-i18n="commandDrawerSummary">Need ideas? Show a few examples</summary>
-
-                        <section class="command-lab" id="commandLab" aria-label="Command discovery">
-                            <div class="command-lab__head">
-                                <p class="command-lab__eyebrow" data-i18n="commandLabEyebrow">Command discovery</p>
-                                <h3 class="command-lab__title" data-i18n="commandLabTitle">Search examples before you type</h3>
-                                <p class="command-lab__copy" data-i18n="commandLabCopy">Filter real command patterns, tap one to fill the composer, then adjust it if needed.</p>
-                            </div>
-
-                            <label class="command-lab__label" for="commandDiscoveryInput" data-i18n="commandDiscoveryLabel">Find a pattern</label>
-                            <input type="text" id="commandDiscoveryInput" data-i18n-placeholder="commandDiscoveryPlaceholder" placeholder="Search browser, planner, file, memory, or automation commands">
-                            <div class="command-discovery-list" id="commandDiscoveryList"></div>
-                        </section>
-                    </details>
-                </div>
-
-                <div class="messages" id="messages" aria-live="polite">
-                    <div class="message ai hint" id="messageHint">Type a command or use the microphone. Example: enable automation mode, take screenshot, or vscode new file.</div>
-                </div>
-
-                <section class="dashboard-surface" id="dashboardSurface" aria-label="Echo dashboard">
-                    <article class="dashboard-panel dashboard-panel--runtime">
-                        <div class="dashboard-panel-head">
-                            <p class="dashboard-panel-eyebrow" data-i18n="dashboardEyebrow">Live dashboard</p>
-                            <h3 class="dashboard-panel-title" data-i18n="dashboardTitle">See what Echo is doing now</h3>
-                            <p class="dashboard-panel-copy" data-i18n="dashboardCopy">Runtime health, recent actions, and active tools update here automatically.</p>
-                        </div>
-
-                        <div class="dashboard-metric-grid">
-                            <article class="dashboard-metric-card">
-                                <p class="dashboard-metric-label" data-i18n="dashboardMetricModelLabel">Model</p>
-                                <p class="dashboard-metric-value" id="dashboardModelValue">Checking</p>
-                                <p class="dashboard-metric-meta" id="dashboardModelMeta">Waiting for dashboard data</p>
-                            </article>
-
-                            <article class="dashboard-metric-card">
-                                <p class="dashboard-metric-label" data-i18n="dashboardMetricCommandLabel">Last command</p>
-                                <p class="dashboard-metric-value" id="dashboardCommandValue">None yet</p>
-                                <p class="dashboard-metric-meta" id="dashboardCommandMeta">No actions recorded yet</p>
-                            </article>
-
-                            <article class="dashboard-metric-card">
-                                <p class="dashboard-metric-label" data-i18n="dashboardMetricUptimeLabel">Uptime</p>
-                                <p class="dashboard-metric-value" id="dashboardUptimeValue">0s</p>
-                                <p class="dashboard-metric-meta" id="dashboardUptimeMeta">Dashboard waiting to sync</p>
-                            </article>
-
-                            <article class="dashboard-metric-card">
-                                <p class="dashboard-metric-label" data-i18n="dashboardMetricAutomationLabel">Automation</p>
-                                <p class="dashboard-metric-value" id="dashboardAutomationValue">Locked</p>
-                                <p class="dashboard-metric-meta" id="dashboardAutomationMeta">Enable advanced control in settings</p>
-                            </article>
-                        </div>
-
-                        <div class="activity-feed">
-                            <div class="activity-feed-head">
-                                <p class="activity-feed-label" data-i18n="dashboardRecentActionsLabel">Recent actions</p>
-                                <p class="activity-feed-meta" id="dashboardGeneratedAtLabel">--</p>
-                            </div>
-                            <div class="activity-list" id="dashboardRecentActionsList"></div>
-                        </div>
-                    </article>
-
-                    <div class="dashboard-grid">
-                        <article class="planner-board">
-                            <div class="planner-board-head">
-                                <div>
-                                    <p class="planner-board-eyebrow" data-i18n="plannerBoardEyebrow">Planner board</p>
-                                    <h3 class="planner-board-title" data-i18n="plannerBoardTitle">Tasks, timers, reminders</h3>
-                                </div>
-                                <div class="planner-counts">
-                                    <span class="planner-count-pill" id="plannerTaskCountPill">0 tasks</span>
-                                    <span class="planner-count-pill" id="plannerTimerCountPill">0 timers</span>
-                                    <span class="planner-count-pill" id="plannerReminderCountPill">0 reminders</span>
-                                </div>
-                            </div>
-
-                            <div class="planner-quick-entry">
-                                <label class="planner-quick-label" for="plannerQuickInput" data-i18n="plannerQuickLabel">Quick add</label>
-                                <div class="planner-quick-controls">
-                                    <input type="text" id="plannerQuickInput" data-i18n-placeholder="plannerQuickPlaceholder" placeholder="Add a task or reminder idea">
-                                    <button type="button" class="planner-quick-button" id="plannerQuickTaskBtn" data-i18n="plannerQuickTaskBtn">Add task</button>
-                                    <button type="button" class="planner-quick-button planner-quick-button--secondary" id="plannerQuickReminderBtn" data-i18n="plannerQuickReminderBtn">Remind in 30m</button>
-                                </div>
-                            </div>
-
-                            <div class="planner-columns">
-                                <div class="planner-column">
-                                    <p class="planner-column-label" data-i18n="plannerTasksLabel">Open tasks</p>
-                                    <div class="mini-list" id="plannerTasksList"></div>
-                                </div>
-
-                                <div class="planner-column">
-                                    <p class="planner-column-label" data-i18n="plannerTimersLabel">Active timers</p>
-                                    <div class="mini-list" id="plannerTimersList"></div>
-                                </div>
-
-                                <div class="planner-column">
-                                    <p class="planner-column-label" data-i18n="plannerRemindersLabel">Pending reminders</p>
-                                    <div class="mini-list" id="plannerRemindersList"></div>
-                                </div>
-
-                                <div class="planner-column">
-                                    <p class="planner-column-label" data-i18n="plannerNotificationsLabel">Notifications</p>
-                                    <div class="mini-list" id="plannerNotificationsList"></div>
-                                </div>
-                            </div>
-                        </article>
-
-                        <article class="diagnostics-card" id="systemScanCard" data-state="idle">
-                            <div class="diagnostics-head">
-                                <p class="workbench-eyebrow" data-i18n="systemScanEyebrow">System diagnostics</p>
-                                <h3 class="workbench-title" data-i18n="systemScanTitle">Windows integrity scan</h3>
-                                <p class="workbench-copy" id="systemScanMessage" data-i18n="systemScanIdleMessage">System scan is idle. Say start system scan when you are ready.</p>
-                            </div>
-
-                            <div class="diagnostics-body">
-                                <div class="diagnostics-visual" id="systemScanVisual" data-state="idle" aria-hidden="true">
-                                    <span class="diagnostics-grid"></span>
-                                    <span class="diagnostics-beam"></span>
-                                    <span class="diagnostics-orb"></span>
-                                    <span class="diagnostics-ring diagnostics-ring--one"></span>
-                                    <span class="diagnostics-ring diagnostics-ring--two"></span>
-                                    <span class="diagnostics-ring diagnostics-ring--three"></span>
-                                </div>
-
-                                <div class="diagnostics-meta">
-                                    <p class="diagnostics-status" id="systemScanStatusText">Idle</p>
-                                    <p class="diagnostics-stage" id="systemScanStageText">No diagnostic scan running.</p>
-
-                                    <div class="diagnostics-progress">
-                                        <div class="diagnostics-progress-track">
-                                            <span id="systemScanProgressFill"></span>
-                                        </div>
-                                        <p class="diagnostics-progress-text" id="systemScanProgressText">Progress 0%</p>
-                                    </div>
-
-                                    <div class="diagnostics-stamps">
-                                        <span id="systemScanStartedAt">Started --</span>
-                                        <span id="systemScanUpdatedAt">Updated --</span>
-                                    </div>
-
-                                    <div class="diagnostics-actions">
-                                        <button type="button" class="computer-action computer-action--primary" data-computer-key="system_scan_start">Start System Scan</button>
-                                        <button type="button" class="computer-action" data-computer-key="system_scan_status">Check Scan Status</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="diagnostics-log-shell">
-                                <p class="planner-column-label" data-i18n="systemScanLogLabel">Recent scan logs</p>
-                                <div class="mini-list" id="systemScanLogList"></div>
-                            </div>
-                        </article>
-
-                        <article class="workbench-card workbench-card--browser">
-                            <div class="workbench-head">
-                                <p class="workbench-eyebrow" data-i18n="browserWorkbenchEyebrow">Browser workbench</p>
-                                <h3 class="workbench-title" data-i18n="browserWorkbenchTitle">Read, open, summarize, fill</h3>
-                                <p class="workbench-copy" data-i18n="browserWorkbenchCopy">Use the current tab or a pasted URL, then trigger one focused browser task.</p>
-                            </div>
-
-                            <div class="workbench-form">
-                                <label for="browserWorkbenchUrl" data-i18n="browserWorkbenchUrlLabel">Page or URL</label>
-                                <input type="text" id="browserWorkbenchUrl" data-i18n-placeholder="browserWorkbenchUrlPlaceholder" placeholder="https://example.com or leave empty for current tab">
-
-                                <div class="workbench-actions">
-                                    <button type="button" class="workbench-action workbench-action--browser" data-browser-action="open_url" data-i18n="browserActionOpenUrl">Open URL</button>
-                                    <button type="button" class="workbench-action workbench-action--browser" data-browser-action="read_current" data-i18n="browserActionReadCurrent">Read current</button>
-                                    <button type="button" class="workbench-action workbench-action--browser" data-browser-action="summarize_current" data-i18n="browserActionSummarizeCurrent">Summarize current</button>
-                                    <button type="button" class="workbench-action workbench-action--browser" data-browser-action="summarize_url" data-i18n="browserActionSummarizeUrl">Summarize URL</button>
-                                </div>
-
-                                <label for="browserWorkbenchFormValues" data-i18n="browserWorkbenchFormLabel">Form values</label>
-                                <textarea id="browserWorkbenchFormValues" rows="3" data-i18n-placeholder="browserWorkbenchFormPlaceholder" placeholder="One value per line or comma separated"></textarea>
-
-                                <div class="workbench-actions">
-                                    <button type="button" class="workbench-action workbench-action--browser" data-browser-action="fill_form" data-i18n="browserActionFillForm">Fill form</button>
-                                </div>
-
-                                <p class="workbench-footnote" id="browserWorkbenchMeta">Recent browser action: none yet.</p>
-                            </div>
-                        </article>
-
-                        <article class="workbench-card workbench-card--files">
-                            <div class="workbench-head">
-                                <p class="workbench-eyebrow" data-i18n="fileWorkbenchEyebrow">File workbench</p>
-                                <h3 class="workbench-title" data-i18n="fileWorkbenchTitle">Preview, summarize, rewrite</h3>
-                                <p class="workbench-copy" data-i18n="fileWorkbenchCopy">Pick a suggested file, inspect it, summarize it, or prepare an AI rewrite.</p>
-                            </div>
-
-                            <div class="workbench-form">
-                                <label for="fileWorkbenchPath" data-i18n="fileWorkbenchPathLabel">Suggested file</label>
-                                <select id="fileWorkbenchPath"></select>
-
-                                <div class="workbench-actions">
-                                    <button type="button" class="workbench-action workbench-action--file" data-file-action="read_file" data-i18n="fileActionRead">Preview file</button>
-                                    <button type="button" class="workbench-action workbench-action--file" data-file-action="summarize_file" data-i18n="fileActionSummarize">Summarize file</button>
-                                </div>
-
-                                <label for="fileWorkbenchRewrite" data-i18n="fileWorkbenchRewriteLabel">Rewrite instruction</label>
-                                <textarea id="fileWorkbenchRewrite" rows="3" data-i18n-placeholder="fileWorkbenchRewritePlaceholder" placeholder="Make it shorter, clearer, more friendly, or more technical"></textarea>
-
-                                <div class="workbench-actions">
-                                    <button type="button" class="workbench-action workbench-action--file" data-file-action="rewrite_file" data-i18n="fileActionRewrite">Rewrite file</button>
-                                </div>
-
-                                <label for="workspaceSearchInput" data-i18n="workspaceSearchLabel">Workspace search</label>
-                                <input type="text" id="workspaceSearchInput" data-i18n-placeholder="workspaceSearchPlaceholder" placeholder="Search for ollama, planner, README, or a file name">
-
-                                <div class="workbench-actions">
-                                    <button type="button" class="workbench-action workbench-action--file" data-file-action="search_workspace" data-i18n="fileActionSearch">Search workspace</button>
-                                </div>
-
-                                <p class="workbench-footnote" id="fileWorkbenchMeta">Suggested files update automatically from the workspace.</p>
-                            </div>
-                        </article>
-                    </div>
-                </section>
-            </div>
-
-            <aside class="control-rail">
-                <div class="rail-card rail-card--actions">
-                    <p class="rail-label" id="controlLabel">Control</p>
-                    <div class="button-group">
-                        <button id="speechBtn" type="button" data-state="ready" aria-live="polite" aria-label="Microphone Always On">
-                            <span class="mic-orb__icon" aria-hidden="true">🎤</span>
-                            <span class="mic-orb__label" id="speechBtnLabel">Microphone Always On</span>
-                        </button>
-                        <button id="settingsBtn">⚙️ Settings</button>
-                    </div>
-                </div>
-
-                <div class="rail-card rail-card--computer">
-                    <div class="computer-panel-head">
-                        <p class="rail-label" id="computerPanelLabel">Computer Control</p>
-                        <p class="computer-panel-note" id="computerPanelNote">Enable automation mode first for screenshots, macros, and window control.</p>
-                    </div>
-
-                    <p class="computer-panel-section-label" id="computerSystemLabel">Session + Windows</p>
-                    <div class="computer-panel-grid" id="computerPanel">
-                        <button type="button" class="computer-action computer-action--primary" data-computer-key="automation_enable">Enable Automation</button>
-                        <button type="button" class="computer-action" data-computer-key="automation_disable">Disable Automation</button>
-                        <button type="button" class="computer-action" data-computer-key="system_scan_start">Start System Scan</button>
-                        <button type="button" class="computer-action" data-computer-key="system_scan_status">Check Scan Status</button>
-                        <button type="button" class="computer-action" data-computer-key="screenshot">Take Screenshot</button>
-                        <button type="button" class="computer-action" data-computer-key="maximize_window">Maximize Window</button>
-                        <button type="button" class="computer-action" data-computer-key="close_window">Close Window</button>
-                        <button type="button" class="computer-action" data-computer-key="focus_edge">Focus Edge</button>
-                        <button type="button" class="computer-action" data-computer-key="volume_up">Volume Up</button>
-                        <button type="button" class="computer-action" data-computer-key="mute_volume">Mute Volume</button>
-                    </div>
-
-                    <p class="computer-panel-section-label" id="computerMacroLabel">App Macros</p>
-                    <div class="computer-panel-grid computer-panel-grid--macros">
-                        <button type="button" class="computer-action" data-computer-key="vscode_new_file">VS Code New File</button>
-                        <button type="button" class="computer-action" data-computer-key="edge_inprivate">Edge InPrivate</button>
-                        <button type="button" class="computer-action" data-computer-key="discord_search">Discord Search</button>
-                        <button type="button" class="computer-action" data-computer-key="discord_mute">Discord Mute</button>
-                        <button type="button" class="computer-action" data-computer-key="whatsapp_new_chat">WhatsApp New Chat</button>
-                        <button type="button" class="computer-action" data-computer-key="steam_search">Steam Search</button>
-                    </div>
-                </div>
-
-                <div class="rail-card rail-card--status">
-                    <p class="rail-label" id="liveStatusLabel">Live Status</p>
-                    <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true"></div>
-                </div>
-
-                <div class="rail-card rail-card--tips">
-                    <p class="rail-label" id="tipsLabel">Better Results</p>
-                    <ul class="tip-list">
-                        <li id="tipOne">Ask for one task at a time when you want speed.</li>
-                        <li id="tipTwo">Use quick actions for the most common browser steps.</li>
-                        <li id="tipThree">Ask Echo to think with you when you need a plan.</li>
-                    </ul>
-                </div>
-            </aside>
-        </section>
-    </div>
-
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="settings-modal">
-        <div class="settings-content">
-            <div class="settings-header">
-                <div class="settings-header-copy">
-                    <p class="settings-kicker" id="settingsKicker">Tune Echo</p>
-                    <h2 id="settingsTitle">⚙️ Settings</h2>
-                    <p class="settings-subtitle" id="settingsSubtitle">Adjust voice, language, quick destinations, and how Echo responds.</p>
-                </div>
-                <button type="button" class="close" id="closeModal" aria-label="Close settings">&times;</button>
-            </div>
-
-            <div class="settings-sections">
-                <section class="settings-section settings-section--identity">
-                    <p class="settings-section-label" id="settingsSectionIdentity">Profile</p>
-                    <div class="settings-grid settings-grid--two">
-                        <div class="setting-item">
-                            <label for="naam" id="naamLabel">AI name:</label>
-                            <input type="text" id="naam" placeholder="AI name">
-                        </div>
-
-                        <div class="setting-item">
-                            <label for="clientNaam" id="clientNaamLabel">Client name:</label>
-                            <input type="text" id="clientNaam" placeholder="Your name">
-                        </div>
-
-                        <div class="setting-item">
-                            <label for="taal" id="taalLabel">Language:</label>
-                            <select id="taal">
-                                <option value="English">English</option>
-                                <option value="Nederlands">Nederlands</option>
-                            </select>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="settings-section settings-section--destinations">
-                    <p class="settings-section-label" id="settingsSectionDestinations">Shortcuts</p>
-                    <div class="settings-grid settings-grid--two">
-                        <div class="setting-item">
-                            <label for="youtubeUrl" id="youtubeUrlLabel">YouTube URL:</label>
-                            <input type="url" id="youtubeUrl" placeholder="https://youtube.com">
-                        </div>
-
-                        <div class="setting-item">
-                            <label for="googleUrl" id="googleUrlLabel">Google URL:</label>
-                            <input type="url" id="googleUrl" placeholder="https://google.com">
-                        </div>
-                    </div>
-                </section>
-
-                <section class="settings-section settings-section--voice">
-                    <p class="settings-section-label" id="settingsSectionVoice">Voice</p>
-                    <div class="settings-grid">
-                        <div class="setting-item">
-                            <label for="wakeWord" id="wakeWordLabel">Wake word:</label>
-                            <input type="text" id="wakeWord" placeholder="hey echo">
-                        </div>
-
-                        <div class="setting-item setting-item--voice-test">
-                            <label for="stemSelect" id="stemSelectLabel">Choose voice:</label>
-                            <select id="stemSelect"></select>
-                            <button type="button" class="save-settings-btn" id="testVoiceBtn">🔊 Test voice</button>
-                        </div>
-
-                        <div class="setting-item setting-item--voice-switcher">
-                            <label for="aiVoiceSelect" id="aiVoiceSelectLabel">AI Voice Switcher:</label>
-                            <select id="aiVoiceSelect" class="voice-switcher-select">
-                                <option value="">Auto (J.A.R.V.I.S. recommended)</option>
-                            </select>
-                            <p class="setting-item-note setting-item-note--voice-switcher" id="aiVoiceSelectNote">High-quality ElevenLabs voices via secure backend.</p>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="settings-section settings-section--behavior">
-                    <p class="settings-section-label" id="settingsSectionBehavior">Behavior</p>
-                    <div class="settings-toggle-list">
-                        <div class="setting-item setting-item--toggle setting-item--toggle-wide">
-                            <label class="checkbox-label checkbox-label--stacked">
-                                <input type="checkbox" id="computerBesturingToestaan">
-                                <span id="computerBesturingLabelText">Allow advanced computer control</span>
-                            </label>
-                            <p class="setting-item-note" id="computerBesturingNote">This unlocks mouse, keyboard, screenshot, wifi, bluetooth, and app macro commands. You still need to say enable automation mode before Echo can use them.</p>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="emojiGebruik">
-                                <span id="emojiGebruikLabelText">Use emojis</span>
-                            </label>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="begroetingTonen">
-                                <span id="begroetingTonenLabelText">Show greeting</span>
-                            </label>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="spraakUitgang">
-                                <span id="spraakUitgangLabelText">Voice output (text-to-speech)</span>
-                            </label>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="settings-section settings-section--assistant-modes">
-                    <p class="settings-section-label" data-i18n="settingsSectionModes">Assistant modes</p>
-                    <div class="settings-toggle-list">
-                        <div class="setting-item setting-item--toggle setting-item--toggle-wide">
-                            <p class="setting-item-note setting-item-note--compact" data-i18n="settingsModesNote">These switches let you decide whether Echo should use memory, multi-step planning, and the connected AI model more aggressively.</p>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="agentModus">
-                                <span data-i18n="agentModeLabel">Enable think-with-me mode</span>
-                            </label>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="aiAgentPrimair">
-                                <span data-i18n="primaryAgentLabel">Use AI agent first</span>
-                            </label>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="onlineAiModus">
-                                <span data-i18n="onlineAiModeLabel">Allow connected AI answers</span>
-                            </label>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="geheugenModus">
-                                <span data-i18n="memoryModeLabel">Use long-term memory</span>
-                            </label>
-                        </div>
-
-                        <div class="setting-item setting-item--toggle">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="prioriteitModus">
-                                <span data-i18n="priorityModeLabel">Reorder multi-step plans</span>
-                            </label>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
-            <div class="settings-actions">
-                <button class="save-settings-btn" id="saveSettingsBtn">💾 Save settings</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="safetyConfirmModal" class="safety-modal" aria-hidden="true">
-        <div class="safety-modal__content" role="dialog" aria-modal="true" aria-labelledby="safetyConfirmTitle" aria-describedby="safetyConfirmBody">
-            <p class="safety-modal__kicker" id="safetyConfirmKicker">Safety check</p>
-            <h2 class="safety-modal__title" id="safetyConfirmTitle">Approve this action?</h2>
-            <p class="safety-modal__body" id="safetyConfirmBody">Echo is waiting for your decision on a sensitive action.</p>
-            <p class="safety-modal__target" id="safetyConfirmTarget"></p>
-            <div class="safety-modal__actions">
-                <button type="button" class="safety-btn safety-btn--cancel" id="safetyConfirmNoBtn">No, cancel</button>
-                <button type="button" class="safety-btn safety-btn--confirm" id="safetyConfirmYesBtn">Yes, continue</button>
-            </div>
-        </div>
-    </div>
+    </main>
+
+    <button class="mode-toggle" id="modeToggle" type="button" aria-pressed="false" aria-label="Open dashboard mode">
+        <span class="mode-toggle__icon" aria-hidden="true"></span>
+        <span class="mode-toggle__text" id="modeToggleText">OPEN DASHBOARD</span>
+    </button>
+
+    <button class="language-toggle" id="languageToggleBtn" type="button" aria-label="Schakel taal naar Engels">
+        <span class="language-toggle__text" id="languageToggleLabel">NL -> EN</span>
+    </button>
 
     <script src="{{ url_for('static', filename='gemini-api-client.js') }}"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
