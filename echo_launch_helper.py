@@ -98,8 +98,14 @@ def open_echo_interface(url, window_mode="app"):
     if mode == "app" and open_url_in_app_window(url):
         return True
 
-    webbrowser.open(url)
-    return True
+    try:
+        opened = bool(webbrowser.open(url))
+    except Exception:
+        opened = False
+
+    if not opened:
+        print(f"[Echo] Could not auto-open a browser window. Open manually: {url}")
+    return opened
 
 
 def parse_args(argv):
