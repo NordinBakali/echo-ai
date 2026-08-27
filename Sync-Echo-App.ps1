@@ -37,6 +37,7 @@ $itemsToCopy = @(
     'echo_launch_helper.py',
     'echo_wake_listener.py',
     'Install-Echo-Desktop-Shortcut.ps1',
+    'Echo-App-Scanner.ps1',
     'Set-OpenAI-Key.ps1',
     'Sync-GitHub.ps1',
     'Sync-GitHub.bat',

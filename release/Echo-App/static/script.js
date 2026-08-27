@@ -55,6 +55,8 @@ const appState = {
     premiumTtsProbeAt: 0,
     voiceList: [],
     speechRequestId: 0,
+    voiceTranscriptBuffer: [],
+    voiceTranscriptTimer: null,
     activeAudio: null,
     activeAudioUrl: '',
     threatLevel: 'nominal',
@@ -1632,38 +1634,9 @@ function processVoiceTranscript(transcript) {
         return;
     }
 
-    const wakeResult = extractWakeCommand(spoken);
-
-    if (appState.wakeArmed) {
-        if (wakeResult.wakeDetected && !wakeResult.command) {
-            setWakeArmed(true);
-            setCommandStatus(uiTekst('wake_acknowledged'));
-            return;
-        }
-
-        const armedCommand = wakeResult.wakeDetected && wakeResult.command ? wakeResult.command : spoken;
-        setWakeArmed(false);
-        setCommandStatus(uiTekst('wake_confirmed_executing'));
-        void sendCommand(armedCommand, 'voice');
-        return;
-    }
-
-    if (!wakeResult.wakeDetected) {
-        setCommandStatus(uiTekst('wake_locked_first', { wakeWord: appState.wakeWord }));
-        updateIdleVoiceStatus();
-        return;
-    }
-
-    if (wakeResult.command) {
-        setWakeArmed(false);
-        setCommandStatus(uiTekst('wake_detected_inline'));
-        void sendCommand(wakeResult.command, 'voice');
-        return;
-    }
-
-    setWakeArmed(true);
-    setCommandStatus(uiTekst('wake_detected_waiting'));
-    pulseSpeaking(320);
+    setWakeArmed(false);
+    setCommandStatus(uiTekst('wake_confirmed_executing'));
+    void sendCommand(spoken, 'voice');
 }
 
 function handleRecognitionResult(event) {
@@ -1674,7 +1647,16 @@ function handleRecognitionResult(event) {
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
         if (result && result.isFinal && result[0] && result[0].transcript) {
-            processVoiceTranscript(result[0].transcript);
+            appState.voiceTranscriptBuffer.push(String(result[0].transcript).trim());
+            if (appState.voiceTranscriptTimer) {
+                window.clearTimeout(appState.voiceTranscriptTimer);
+            }
+            appState.voiceTranscriptTimer = window.setTimeout(() => {
+                const transcript = appState.voiceTranscriptBuffer.join(' ').trim();
+                appState.voiceTranscriptBuffer = [];
+                appState.voiceTranscriptTimer = null;
+                processVoiceTranscript(transcript);
+            }, 1200);
         }
     }
 }
@@ -1760,6 +1742,14 @@ function initRecognition() {
             setListening(false);
             setWakeArmed(false);
             setVoiceStatus(uiTekst('microphone_permission_denied'));
+        } else if (code === 'audio-capture') {
+            appState.listeningWanted = false;
+            setListening(false);
+            setVoiceStatus('Geen microfoonsignaal. Controleer of je microfoon niet door een andere app wordt gebruikt.');
+        } else if (code === 'network') {
+            setVoiceStatus('Spraakherkenning kan geen verbinding maken. Controleer internet en probeer opnieuw.');
+        } else if (code === 'no-speech') {
+            setVoiceStatus('Geen spraak gehoord. Spreek opnieuw nadat luisteren actief is.');
         }
     };
 
@@ -1965,6 +1955,10 @@ async function runBootSequence() {
     body.classList.remove('booting');
 
     appState.bootComplete = true;
+    appState.listeningWanted = Boolean(appState.recognition);
+    if (appState.listeningWanted) {
+        startRecognition();
+    }
     setCommandStatus(uiTekst('voice_mode_online'));
     updateIdleVoiceStatus();
 

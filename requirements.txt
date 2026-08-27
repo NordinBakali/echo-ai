@@ -1,5 +1,6 @@
 Flask
 SpeechRecognition
+PyAudioWPatch
 pyttsx3
 PyAutoGUI
 faster-whisper

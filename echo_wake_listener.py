@@ -13,6 +13,12 @@ except ImportError:
     msvcrt = None
 
 try:
+    import pyaudiowpatch as pyaudio
+    sys.modules.setdefault("pyaudio", pyaudio)
+except ImportError:
+    pass
+
+try:
     import speech_recognition as sr
 except ImportError:
     sr = None
@@ -22,9 +28,20 @@ from echo_launch_helper import find_running_echo, open_echo_interface
 BASE_DIR = Path(__file__).resolve().parent
 SETTINGS_FILE = BASE_DIR / "instellingen.json"
 LOCK_FILE = Path(tempfile.gettempdir()) / "echo_wake_listener.lock"
-DEFAULT_WAKE_WORD = "hey echo"
-FALLBACK_WAKE_WORDS = {"hey echo", "hee echo", "hey eko", "hey eco"}
+DEFAULT_WAKE_WORD = "wake up"
+FALLBACK_WAKE_WORDS = {
+    "wake up",
+    "wake app",
+    "wake echo",
+    "word wakker",
+    "wakker worden",
+    "hey echo",
+    "hee echo",
+    "hey eko",
+    "hey eco",
+}
 COOLDOWN_SECONDS = 6.0
+STOP_FILE = Path(tempfile.gettempdir()) / "echo_wake_listener.stop"
 
 
 def normalize_text(text):
@@ -162,9 +179,13 @@ def run_wake_listener():
     print(f"[Echo] Wake listener active. Say: {load_wake_word()}")
 
     try:
+        STOP_FILE.unlink(missing_ok=True)
         with sr.Microphone() as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.7)
             while True:
+                if STOP_FILE.exists():
+                    print("[Echo] Wake listener stopped by Echo command.")
+                    break
                 try:
                     audio = recognizer.listen(source, timeout=2, phrase_time_limit=4)
                 except sr.WaitTimeoutError:

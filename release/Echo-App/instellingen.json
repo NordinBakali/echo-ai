@@ -9,7 +9,7 @@
   "spraak_ingang": false,
   "spraak_uitgang": true,
   "spraak_taal": "nl-NL",
-  "wake_word": "hey echo",
+  "wake_word": "wake up",
   "browser_stem": "Google Nederlands",
   "agent_modus": true,
   "geheugen_modus": true,

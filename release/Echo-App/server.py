@@ -142,7 +142,7 @@ DEFAULT_SETTINGS = {
     "cloud_tts_voice": str(os.environ.get("GOOGLE_TTS_VOICE", "") or "").strip(),
     "cloud_tts_speed": os.environ.get("GOOGLE_TTS_SPEED", "1.0"),
     "cloud_tts_pitch": os.environ.get("GOOGLE_TTS_PITCH", "0.0"),
-    "wake_word": "hey echo",
+    "wake_word": "wake up",
     "browser_stem": "",
     "premium_tts_voice_id": "",
     "agent_modus": True,
@@ -2121,7 +2121,12 @@ def is_explicit_help_request(stap):
         "commando's",
         "commandos",
     }
-    return stap in expliciete_hulpvragen
+    if stap in expliciete_hulpvragen:
+        return True
+    return bool(re.fullmatch(
+        r"(?:wat\s+(?:kan|kun)\s+(?:je|jij)(?:\s+allemaal)?(?:\s+doen)?|what\s+can\s+you\s+do(?:\s+for\s+me)?|wat\s+doe\s+je)",
+        stap,
+    ))
 
 
 def is_meedenk_vraag(tekst):
@@ -4550,6 +4555,93 @@ APP_LAUNCH_COMMANDS = {
     "explorer": ["explorer"],
 }
 
+APP_SCAN_CACHE = []
+APP_SCAN_CACHE_AT = 0.0
+APP_SCAN_LOCK = threading.Lock()
+APP_SCAN_MAX_ITEMS = 250
+WAKE_LISTENER_STOP_FILE = Path(tempfile.gettempdir()) / "echo_wake_listener.stop"
+
+
+def normaliseer_app_naam(naam):
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ._-]", " ", str(naam or "").lower())).strip(" ._-")
+
+
+def scan_geinstalleerde_apps(force=False):
+    global APP_SCAN_CACHE, APP_SCAN_CACHE_AT
+
+    with APP_SCAN_LOCK:
+        if APP_SCAN_CACHE and not force and time.time() - APP_SCAN_CACHE_AT < 300:
+            return list(APP_SCAN_CACHE)
+
+        zoekmappen = [
+            Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+            Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+            Path.home() / "Desktop",
+            Path(os.environ.get("PUBLIC", "C:/Users/Public")) / "Desktop",
+        ]
+        gevonden = {}
+        uitgesloten = {"uninstall", "readme", "help", "documentation"}
+
+        for zoekmap in zoekmappen:
+            if not zoekmap.exists():
+                continue
+            try:
+                kandidaten = list(zoekmap.rglob("*.lnk")) + list(zoekmap.rglob("*.url")) + list(zoekmap.rglob("*.exe"))
+            except OSError:
+                continue
+
+            for kandidaat in kandidaten:
+                if len(gevonden) >= APP_SCAN_MAX_ITEMS:
+                    break
+                naam = normaliseer_app_naam(kandidaat.stem)
+                if not naam or any(term in naam for term in uitgesloten):
+                    continue
+                sleutel = naam.casefold()
+                gevonden.setdefault(sleutel, {"name": naam, "target": str(kandidaat)})
+
+        APP_SCAN_CACHE = sorted(gevonden.values(), key=lambda item: item["name"].casefold())
+        APP_SCAN_CACHE_AT = time.time()
+        return list(APP_SCAN_CACHE)
+
+
+def vind_gescande_app(doel):
+    sleutel = normaliseer_app_naam(doel).casefold()
+    if not sleutel:
+        return None
+    for app_item in scan_geinstalleerde_apps():
+        naam = app_item["name"].casefold()
+        if sleutel == naam or sleutel in naam or naam in sleutel:
+            return app_item
+    return None
+
+
+def beschrijf_gescande_apps(force=False):
+    apps = scan_geinstalleerde_apps(force=force)
+    namen = [item["name"] for item in apps]
+    if not namen:
+        return tekst_voor_taal(
+            "I could not find app shortcuts in the Windows Start Menu or Desktop.",
+            "Ik heb geen app-snelkoppelingen gevonden in het Windows Startmenu of op het bureaublad."
+        )
+    zichtbaar = namen[:80]
+    extra = len(namen) - len(zichtbaar)
+    suffix = f" (+{extra} more)" if extra else ""
+    suffix_nl = f" (+{extra} meer)" if extra else ""
+    return tekst_voor_taal(
+        f"I found {len(namen)} apps: " + ", ".join(zichtbaar) + suffix,
+        f"Ik heb {len(namen)} apps gevonden: " + ", ".join(zichtbaar) + suffix_nl
+    )
+
+
+def maak_help_bericht():
+    apps = scan_geinstalleerde_apps()
+    app_namen = ", ".join(item["name"] for item in apps[:30])
+    app_regel = f" Gevonden apps: {app_namen}." if app_namen else ""
+    return tekst_voor_taal(
+        "I can open apps and websites, search Google or YouTube, work with files and folders, calculate, show system and battery information, manage tasks, timers and reminders, remember notes, control supported computer functions, scan your apps, and answer questions." + app_regel,
+        "Ik kan apps en websites openen, zoeken op Google of YouTube, met bestanden en mappen werken, rekenen, systeem- en batterij-informatie geven, taken, timers en herinneringen beheren, notities onthouden, ondersteunde computerfuncties bedienen, je apps scannen en vragen beantwoorden." + app_regel
+    )
+
 
 def open_url_in_browser(browser_sleutel, url):
     command = list(APP_LAUNCH_COMMANDS.get(browser_sleutel, []))
@@ -5393,6 +5485,12 @@ def haal_lokaal_ip_adres():
 
 def maak_informatie_actie(stap):
     if re.fullmatch(
+        r"(?:scan|show|list|check|inventariseer|bekijk|toon|laat zien)\s+(?:my|mijn|the|de)?\s*(?:installed )?(?:apps?|applications?|programma's?|programmas?|programma's op mijn computer)",
+        stap,
+    ):
+        return "apps scan"
+
+    if re.fullmatch(
         r"(?:start|run|begin|launch|starten|draai|voer uit)?\s*(?:een\s+)?(?:system|windows|computer|systeem)?\s*(?:scan|diagnostics?|diagnose|integrity check|integriteitscontrole|repair scan|reparatiescan|bestandsscan|sfc scan)",
         stap,
     ):
@@ -5608,6 +5706,12 @@ def is_veilig_app_doel(doel_tekst):
 
 
 def maak_systeem_actie(stap):
+    if re.fullmatch(
+        r"(?:close|exit|quit|stop|shutdown|shut down|turn off|sluit|sluiten|stoppen|afsluiten|uitzetten)(?:\s+(?:echo|the echo app|de echo app|app|de app))?(?:\s+(?:af|app|programma|uit|uitzetten))?|(?:echo|the echo app|de echo app)\s+(?:close|exit|quit|stop|shutdown|shut down|turn off|sluit|sluiten|stoppen|afsluiten|uitzetten)|(?:zet|schakel)\s+(?:echo|de echo app|de app)\s+uit",
+        stap,
+    ):
+        return "close echo"
+
     if re.fullmatch(r"(?:confirm|bevestig)(?:\s+.+)?", stap):
         return "confirm pending action"
 
@@ -5647,6 +5751,9 @@ def maak_systeem_actie(stap):
         return ""
 
     doel_tekst = schoon_computerdoel(open_match.group(1))
+
+    if doel_tekst in {"google", "youtube"}:
+        return ""
 
     setting_sleutel = vind_alias_sleutel(doel_tekst, SYSTEM_SETTING_TARGETS)
     if setting_sleutel:
@@ -7490,6 +7597,10 @@ def normaliseer_actie(stap):
     if is_explicit_help_request(stap):
         return "help"
 
+    systeem_actie = maak_systeem_actie(stap)
+    if systeem_actie:
+        return systeem_actie
+
     geavanceerde_browser_actie = maak_geavanceerde_browser_actie(originele_stap, stap)
     if geavanceerde_browser_actie:
         return geavanceerde_browser_actie
@@ -7521,10 +7632,6 @@ def normaliseer_actie(stap):
     automation_actie = maak_automation_actie(originele_stap, stap)
     if automation_actie:
         return automation_actie
-
-    systeem_actie = maak_systeem_actie(stap)
-    if systeem_actie:
-        return systeem_actie
 
     if "youtube" in stap and (
         stap == "youtube" or re.search(r"\b(open|openen|start|launch|ga(?:\s+naar)?)\b", stap)
@@ -7569,7 +7676,7 @@ def mapnaam_uit_actie(actie):
 
 def actie_prioriteit(stap):
     stap = stap.lower()
-    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status"}:
+    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "apps scan"}:
         return 0
     if stap.startswith(("timer ", "reminder ", "task ", "agenda show")):
         return 1
@@ -7577,7 +7684,7 @@ def actie_prioriteit(stap):
         return 1
     if stap.startswith("calculate::"):
         return 2
-    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "battery status", "wifi quality", "disk space", "ip address", "current time")):
+    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "apps scan", "battery status", "wifi quality", "disk space", "ip address", "current time")):
         return 2
     if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ")):
         return 3
@@ -7640,6 +7747,25 @@ def update_gesprek_context(plan, resultaten):
 def voer_enkele_actie_uit(actie):
     """Execute exactly one action."""
     actie = normaliseer_actie(actie)
+
+    if actie == "close echo":
+        try:
+            WAKE_LISTENER_STOP_FILE.write_text("stop", encoding="utf-8")
+        except OSError:
+            pass
+        shutdown = request.environ.get("werkzeug.server.shutdown") if request else None
+
+        def stop_echo_runtime():
+            if shutdown:
+                shutdown()
+            else:
+                os._exit(0)
+
+        threading.Timer(0.8, stop_echo_runtime).start()
+        return tekst_voor_taal(
+            "Echo is shutting down.",
+            "Echo wordt afgesloten."
+        )
 
     if actie.startswith(("timer ", "reminder ", "task ", "agenda show")):
         return voer_planner_actie_uit(actie)
@@ -8224,10 +8350,17 @@ def voer_enkele_actie_uit(actie):
                     f"Fout bij openen van {details['label_nl']}: {e}"
                 )
 
+    if actie == "apps scan":
+        return beschrijf_gescande_apps(force=True)
+
     if actie.startswith("open app raw::"):
         app_doel = re.sub(r"^open app raw::", "", actie).strip()
         try:
-            subprocess.Popen(["cmd", "/c", "start", "", app_doel])
+            gevonden_app = vind_gescande_app(app_doel)
+            if gevonden_app:
+                open_windows_doel(gevonden_app["target"])
+            else:
+                subprocess.Popen(["cmd", "/c", "start", "", app_doel])
             return tekst_voor_taal(
                 f"Opened app: {app_doel}",
                 f"App geopend: {app_doel}"
@@ -8283,10 +8416,7 @@ def voer_enkele_actie_uit(actie):
         )
 
     if actie == "help":
-        return tekst_voor_taal(
-            "Ask me naturally what you want to do. I can help with browser tasks, files and folders, planner items, memory, system info, and explanation questions. If you want ideas, ask for examples or say help with browser, files, planner, or automation.",
-            "Vraag me gewoon natuurlijk wat je wilt doen. Ik kan helpen met browseracties, bestanden en mappen, plannerzaken, geheugen, systeeminfo en uitlegvragen. Als je ideeën wilt, vraag dan om voorbeelden of zeg hulp met browser, bestanden, planner of automation."
-        )
+        return maak_help_bericht()
 
     return kan_niet_oproepen_bericht()
 
@@ -8692,6 +8822,12 @@ if __name__ == '__main__':
         print(f'Echo preferred port {voorkeurs_poort} was unavailable, starting on: {url}')
 
     print(f'Window mode: {window_mode} | Auto reload: {"on" if auto_reload else "off"}')
+
+    try:
+        gevonden_apps = scan_geinstalleerde_apps(force=True)
+        print(f'Echo app scan complete: {len(gevonden_apps)} apps found.')
+    except Exception as scan_error:
+        print(f'Echo app scan unavailable: {scan_error}')
 
     if not auto_reload or is_reloader_child:
         start_planning_monitor()
