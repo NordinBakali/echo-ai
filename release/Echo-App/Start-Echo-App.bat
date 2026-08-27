@@ -44,7 +44,7 @@ if not defined ECHO_AUTO_OPEN set "ECHO_AUTO_OPEN=1"
 if not defined ECHO_AUTO_RELOAD set "ECHO_AUTO_RELOAD=1"
 if not defined ECHO_OPEN_ON_RELOAD set "ECHO_OPEN_ON_RELOAD=0"
 if not defined ECHO_AUTOSTART_WAKE_LISTENER set "ECHO_AUTOSTART_WAKE_LISTENER=1"
-if not defined ECHO_REOPEN_WHEN_RUNNING set "ECHO_REOPEN_WHEN_RUNNING=0"
+if not defined ECHO_REOPEN_WHEN_RUNNING set "ECHO_REOPEN_WHEN_RUNNING=1"
 
 if /I "%ECHO_AUTOSTART_WAKE_LISTENER%"=="1" (
     if exist "Echo-Wake-Listener.vbs" (
@@ -62,7 +62,11 @@ if exist "echo_launch_helper.py" (
     set "LAUNCH_PRECHECK_EXIT=!ERRORLEVEL!"
 
     if "!LAUNCH_PRECHECK_EXIT!"=="10" (
-        echo [Echo] Existing Echo instance detected. Skipping duplicate startup.
+        if /I "%ECHO_REOPEN_WHEN_RUNNING%"=="1" (
+            echo [Echo] Existing Echo instance detected. Reopened existing app window.
+        ) else (
+            echo [Echo] Existing Echo instance detected. Skipping duplicate startup.
+        )
         endlocal
         exit /b 0
     )

@@ -118,7 +118,9 @@ def main(argv=None):
     if running_url:
         print(f"[Echo] Existing runtime detected on port {running_port}: {running_url}")
         if args.reopen_if_running:
-            open_echo_interface(running_url.replace("/api/runtime-version", ""), args.window_mode)
+            app_url = running_url.replace("/api/runtime-version", "")
+            print(f"[Echo] Reopening existing app window: {app_url}")
+            open_echo_interface(app_url, args.window_mode)
         return 10
 
     print("[Echo] No running Echo runtime detected.")
