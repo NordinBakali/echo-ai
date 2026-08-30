@@ -4559,7 +4559,6 @@ APP_SCAN_CACHE = []
 APP_SCAN_CACHE_AT = 0.0
 APP_SCAN_LOCK = threading.Lock()
 APP_SCAN_MAX_ITEMS = 250
-WAKE_LISTENER_STOP_FILE = Path(tempfile.gettempdir()) / "echo_wake_listener.stop"
 
 
 def normaliseer_app_naam(naam):
@@ -7749,10 +7748,6 @@ def voer_enkele_actie_uit(actie):
     actie = normaliseer_actie(actie)
 
     if actie == "close echo":
-        try:
-            WAKE_LISTENER_STOP_FILE.write_text("stop", encoding="utf-8")
-        except OSError:
-            pass
         shutdown = request.environ.get("werkzeug.server.shutdown") if request else None
 
         def stop_echo_runtime():

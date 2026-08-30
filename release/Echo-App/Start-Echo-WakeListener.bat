@@ -30,6 +30,16 @@ if errorlevel 1 (
 )
 
 echo [Echo] Starting wake listener...
+if exist "%TEMP%\echo_wake_listener.stop" del /q "%TEMP%\echo_wake_listener.stop" 2>nul
+
+:listener_loop
 "%PYTHON_EXE%" echo_wake_listener.py
+if exist "%TEMP%\echo_wake_listener.stop" goto listener_stopped
+echo [Echo] Wake listener stopped unexpectedly. Restarting in 5 seconds...
+timeout /t 5 /nobreak >nul
+goto listener_loop
+
+:listener_stopped
+del /q "%TEMP%\echo_wake_listener.stop" 2>nul
 
 endlocal
