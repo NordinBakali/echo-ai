@@ -10,10 +10,12 @@ $autoSyncVbsLauncherPath = Join-Path $projectRoot 'Echo-App-AutoSync.vbs'
 $wakeBatchLauncherPath = Join-Path $projectRoot 'Start-Echo-WakeListener.bat'
 $wakeVbsLauncherPath = Join-Path $projectRoot 'Echo-Wake-Listener.vbs'
 $desktopPath = [Environment]::GetFolderPath('Desktop')
+$startupPath = [Environment]::GetFolderPath('Startup')
 $shortcutPath = Join-Path $desktopPath 'Echo App.lnk'
 $liveSyncShortcutPath = Join-Path $desktopPath 'Echo App (Live Sync).lnk'
 $autoSyncShortcutPath = Join-Path $desktopPath 'Echo App (Auto Sync).lnk'
 $wakeShortcutPath = Join-Path $desktopPath 'Echo Wake Listener.lnk'
+$startupShortcutPath = Join-Path $startupPath 'Echo App (Auto Sync).lnk'
 
 function Resolve-LauncherPath {
     param(
@@ -66,6 +68,13 @@ $wakeShortcut.IconLocation = "$env:SystemRoot\System32\SndVolSSO.dll,0"
 $wakeShortcut.Description = 'Start the Echo wake listener (say hey echo to open the app when closed)'
 $wakeShortcut.Save()
 
+$startupShortcut = $wshShell.CreateShortcut($startupShortcutPath)
+$startupShortcut.TargetPath = $autoSyncLauncherPath
+$startupShortcut.WorkingDirectory = $projectRoot
+$startupShortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,220"
+$startupShortcut.Description = 'Auto-start Echo with automatic source sync at Windows sign-in'
+$startupShortcut.Save()
+
 Write-Host "Desktop shortcut created: $shortcutPath"
 Write-Host "Shortcut target: $launcherPath"
 Write-Host "Desktop shortcut created: $liveSyncShortcutPath"
@@ -74,3 +83,5 @@ Write-Host "Desktop shortcut created: $autoSyncShortcutPath"
 Write-Host "Shortcut target: $autoSyncLauncherPath"
 Write-Host "Desktop shortcut created: $wakeShortcutPath"
 Write-Host "Shortcut target: $wakeLauncherPath"
+Write-Host "Startup shortcut created: $startupShortcutPath"
+Write-Host "Shortcut target: $autoSyncLauncherPath"

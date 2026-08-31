@@ -34,7 +34,7 @@ const bootProgressFill = document.getElementById('bootProgressFill');
 
 const appState = {
     bootComplete: false,
-    dashboardActive: false,
+    dashboardActive: true,
     listeningWanted: false,
     listeningActive: false,
     speakingActive: false,
@@ -57,6 +57,8 @@ const appState = {
     speechRequestId: 0,
     voiceTranscriptBuffer: [],
     voiceTranscriptTimer: null,
+    lastVoiceTranscriptNormalized: '',
+    lastVoiceTranscriptAt: 0,
     activeAudio: null,
     activeAudioUrl: '',
     threatLevel: 'nominal',
@@ -70,6 +72,7 @@ const appState = {
 };
 
 const RUNTIME_VERSION_POLL_MS = 2200;
+const VOICE_DUPLICATE_WINDOW_MS = 2800;
 
 const THREAT_LEVELS = {
     nominal: {
@@ -150,6 +153,7 @@ const UI_STRINGS = {
         boot_step_4: 'Holografische oppervlakken worden geactiveerd...',
         boot_step_5: 'Echo-kern online.',
         voice_mode_online: 'Stemmodus online. Tik op de boogkern om te luisteren.',
+        dashboard_mode_online: 'Dashboard actief. Typ een opdracht of start stemluisteren.',
         boot_running: 'Bootsequentie gestart...',
         core_initializing: 'Echo-kern initialiseren...',
         intro_online: '{name} systemen online. Ik wacht op je opdracht.',
@@ -217,6 +221,7 @@ const UI_STRINGS = {
         boot_step_4: 'Activating holographic surfaces...',
         boot_step_5: 'Echo core online.',
         voice_mode_online: 'Voice mode online. Tap the arc core to start listening.',
+        dashboard_mode_online: 'Dashboard active. Type a command or start voice listening.',
         boot_running: 'Boot sequence running...',
         core_initializing: 'Initializing Echo core...',
         intro_online: '{name} systems online. Awaiting your command.',
@@ -326,6 +331,42 @@ function sleep(ms) {
     return new Promise((resolve) => {
         window.setTimeout(resolve, ms);
     });
+}
+
+async function resetLegacyServiceWorkerState() {
+    if (!('serviceWorker' in navigator)) {
+        return false;
+    }
+
+    try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((registration) => registration.unregister()));
+    } catch (_error) {
+        // Continue startup even when unregistering fails.
+    }
+
+    if ('caches' in window) {
+        try {
+            const cacheKeys = await caches.keys();
+            await Promise.all(
+                cacheKeys
+                    .filter((key) => String(key || '').toLowerCase().startsWith('echo-app-shell-'))
+                    .map((key) => caches.delete(key))
+            );
+        } catch (_error) {
+            // Cache cleanup is best-effort.
+        }
+    }
+
+    if (navigator.serviceWorker.controller && !sessionStorage.getItem('echo_sw_reset_done')) {
+        sessionStorage.setItem('echo_sw_reset_done', '1');
+        const url = new URL(window.location.href);
+        url.searchParams.set('_fresh', String(Date.now()));
+        window.location.replace(url.toString());
+        return true;
+    }
+
+    return false;
 }
 
 function escapeHtml(text) {
@@ -1629,14 +1670,54 @@ async function sendCommand(command, source = 'text') {
 }
 
 function processVoiceTranscript(transcript) {
-    const spoken = String(transcript || '').trim();
-    if (!spoken) {
+    const spokenRaw = String(transcript || '').trim();
+    if (!spokenRaw) {
         return;
     }
 
-    setWakeArmed(false);
-    setCommandStatus(uiTekst('wake_confirmed_executing'));
-    void sendCommand(spoken, 'voice');
+    const wakeExtraction = extractWakeCommand(spokenRaw);
+    let commandToSend = spokenRaw;
+
+    if (wakeExtraction.wakeDetected) {
+        if (!wakeExtraction.command) {
+            setWakeArmed(true);
+            setCommandStatus(uiTekst('wake_acknowledged'));
+            return;
+        }
+
+        commandToSend = wakeExtraction.command;
+        setWakeArmed(false);
+        setCommandStatus(uiTekst('wake_detected_inline'));
+    } else {
+        setWakeArmed(false);
+        setCommandStatus(uiTekst('wake_confirmed_executing'));
+    }
+
+    const normalizedCommand = normalizeText(commandToSend);
+    if (!normalizedCommand) {
+        return;
+    }
+
+    const now = Date.now();
+    const isDuplicate = normalizedCommand === appState.lastVoiceTranscriptNormalized
+        && (now - appState.lastVoiceTranscriptAt) < VOICE_DUPLICATE_WINDOW_MS;
+
+    if (isDuplicate) {
+        setVoiceStatus(tekstVoorTaal('Ignored duplicate voice command.', 'Dubbele spraakopdracht genegeerd.'));
+        return;
+    }
+
+    appState.lastVoiceTranscriptNormalized = normalizedCommand;
+    appState.lastVoiceTranscriptAt = now;
+    void sendCommand(commandToSend, 'voice');
+}
+
+function clearVoiceTranscriptBuffer() {
+    appState.voiceTranscriptBuffer = [];
+    if (appState.voiceTranscriptTimer) {
+        window.clearTimeout(appState.voiceTranscriptTimer);
+        appState.voiceTranscriptTimer = null;
+    }
 }
 
 function handleRecognitionResult(event) {
@@ -1647,16 +1728,29 @@ function handleRecognitionResult(event) {
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
         if (result && result.isFinal && result[0] && result[0].transcript) {
-            appState.voiceTranscriptBuffer.push(String(result[0].transcript).trim());
+            const fragment = String(result[0].transcript).trim();
+            if (!fragment) {
+                continue;
+            }
+
+            const normalizedFragment = normalizeText(fragment);
+            const vorigeFragment = appState.voiceTranscriptBuffer.length
+                ? normalizeText(appState.voiceTranscriptBuffer[appState.voiceTranscriptBuffer.length - 1])
+                : '';
+
+            if (normalizedFragment && normalizedFragment === vorigeFragment) {
+                continue;
+            }
+
+            appState.voiceTranscriptBuffer.push(fragment);
             if (appState.voiceTranscriptTimer) {
                 window.clearTimeout(appState.voiceTranscriptTimer);
             }
             appState.voiceTranscriptTimer = window.setTimeout(() => {
                 const transcript = appState.voiceTranscriptBuffer.join(' ').trim();
-                appState.voiceTranscriptBuffer = [];
-                appState.voiceTranscriptTimer = null;
+                clearVoiceTranscriptBuffer();
                 processVoiceTranscript(transcript);
-            }, 1200);
+            }, 1000);
         }
     }
 }
@@ -1679,6 +1773,7 @@ function stopRecognition() {
         return;
     }
 
+    clearVoiceTranscriptBuffer();
     setWakeArmed(false);
 
     try {
@@ -1727,6 +1822,7 @@ function initRecognition() {
     recognition.lang = appState.language;
 
     recognition.onstart = () => {
+        clearVoiceTranscriptBuffer();
         setListening(true);
         setCommandStatus(uiTekst('voice_listening_active'));
     };
@@ -1754,6 +1850,7 @@ function initRecognition() {
     };
 
     recognition.onend = () => {
+        clearVoiceTranscriptBuffer();
         setWakeArmed(false);
         setListening(false);
         if (appState.listeningWanted) {
@@ -1955,11 +2052,9 @@ async function runBootSequence() {
     body.classList.remove('booting');
 
     appState.bootComplete = true;
-    appState.listeningWanted = Boolean(appState.recognition);
-    if (appState.listeningWanted) {
-        startRecognition();
-    }
-    setCommandStatus(uiTekst('voice_mode_online'));
+    appState.listeningWanted = false;
+    setListening(false);
+    setCommandStatus(appState.dashboardActive ? uiTekst('dashboard_mode_online') : uiTekst('voice_mode_online'));
     updateIdleVoiceStatus();
 
     const intro = uiTekst('intro_online', { name: appState.aiName });
@@ -1971,7 +2066,12 @@ async function runBootSequence() {
 }
 
 async function init() {
-    setMode(false);
+    const reloadedAfterSwReset = await resetLegacyServiceWorkerState();
+    if (reloadedAfterSwReset) {
+        return;
+    }
+
+    setMode(true);
     setThreatState('nominal', threatContextForLevel('nominal'), 0);
     setListening(false);
     setWakeArmed(false);

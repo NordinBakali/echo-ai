@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import ast
 import base64
 import ctypes
+from difflib import SequenceMatcher
 import html
 import io
 import math
@@ -372,12 +373,12 @@ def kan_niet_oproepen_bericht(verzoek=""):
     if verzoek:
         return tekst_voor_taal(
             f"I can't call or open '{verzoek}' right now. Tell me in a simpler way what you want to open, read, search, or explain, and I'll try a different route.",
-            f"Ik kan '{verzoek}' nu niet voor je oproepen. Zeg in een simpelere zin wat je wilt openen, lezen, zoeken of uitgelegd wilt hebben, dan probeer ik een andere route."
+            f"Ik kan '{verzoek}' nu niet voor je oproepen. Herhaal u vraag."
         )
 
     return tekst_voor_taal(
         "I can't call or open that right now. Tell me in a simpler way what you want to open, read, search, or explain, and I'll try a different route.",
-        "Ik kan dat nu niet voor je oproepen. Zeg in een simpelere zin wat je wilt openen, lezen, zoeken of uitgelegd wilt hebben, dan probeer ik een andere route."
+        "Ik kan dat nu niet voor je oproepen. Herhaal u vraag."
     )
 
 
@@ -4377,7 +4378,19 @@ SYSTEM_APP_TARGETS = {
 
 SYSTEM_SETTING_TARGETS = {
     "settings": {
-        "aliases": {"settings", "instellingen", "windows settings", "windows instellingen"},
+        "aliases": {
+            "settings",
+            "setting",
+            "seting",
+            "setings",
+            "instellingen",
+            "instelling",
+            "insteling",
+            "instelingen",
+            "windows settings",
+            "windows setting",
+            "windows instellingen",
+        },
         "target": "ms-settings:",
         "label_en": "Settings",
         "label_nl": "Instellingen",
@@ -4401,7 +4414,14 @@ SYSTEM_SETTING_TARGETS = {
         "label_nl": "Wifi-instellingen",
     },
     "bluetooth settings": {
-        "aliases": {"bluetooth settings", "bluetooth-instellingen"},
+        "aliases": {
+            "bluetooth settings",
+            "bluetooth-instellingen",
+            "bluetooth devices",
+            "devices in bluetooth",
+            "bluetooth apparaten",
+            "apparaten in bluetooth",
+        },
         "target": "ms-settings:bluetooth",
         "label_en": "Bluetooth settings",
         "label_nl": "Bluetooth-instellingen",
@@ -4558,60 +4578,421 @@ APP_LAUNCH_COMMANDS = {
 APP_SCAN_CACHE = []
 APP_SCAN_CACHE_AT = 0.0
 APP_SCAN_LOCK = threading.Lock()
-APP_SCAN_MAX_ITEMS = 250
+APP_SCAN_MAX_ITEMS = 1200
+APP_SCAN_CACHE_TTL = 300
+APP_MATCH_STOPWOORDEN = {
+    "app",
+    "application",
+    "programma",
+    "launcher",
+    "desktop",
+    "helper",
+    "update",
+    "updater",
+    "x64",
+    "x86",
+    "microsoft",
+    "windows",
+}
+
+APP_SCAN_BESTANDS_EXTENSIES = {".lnk", ".url", ".exe"}
+APP_SCAN_EXE_BLOKKADE = {
+    "setup",
+    "install",
+    "installer",
+    "uninstall",
+    "updater",
+    "update",
+    "crashhandler",
+    "repair",
+}
+APP_SCAN_TECHNISCHE_NAAM_EXACT = {
+    "about java",
+    "actionsmcphost",
+    "application verifier wow",
+    "application verifier x64",
+    "awk",
+    "bash",
+    "b2sum",
+    "basename",
+    "basenc",
+    "cat",
+    "cmd",
+    "cscript",
+    "curl",
+    "diff",
+    "find",
+    "git",
+    "grep",
+    "msbuild",
+    "node",
+    "npm",
+    "npx",
+    "pip",
+    "pip3",
+    "powershell",
+    "pwsh",
+    "python",
+    "python3",
+    "wscript",
+}
+APP_SCAN_TECHNISCHE_TOKENS = {
+    "sdk",
+    "runtime",
+    "cli",
+    "update",
+    "updates",
+    "redistributable",
+    "verifier",
+    "compiler",
+    "debug",
+    "diagnostic",
+    "telemetry",
+    "profiler",
+    "driver",
+    "service",
+    "daemon",
+    "cache",
+    "updater",
+    "installer",
+    "uninstall",
+    "toolchain",
+}
+APP_SCAN_KORTE_NAAM_ALLOWLIST = {
+    "7z",
+    "7za",
+    "calc",
+    "chrome",
+    "discord",
+    "edge",
+    "epic",
+    "explorer",
+    "firefox",
+    "notepad",
+    "obs",
+    "obs64",
+    "paint",
+    "spotify",
+    "steam",
+    "teams",
+    "telegram",
+    "vlc",
+    "whatsapp",
+    "zoom",
+}
+APP_SCAN_TECHNISCHE_NAAM_FRAGMENTS = {
+    "command line",
+    "commandline",
+    "developer tools",
+    "dev tools",
+    "shell extension",
+    "service",
+    "server",
+    "daemon",
+    "crash",
+    "error",
+    "updater",
+    "installer",
+    "uninstall",
+    "setup",
+    "helper",
+    "host",
+    "util",
+    "console",
+    "recovery",
+}
+APP_SCAN_TECHNISCHE_PAD_FRAGMENTS = {
+    "\\git\\usr\\bin\\",
+    "\\git\\mingw64\\bin\\",
+    "\\windows kits\\",
+    "\\microsoft visual studio\\",
+    "\\python\\scripts\\",
+    "\\anaconda",
+    "\\jdk\\bin\\",
+}
+APP_IN_APP_ZOEK_HOTKEYS = {
+    "discord": ["ctrl", "k"],
+    "explorer": ["ctrl", "e"],
+    "steam": ["ctrl", "f"],
+    "whatsapp": ["ctrl", "f"],
+}
+APP_IN_APP_ZOEK_ENTER_BEVESTIG = {"discord"}
 
 
 def normaliseer_app_naam(naam):
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ._-]", " ", str(naam or "").lower())).strip(" ._-")
 
 
+def tokeniseer_app_naam(naam):
+    tokens = [token for token in str(naam or "").split() if token and token not in APP_MATCH_STOPWOORDEN]
+    return tokens or [str(naam or "").strip()]
+
+
+def app_naam_match_score(zoeknaam, kandidaat_naam):
+    zoeknaam = normaliseer_app_naam(zoeknaam)
+    kandidaat_naam = normaliseer_app_naam(kandidaat_naam)
+    if not zoeknaam or not kandidaat_naam:
+        return 0.0
+
+    if zoeknaam == kandidaat_naam:
+        return 1.0
+
+    if zoeknaam in kandidaat_naam or kandidaat_naam in zoeknaam:
+        overlap = min(len(zoeknaam), len(kandidaat_naam))
+        lengte = max(len(zoeknaam), len(kandidaat_naam), 1)
+        return min(0.99, 0.86 + (overlap / lengte) * 0.13)
+
+    seq_ratio = SequenceMatcher(None, zoeknaam, kandidaat_naam).ratio()
+    zoek_tokens = set(tokeniseer_app_naam(zoeknaam))
+    kandidaat_tokens = set(tokeniseer_app_naam(kandidaat_naam))
+    token_overlap = len(zoek_tokens & kandidaat_tokens) / max(len(zoek_tokens), len(kandidaat_tokens), 1)
+
+    score = max(seq_ratio, (seq_ratio * 0.65) + (token_overlap * 0.35))
+
+    if kandidaat_naam.startswith(zoeknaam) or zoeknaam.startswith(kandidaat_naam):
+        score += 0.04
+
+    if abs(len(zoeknaam) - len(kandidaat_naam)) > 18:
+        score -= 0.05
+
+    return max(0.0, min(1.0, score))
+
+
+def iter_exe_bestanden(map_pad, max_depth=2):
+    root = Path(map_pad)
+    if not str(map_pad or "").strip() or not root.is_absolute() or not root.exists() or not root.is_dir():
+        return
+
+    root_depth = len(root.parts)
+    for huidige_map, mapnamen, bestandsnamen in os.walk(root, onerror=lambda _error: None):
+        huidige_depth = len(Path(huidige_map).parts) - root_depth
+        if huidige_depth >= max_depth:
+            mapnamen[:] = []
+
+        for bestandsnaam in bestandsnamen:
+            if bestandsnaam.lower().endswith(".exe"):
+                yield Path(huidige_map) / bestandsnaam
+
+
+def is_technische_tool_kandidaat(naam, pad):
+    genormaliseerde_naam = normaliseer_app_naam(naam)
+    if not genormaliseerde_naam:
+        return True
+
+    if (
+        " " not in genormaliseerde_naam
+        and genormaliseerde_naam not in APP_SCAN_KORTE_NAAM_ALLOWLIST
+        and re.fullmatch(r"[a-z0-9_-]{2,7}", genormaliseerde_naam)
+    ):
+        return True
+
+    if genormaliseerde_naam in APP_SCAN_TECHNISCHE_NAAM_EXACT:
+        return True
+
+    naam_tokens = [token for token in re.split(r"[^a-z0-9]+", genormaliseerde_naam) if token]
+    if any(token in APP_SCAN_TECHNISCHE_TOKENS for token in naam_tokens):
+        return True
+
+    if any(fragment in genormaliseerde_naam for fragment in APP_SCAN_TECHNISCHE_NAAM_FRAGMENTS):
+        return True
+
+    pad_tekst = str(pad).replace("/", "\\").lower()
+    if any(fragment in pad_tekst for fragment in APP_SCAN_TECHNISCHE_PAD_FRAGMENTS):
+        return True
+
+    return False
+
+
+def is_openbare_app_kandidaat(kandidaat):
+    try:
+        pad = Path(kandidaat)
+    except Exception:
+        return False
+
+    suffix = pad.suffix.lower()
+    if suffix not in APP_SCAN_BESTANDS_EXTENSIES:
+        return False
+
+    if not pad.exists() or not pad.is_file():
+        return False
+
+    naam = normaliseer_app_naam(pad.stem)
+    if is_technische_tool_kandidaat(naam, pad):
+        return False
+
+    if suffix == ".exe" and any(term in naam for term in APP_SCAN_EXE_BLOKKADE):
+        return False
+
+    if suffix == ".url":
+        try:
+            inhoud = pad.read_text(encoding="utf-8", errors="ignore")[:4096]
+        except Exception:
+            return False
+        if "url=" not in inhoud.lower():
+            return False
+
+    return True
+
+
+def voeg_app_kandidaat_toe(gevonden, kandidaat, uitgesloten):
+    if not is_openbare_app_kandidaat(kandidaat):
+        return
+
+    naam = normaliseer_app_naam(kandidaat.stem)
+    if not naam or any(term in naam for term in uitgesloten):
+        return
+
+    sleutel = naam.casefold()
+    bestaand = gevonden.get(sleutel)
+    if bestaand is None:
+        gevonden[sleutel] = {"name": naam, "target": str(kandidaat)}
+        return
+
+    bestaand_pad = str(bestaand["target"]).lower()
+    kandidaat_pad = str(kandidaat).lower()
+    if bestaand_pad.endswith(".exe") and not kandidaat_pad.endswith(".exe"):
+        gevonden[sleutel] = {"name": naam, "target": str(kandidaat)}
+
+
 def scan_geinstalleerde_apps(force=False):
     global APP_SCAN_CACHE, APP_SCAN_CACHE_AT
 
     with APP_SCAN_LOCK:
-        if APP_SCAN_CACHE and not force and time.time() - APP_SCAN_CACHE_AT < 300:
+        if APP_SCAN_CACHE and not force and time.time() - APP_SCAN_CACHE_AT < APP_SCAN_CACHE_TTL:
             return list(APP_SCAN_CACHE)
 
-        zoekmappen = [
-            Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
-            Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
-            Path.home() / "Desktop",
-            Path(os.environ.get("PUBLIC", "C:/Users/Public")) / "Desktop",
+        zoekbronnen = [
+            {
+                "path": Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+                "patterns": ("*.lnk", "*.url", "*.exe"),
+                "recursive": True,
+            },
+            {
+                "path": Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+                "patterns": ("*.lnk", "*.url", "*.exe"),
+                "recursive": True,
+            },
+            {
+                "path": Path.home() / "Desktop",
+                "patterns": ("*.lnk", "*.url", "*.exe"),
+                "recursive": True,
+            },
+            {
+                "path": Path(os.environ.get("PUBLIC", "C:/Users/Public")) / "Desktop",
+                "patterns": ("*.lnk", "*.url", "*.exe"),
+                "recursive": True,
+            },
+            {
+                "path": Path(os.environ.get("LOCALAPPDATA", "")) / "Programs",
+                "patterns": ("*.exe",),
+                "recursive": True,
+            },
+            {
+                "path": Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/WindowsApps",
+                "patterns": ("*.exe",),
+                "recursive": False,
+            },
         ]
         gevonden = {}
-        uitgesloten = {"uninstall", "readme", "help", "documentation"}
+        uitgesloten = {"uninstall", "readme", "help", "documentation", "manual", "license", "changelog"}
 
-        for zoekmap in zoekmappen:
+        for bron in zoekbronnen:
+            zoekmap = bron["path"]
             if not zoekmap.exists():
                 continue
-            try:
-                kandidaten = list(zoekmap.rglob("*.lnk")) + list(zoekmap.rglob("*.url")) + list(zoekmap.rglob("*.exe"))
-            except OSError:
-                continue
 
-            for kandidaat in kandidaten:
+            for pattern in bron["patterns"]:
+                try:
+                    iterator = zoekmap.rglob(pattern) if bron["recursive"] else zoekmap.glob(pattern)
+                except OSError:
+                    continue
+
+                for kandidaat in iterator:
+                    if len(gevonden) >= APP_SCAN_MAX_ITEMS:
+                        break
+                    voeg_app_kandidaat_toe(gevonden, kandidaat, uitgesloten)
+
                 if len(gevonden) >= APP_SCAN_MAX_ITEMS:
                     break
-                naam = normaliseer_app_naam(kandidaat.stem)
-                if not naam or any(term in naam for term in uitgesloten):
-                    continue
-                sleutel = naam.casefold()
-                gevonden.setdefault(sleutel, {"name": naam, "target": str(kandidaat)})
+
+            if len(gevonden) >= APP_SCAN_MAX_ITEMS:
+                break
+
+        if len(gevonden) < APP_SCAN_MAX_ITEMS:
+            diepe_scan_bronnen = [
+                Path(os.environ.get("ProgramFiles", "")),
+                Path(os.environ.get("ProgramFiles(x86)", "")),
+            ]
+            for bron in diepe_scan_bronnen:
+                for kandidaat in iter_exe_bestanden(bron, max_depth=2):
+                    if len(gevonden) >= APP_SCAN_MAX_ITEMS:
+                        break
+                    voeg_app_kandidaat_toe(gevonden, kandidaat, uitgesloten)
+                if len(gevonden) >= APP_SCAN_MAX_ITEMS:
+                    break
 
         APP_SCAN_CACHE = sorted(gevonden.values(), key=lambda item: item["name"].casefold())
         APP_SCAN_CACHE_AT = time.time()
         return list(APP_SCAN_CACHE)
 
 
-def vind_gescande_app(doel):
+def vind_gescande_app(doel, minimum_score=None):
     sleutel = normaliseer_app_naam(doel).casefold()
     if not sleutel:
         return None
+
+    drempel = float(minimum_score) if minimum_score is not None else (0.70 if len(sleutel) <= 4 else 0.62)
+
+    beste_match = None
+    beste_score = 0.0
+
     for app_item in scan_geinstalleerde_apps():
         naam = app_item["name"].casefold()
-        if sleutel == naam or sleutel in naam or naam in sleutel:
-            return app_item
+        score = app_naam_match_score(sleutel, naam)
+        if score > beste_score:
+            beste_score = score
+            beste_match = app_item
+
+    if beste_match and beste_score >= drempel:
+        resultaat = dict(beste_match)
+        resultaat["score"] = round(beste_score, 3)
+        return resultaat
+
     return None
+
+
+def gebruikt_shell_start_commando(command):
+    if not isinstance(command, (list, tuple)) or len(command) < 4:
+        return False
+
+    genormaliseerd = [str(deel or "").strip().lower() for deel in command[:4]]
+    return genormaliseerd[:3] == ["cmd", "/c", "start"]
+
+
+def vind_gescande_app_voor_sleutel(app_sleutel, details, minimum_score=0.66):
+    zoektermen = [
+        app_sleutel,
+        str(details.get("label_en", "") or ""),
+        str(details.get("label_nl", "") or ""),
+        *list(details.get("aliases", set()) or set()),
+    ]
+
+    beste_match = None
+    beste_score = 0.0
+    gezien = set()
+
+    for zoekterm in zoektermen:
+        genormaliseerd = normaliseer_app_naam(zoekterm)
+        if not genormaliseerd or genormaliseerd in gezien:
+            continue
+        gezien.add(genormaliseerd)
+
+        kandidaat = vind_gescande_app(genormaliseerd, minimum_score=minimum_score)
+        if kandidaat and float(kandidaat.get("score", 0.0)) > beste_score:
+            beste_match = kandidaat
+            beste_score = float(kandidaat.get("score", 0.0))
+
+    return beste_match
 
 
 def beschrijf_gescande_apps(force=False):
@@ -4619,16 +5000,16 @@ def beschrijf_gescande_apps(force=False):
     namen = [item["name"] for item in apps]
     if not namen:
         return tekst_voor_taal(
-            "I could not find app shortcuts in the Windows Start Menu or Desktop.",
-            "Ik heb geen app-snelkoppelingen gevonden in het Windows Startmenu of op het bureaublad."
+            "I could not find launchable apps in the Windows Start Menu or Desktop.",
+            "Ik heb geen startbare apps gevonden in het Windows Startmenu of op het bureaublad."
         )
     zichtbaar = namen[:80]
     extra = len(namen) - len(zichtbaar)
     suffix = f" (+{extra} more)" if extra else ""
     suffix_nl = f" (+{extra} meer)" if extra else ""
     return tekst_voor_taal(
-        f"I found {len(namen)} apps: " + ", ".join(zichtbaar) + suffix,
-        f"Ik heb {len(namen)} apps gevonden: " + ", ".join(zichtbaar) + suffix_nl
+        f"I found {len(namen)} launchable apps: " + ", ".join(zichtbaar) + suffix,
+        f"Ik heb {len(namen)} startbare apps gevonden: " + ", ".join(zichtbaar) + suffix_nl
     )
 
 
@@ -5129,6 +5510,19 @@ def schoon_computerdoel(doel_tekst):
     doel = re.sub(r"^(?:de|het|the|a|een)\s+", "", doel)
     doel = re.sub(r"^(?:app|application|programma|program)\s+", "", doel)
     doel = re.sub(r"\s+(?:app|application|programma|program)$", "", doel)
+    doel = re.sub(r"\b(?:please|pls|alsjeblieft|aub)\b", "", doel)
+
+    spraak_correcties = {
+        "setting": "settings",
+        "seting": "settings",
+        "setings": "settings",
+        "insteling": "instelling",
+        "instelingen": "instellingen",
+        "instellings": "instellingen",
+    }
+    woorden = [spraak_correcties.get(woord, woord) for woord in doel.split() if woord]
+    doel = " ".join(woorden)
+    doel = re.sub(r"\s+", " ", doel).strip(" ,.'\"")
     return doel.strip(" ,.'\"")
 
 
@@ -5137,6 +5531,46 @@ def vind_alias_sleutel(doel_tekst, definities):
     for sleutel, data in definities.items():
         if doel in data["aliases"]:
             return sleutel
+    return ""
+
+
+def alias_match_score(doel, alias):
+    if not doel or not alias:
+        return 0.0
+    if doel == alias:
+        return 1.0
+    if doel in alias or alias in doel:
+        overlap = min(len(doel), len(alias))
+        lengte = max(len(doel), len(alias), 1)
+        return min(0.99, 0.84 + (overlap / lengte) * 0.14)
+
+    seq_ratio = SequenceMatcher(None, doel, alias).ratio()
+    doel_tokens = set(doel.split())
+    alias_tokens = set(alias.split())
+    token_overlap = len(doel_tokens & alias_tokens) / max(len(doel_tokens), len(alias_tokens), 1)
+    return max(seq_ratio, (seq_ratio * 0.7) + (token_overlap * 0.3))
+
+
+def vind_alias_sleutel_fuzzy(doel_tekst, definities, minimum_score=0.8):
+    doel = schoon_computerdoel(doel_tekst)
+    if not doel:
+        return ""
+
+    beste_sleutel = ""
+    beste_score = 0.0
+
+    for sleutel, data in definities.items():
+        aliassen = {schoon_computerdoel(alias) for alias in data.get("aliases", set()) if alias}
+        aliassen.add(schoon_computerdoel(sleutel))
+        for alias in aliassen:
+            score = alias_match_score(doel, alias)
+            if score > beste_score:
+                beste_score = score
+                beste_sleutel = sleutel
+
+    if beste_sleutel and beste_score >= minimum_score:
+        return beste_sleutel
+
     return ""
 
 
@@ -5704,6 +6138,30 @@ def is_veilig_app_doel(doel_tekst):
     return bool(re.fullmatch(r"[a-z0-9][a-z0-9 ._-]{1,60}", schoon_computerdoel(doel_tekst)))
 
 
+def bevat_open_intentie(stap):
+    return bool(re.search(r"\b(?:open|openen|start|launch|run|draai)\b", str(stap or "")))
+
+
+def is_direct_doel_commando(stap):
+    tokens = [token for token in str(stap or "").split() if token]
+    if not tokens:
+        return False
+
+    blokkerende_woorden = {
+        "wat", "wie", "waar", "waarom", "wanneer", "hoe", "welke",
+        "what", "who", "where", "why", "when", "how", "which",
+        "is", "zijn", "vertel", "uitleg", "explain", "about", "over",
+    }
+
+    if any(token in blokkerende_woorden for token in tokens):
+        return False
+
+    if bevat_open_intentie(stap):
+        return True
+
+    return len(tokens) <= 2
+
+
 def maak_systeem_actie(stap):
     if re.fullmatch(
         r"(?:close|exit|quit|stop|shutdown|shut down|turn off|sluit|sluiten|stoppen|afsluiten|uitzetten)(?:\s+(?:echo|the echo app|de echo app|app|de app))?(?:\s+(?:af|app|programma|uit|uitzetten))?|(?:echo|the echo app|de echo app)\s+(?:close|exit|quit|stop|shutdown|shut down|turn off|sluit|sluiten|stoppen|afsluiten|uitzetten)|(?:zet|schakel)\s+(?:echo|de echo app|de app)\s+uit",
@@ -5721,13 +6179,24 @@ def maak_systeem_actie(stap):
         if stap in data["aliases"]:
             return actie
 
-    direct_setting = vind_alias_sleutel(stap, SYSTEM_SETTING_TARGETS)
-    if direct_setting:
-        return f"open setting {direct_setting}"
+    if re.fullmatch(r"(?:bluetooth devices|devices in bluetooth|bluetooth apparaten|apparaten in bluetooth)", stap):
+        return "open setting bluetooth settings"
 
-    direct_app = vind_alias_sleutel(stap, SYSTEM_APP_TARGETS)
-    if direct_app:
-        return f"open app {direct_app}"
+    if re.search(r"\b(?:game|spel)\b.+\b(?:in|on|op)\s+steam\b", stap):
+        return ""
+
+    if is_direct_doel_commando(stap):
+        direct_setting = vind_alias_sleutel(stap, SYSTEM_SETTING_TARGETS)
+        if not direct_setting:
+            direct_setting = vind_alias_sleutel_fuzzy(stap, SYSTEM_SETTING_TARGETS, minimum_score=0.82)
+        if direct_setting:
+            return f"open setting {direct_setting}"
+
+        direct_app = vind_alias_sleutel(stap, SYSTEM_APP_TARGETS)
+        if not direct_app:
+            direct_app = vind_alias_sleutel_fuzzy(stap, SYSTEM_APP_TARGETS, minimum_score=0.86)
+        if direct_app:
+            return f"open app {direct_app}"
 
     direct_folder = resolve_folder_pad(stap)
     if direct_folder and vind_alias_sleutel(stap, COMMON_FOLDER_TARGETS):
@@ -5754,7 +6223,15 @@ def maak_systeem_actie(stap):
     if doel_tekst in {"google", "youtube"}:
         return ""
 
+    if re.search(r"\b(?:devices?|apparaten?)\s+(?:in|on|op)\s+bluetooth\b", doel_tekst) or re.search(r"\bbluetooth\s+(?:devices?|apparaten?)\b", doel_tekst):
+        return "open setting bluetooth settings"
+
+    if re.search(r"\b(?:in|on|op|via)\s+(?:steam|whatsapp|discord)\b", doel_tekst):
+        return ""
+
     setting_sleutel = vind_alias_sleutel(doel_tekst, SYSTEM_SETTING_TARGETS)
+    if not setting_sleutel:
+        setting_sleutel = vind_alias_sleutel_fuzzy(doel_tekst, SYSTEM_SETTING_TARGETS, minimum_score=0.72)
     if setting_sleutel:
         return f"open setting {setting_sleutel}"
 
@@ -5763,6 +6240,8 @@ def maak_systeem_actie(stap):
         return f"open folder {folder_pad}"
 
     app_sleutel = vind_alias_sleutel(doel_tekst, SYSTEM_APP_TARGETS)
+    if not app_sleutel:
+        app_sleutel = vind_alias_sleutel_fuzzy(doel_tekst, SYSTEM_APP_TARGETS, minimum_score=0.79)
     if app_sleutel:
         return f"open app {app_sleutel}"
 
@@ -6444,6 +6923,245 @@ def activeer_venster(app_sleutel, probeer_start=True):
         return activeer_venster(app_sleutel, False)
 
     return False
+
+
+def activeer_venster_op_zoekterm(zoekterm):
+    if gw is None:
+        return False
+
+    ruwe_zoekterm = str(zoekterm or "").strip()
+    if not ruwe_zoekterm:
+        return False
+
+    genormaliseerd = normaliseer_app_naam(ruwe_zoekterm)
+    kandidaten = [ruwe_zoekterm]
+    if genormaliseerd and genormaliseerd != ruwe_zoekterm:
+        kandidaten.append(genormaliseerd)
+        kandidaten.extend(token for token in genormaliseerd.split() if len(token) >= 4)
+
+    gezien = set()
+    for kandidaat in kandidaten:
+        sleutel = str(kandidaat or "").strip().casefold()
+        if not sleutel or sleutel in gezien:
+            continue
+        gezien.add(sleutel)
+
+        try:
+            vensters = [venster for venster in gw.getWindowsWithTitle(kandidaat) if getattr(venster, "title", "").strip()]
+        except Exception:
+            vensters = []
+
+        for venster in vensters:
+            try:
+                if getattr(venster, "isMinimized", False):
+                    venster.restore()
+                    time.sleep(0.2)
+                venster.activate()
+                time.sleep(0.2)
+                return True
+            except Exception:
+                continue
+
+    return False
+
+
+def focus_of_open_app_voor_actie(app_naam):
+    app_naam = schoon_computerdoel(app_naam)
+    if not app_naam:
+        return False, "", ""
+
+    app_sleutel = vind_focus_app_sleutel(app_naam)
+    if not app_sleutel:
+        app_sleutel = vind_alias_sleutel_fuzzy(app_naam, SYSTEM_APP_TARGETS, minimum_score=0.76)
+
+    if app_sleutel and activeer_venster(app_sleutel, True):
+        return True, app_sleutel, app_sleutel
+
+    gescande_app = vind_gescande_app(app_naam, minimum_score=0.68)
+    if not gescande_app:
+        return False, app_sleutel, ""
+
+    match_naam = str(gescande_app.get("name", "") or app_naam).strip() or app_naam
+    try:
+        open_windows_doel(gescande_app["target"])
+    except Exception:
+        try:
+            subprocess.Popen(["cmd", "/c", "start", "", match_naam])
+        except Exception:
+            return False, app_sleutel, match_naam
+
+    time.sleep(1.0)
+
+    if app_sleutel and activeer_venster(app_sleutel, False):
+        return True, app_sleutel, match_naam
+
+    if activeer_venster_op_zoekterm(match_naam):
+        return True, app_sleutel, match_naam
+
+    return True, app_sleutel, match_naam
+
+
+def zoek_hotkey_voor_app(app_sleutel, app_naam):
+    sleutel = str(app_sleutel or "").strip().lower()
+    if sleutel in APP_IN_APP_ZOEK_HOTKEYS:
+        return list(APP_IN_APP_ZOEK_HOTKEYS[sleutel])
+
+    genormaliseerd = normaliseer_app_naam(app_naam)
+    for known_key, hotkey in APP_IN_APP_ZOEK_HOTKEYS.items():
+        if known_key in genormaliseerd:
+            return list(hotkey)
+
+    return ["ctrl", "f"]
+
+
+def open_doel_url_of_protocol(url):
+    try:
+        open_windows_doel(url)
+        return True
+    except Exception:
+        try:
+            webbrowser.open(url)
+            return True
+        except Exception:
+            return False
+
+
+def normaliseer_whatsapp_nummer(contact):
+    nummer = re.sub(r"[^0-9+]", "", str(contact or "").strip())
+    if nummer.startswith("00"):
+        nummer = nummer[2:]
+    nummer = nummer.lstrip("+")
+    return nummer if len(nummer) >= 8 else ""
+
+
+def voer_steam_game_actie_uit(spel_zoekterm):
+    spel = strip_omringende_quotes(str(spel_zoekterm or "").strip(" ."))
+    if not spel:
+        return tekst_voor_taal(
+            "No Steam game name provided.",
+            "Geen Steam-spelnaam opgegeven."
+        )
+
+    if re.fullmatch(r"\d{3,10}", spel):
+        protocol = f"steam://rungameid/{spel}"
+        if open_doel_url_of_protocol(protocol):
+            return tekst_voor_taal(
+                f"Started Steam game with AppID {spel}.",
+                f"Steam-spel gestart met AppID {spel}."
+            )
+        return tekst_voor_taal(
+            "Could not start that Steam AppID.",
+            "Kon die Steam-AppID niet starten."
+        )
+
+    steam_store_url = f"https://store.steampowered.com/search/?term={quote_plus(spel)}"
+    steam_protocol = f"steam://openurl/{steam_store_url}"
+    if open_doel_url_of_protocol(steam_protocol):
+        return tekst_voor_taal(
+            f"Opened Steam search for '{spel}'.",
+            f"Steam-zoekopdracht geopend voor '{spel}'."
+        )
+
+    if open_doel_url_of_protocol(steam_store_url):
+        return tekst_voor_taal(
+            f"Opened web search for Steam game '{spel}'.",
+            f"Webzoekopdracht voor Steam-spel '{spel}' geopend."
+        )
+
+    return tekst_voor_taal(
+        "Could not open Steam game search.",
+        "Kon Steam-spelzoekopdracht niet openen."
+    )
+
+
+def voer_whatsapp_bericht_actie_uit(contact, bericht):
+    contact = strip_omringende_quotes(str(contact or "").strip())
+    bericht = strip_omringende_quotes(str(bericht or "").strip())
+    if not contact or not bericht:
+        return tekst_voor_taal(
+            "Provide both a WhatsApp contact and a message.",
+            "Geef zowel een WhatsApp-contact als een bericht op."
+        )
+
+    telefoonnummer = normaliseer_whatsapp_nummer(contact)
+    if telefoonnummer:
+        whatsapp_url = f"https://wa.me/{telefoonnummer}?text={quote_plus(bericht)}"
+        if open_doel_url_of_protocol(whatsapp_url):
+            return tekst_voor_taal(
+                f"Opened WhatsApp message draft for {contact}.",
+                f"WhatsApp-berichtvoorstel geopend voor {contact}."
+            )
+        return tekst_voor_taal(
+            "Could not open WhatsApp web message draft.",
+            "Kon WhatsApp-webberichtvoorstel niet openen."
+        )
+
+    blokkade = geavanceerde_besturing_geblokkeerd("whatsapp send::name")
+    if blokkade:
+        return blokkade
+
+    gefocust, _app_sleutel, _match_naam = focus_of_open_app_voor_actie("whatsapp")
+    if not gefocust:
+        return tekst_voor_taal(
+            "Could not focus WhatsApp. Open WhatsApp first and try again.",
+            "Kon WhatsApp niet activeren. Open WhatsApp eerst en probeer opnieuw."
+        )
+
+    try:
+        pyautogui.hotkey("ctrl", "n")
+        time.sleep(0.35)
+        pyautogui.write(contact, interval=0.02)
+        time.sleep(0.25)
+        pyautogui.press("enter")
+        time.sleep(0.55)
+        pyautogui.write(bericht, interval=0.02)
+        pyautogui.press("enter")
+        return tekst_voor_taal(
+            f"WhatsApp message sent to {contact}.",
+            f"WhatsApp-bericht verstuurd naar {contact}."
+        )
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Error sending WhatsApp message: {e}",
+            f"Fout bij versturen van WhatsApp-bericht: {e}"
+        )
+
+
+def voer_app_zoekactie_uit(app_naam, zoekterm):
+    app_naam = strip_omringende_quotes(str(app_naam or "").strip())
+    zoekterm = strip_omringende_quotes(str(zoekterm or "").strip())
+    if not app_naam or not zoekterm:
+        return tekst_voor_taal(
+            "Provide both an app name and a search term.",
+            "Geef zowel een app-naam als een zoekterm op."
+        )
+
+    gefocust, app_sleutel, match_naam = focus_of_open_app_voor_actie(app_naam)
+    if not gefocust:
+        return tekst_voor_taal(
+            f"Could not focus app '{app_naam}'.",
+            f"Kon app '{app_naam}' niet activeren."
+        )
+
+    hotkey = zoek_hotkey_voor_app(app_sleutel, app_naam)
+    try:
+        pyautogui.hotkey(*hotkey)
+        time.sleep(0.25)
+        pyautogui.write(zoekterm, interval=0.02)
+
+        if (app_sleutel or "").lower() in APP_IN_APP_ZOEK_ENTER_BEVESTIG:
+            pyautogui.press("enter")
+
+        app_label = match_naam or app_sleutel or app_naam
+        return tekst_voor_taal(
+            f"Searching in {app_label}: {zoekterm}",
+            f"Zoeken in {app_label}: {zoekterm}"
+        )
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Error searching in app: {e}",
+            f"Fout bij zoeken in app: {e}"
+        )
 
 
 def vind_focus_app_sleutel(doel_tekst):
@@ -7275,6 +7993,54 @@ def maak_automation_actie(originele_stap, stap):
     if stap in {"automation status", "status automation mode", "automation mode status", "automation-modus status"}:
         return "automation status"
 
+    if re.fullmatch(r"(?:find|search|zoek|vind).*(?:in every app|in elke app)", stap):
+        return "app search help"
+
+    steam_patronen = [
+        r"^(?:open|start|launch|play|speel)\s+(?:the\s+)?(?:game|spel)\s+(?P<game>.+?)\s+(?:in|on|op)\s+steam$",
+        r"^(?:play|speel)\s+(?P<game>.+?)\s+(?:in|on|op)\s+steam$",
+        r"^(?:open|start|launch|play|speel)\s+(?P<game>.+?)\s+(?:in|on|op)\s+steam$",
+        r"^(?:steam)\s+(?:open|start|launch|play|speel)\s+(?:game|spel)\s+(?P<game>.+)$",
+    ]
+    for patroon in steam_patronen:
+        steam_match = re.match(patroon, originele_stap, re.IGNORECASE)
+        if steam_match:
+            spel = strip_omringende_quotes(steam_match.group("game").strip(" ."))
+            if spel:
+                return f"steam open game::{spel.replace('||', '|')}"
+
+    whatsapp_patronen = [
+        r"^(?:send|stuur|verstuur)\s+(?:a\s+|een\s+)?(?:whatsapp\s+)?(?:message|bericht)\s+(?:to|naar)\s+(?P<contact>.+?)\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:send|stuur|verstuur)\s+(?:to|naar)\s+(?P<contact>.+?)\s+(?:on|in|op|via)\s+whatsapp\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:whatsapp)\s+(?:message|bericht)\s+(?:to|naar)\s+(?P<contact>.+?)\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:send|stuur|verstuur)\s+(?P<message>.+?)\s+(?:to|naar)\s+(?P<contact>.+?)\s+(?:on|in|op|via)\s+whatsapp$",
+    ]
+    for patroon in whatsapp_patronen:
+        whatsapp_match = re.match(patroon, originele_stap, re.IGNORECASE)
+        if not whatsapp_match:
+            continue
+
+        contact = strip_omringende_quotes(whatsapp_match.group("contact").strip(" ."))
+        bericht = strip_omringende_quotes(whatsapp_match.group("message").strip())
+        if contact and bericht:
+            return f"whatsapp send::{contact.replace('||', '|')}||{bericht.replace('||', '|')}"
+
+    app_zoek_patronen = [
+        r"^(?:search|find|zoek|vind)\s+(?P<query>.+?)\s+(?:in|on|op)\s+(?P<app>[a-z0-9 ._-]{2,40})$",
+        r"^(?:search|find|zoek|vind)\s+(?:in|on|op)\s+(?P<app>[a-z0-9 ._-]{2,40})\s+(?:for|naar|op)?\s*(?P<query>.+)$",
+    ]
+    for patroon in app_zoek_patronen:
+        app_zoek_match = re.match(patroon, originele_stap, re.IGNORECASE)
+        if not app_zoek_match:
+            continue
+
+        app_naam = schoon_computerdoel(app_zoek_match.group("app"))
+        query = strip_omringende_quotes(app_zoek_match.group("query").strip(" ."))
+        if app_naam in {"google", "youtube", "file", "files", "bestand", "bestanden", "workspace", "project"}:
+            continue
+        if app_naam and query:
+            return f"app search::{app_naam.replace('||', '|')}||{query.replace('||', '|')}"
+
     macro_sleutel = vind_macro_sleutel(stap)
     if macro_sleutel:
         return f"run macro {macro_sleutel}"
@@ -7590,7 +8356,7 @@ def normaliseer_actie(stap):
     if not originele_stap:
         return ""
 
-    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show")):
+    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::")) or stap == "app search help":
         return originele_stap
 
     if is_explicit_help_request(stap):
@@ -7632,14 +8398,10 @@ def normaliseer_actie(stap):
     if automation_actie:
         return automation_actie
 
-    if "youtube" in stap and (
-        stap == "youtube" or re.search(r"\b(open|openen|start|launch|ga(?:\s+naar)?)\b", stap)
-    ):
+    if "youtube" in stap and (stap == "youtube" or bevat_open_intentie(stap)):
         return "open youtube"
 
-    if "google" in stap and (
-        stap == "google" or re.search(r"\b(open|openen|start|launch|ga(?:\s+naar)?)\b", stap)
-    ):
+    if "google" in stap and (stap == "google" or bevat_open_intentie(stap)):
         return "open google"
 
     folder_match = re.match(
@@ -7650,19 +8412,19 @@ def normaliseer_actie(stap):
         mapnaam = folder_match.group(1).strip()
         return f"create folder {mapnaam}".strip()
 
-    if re.search(r"\b(?:calculator|rekenmachine|calc)\b", stap):
+    if re.fullmatch(r"(?:(?:open|openen|start|launch|run|draai)\s+)?(?:calculator|rekenmachine|calc)", stap):
         return "open calculator"
 
-    if re.search(r"\b(?:paint|mspaint|tekenprogramma)\b", stap):
+    if re.fullmatch(r"(?:(?:open|openen|start|launch|run|draai)\s+)?(?:paint|mspaint|tekenprogramma)", stap):
         return "open paint"
 
-    if re.search(r"\b(?:command prompt|cmd|opdrachtprompt|terminal)\b", stap):
+    if re.fullmatch(r"(?:(?:open|openen|start|launch|run|draai)\s+)?(?:command prompt|cmd|opdrachtprompt|terminal)", stap):
         return "open command prompt"
 
-    if re.search(r"\b(?:notepad|kladblok)\b", stap):
+    if re.fullmatch(r"(?:(?:open|openen|start|launch|run|draai)\s+)?(?:notepad|kladblok)", stap):
         return "open notepad"
 
-    if re.search(r"\b(?:file explorer|explorer|verkenner|bestandsverkenner)\b", stap):
+    if re.fullmatch(r"(?:(?:open|openen|start|launch|run|draai)\s+)?(?:file explorer|explorer|verkenner|bestandsverkenner)", stap):
         return "open file explorer"
 
     return stap
@@ -7681,11 +8443,13 @@ def actie_prioriteit(stap):
         return 1
     if stap.startswith(("open website", "open websites", "open new tab", "open new tabs", "search google", "search youtube", "open browser url::")) or "youtube" in stap or "google" in stap or "browser" in stap:
         return 1
+    if stap.startswith("steam open game::"):
+        return 2
     if stap.startswith("calculate::"):
         return 2
     if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "apps scan", "battery status", "wifi quality", "disk space", "ip address", "current time")):
         return 2
-    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ")):
+    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::")):
         return 3
     if stap.startswith("create folder"):
         return 4
@@ -7914,10 +8678,40 @@ def voer_enkele_actie_uit(actie):
     if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "current time"}:
         return voer_systeeminfo_uit(actie)
 
-    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ")):
+    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::")):
         blokkade = geavanceerde_besturing_geblokkeerd(actie)
         if blokkade:
             return blokkade
+
+    if actie == "app search help":
+        return tekst_voor_taal(
+            "Use: search <term> in <app>. Examples: search friends in discord, zoek call of duty in steam, search invoice in explorer.",
+            "Gebruik: zoek <term> in <app>. Voorbeelden: zoek vrienden in discord, zoek call of duty in steam, zoek factuur in verkenner."
+        )
+
+    if actie.startswith("steam open game::"):
+        spel_zoekterm = actie.split("::", 1)[1]
+        return voer_steam_game_actie_uit(spel_zoekterm)
+
+    if actie.startswith("whatsapp send::"):
+        payload = actie.split("::", 1)[1]
+        if "||" not in payload:
+            return tekst_voor_taal(
+                "Provide contact and message for WhatsApp.",
+                "Geef contact en bericht op voor WhatsApp."
+            )
+        contact, bericht = payload.split("||", 1)
+        return voer_whatsapp_bericht_actie_uit(contact, bericht)
+
+    if actie.startswith("app search::"):
+        payload = actie.split("::", 1)[1]
+        if "||" not in payload:
+            return tekst_voor_taal(
+                "Provide app and search term.",
+                "Geef app en zoekterm op."
+            )
+        app_naam, zoekterm = payload.split("||", 1)
+        return voer_app_zoekactie_uit(app_naam, zoekterm)
 
     if actie.startswith("run macro "):
         macro_sleutel = re.sub(r"^run macro\s*", "", actie).strip()
@@ -8353,9 +9147,25 @@ def voer_enkele_actie_uit(actie):
         try:
             gevonden_app = vind_gescande_app(app_doel)
             if gevonden_app:
-                open_windows_doel(gevonden_app["target"])
-            else:
-                subprocess.Popen(["cmd", "/c", "start", "", app_doel])
+                match_naam = gevonden_app["name"]
+                match_score = int(round(float(gevonden_app.get("score", 0.0)) * 100))
+                try:
+                    open_windows_doel(gevonden_app["target"])
+                except Exception:
+                    subprocess.Popen(["cmd", "/c", "start", "", match_naam])
+
+                if normaliseer_app_naam(match_naam) == normaliseer_app_naam(app_doel):
+                    return tekst_voor_taal(
+                        f"Opened app: {match_naam}",
+                        f"App geopend: {match_naam}"
+                    )
+
+                return tekst_voor_taal(
+                    f"Opened app: {match_naam} (closest match {match_score}% for '{app_doel}')",
+                    f"App geopend: {match_naam} (beste match {match_score}% voor '{app_doel}')"
+                )
+
+            subprocess.Popen(["cmd", "/c", "start", "", app_doel])
             return tekst_voor_taal(
                 f"Opened app: {app_doel}",
                 f"App geopend: {app_doel}"
@@ -8373,6 +9183,18 @@ def voer_enkele_actie_uit(actie):
             command = list(details["command"])
             if app_sleutel == "file explorer":
                 command = ["explorer", instellingen["verkenner_start_map"]]
+
+            if gebruikt_shell_start_commando(command):
+                gescande_app = vind_gescande_app_voor_sleutel(app_sleutel, details)
+                if gescande_app:
+                    try:
+                        open_windows_doel(gescande_app["target"])
+                        return tekst_voor_taal(
+                            f"Opened {details['label_en']}",
+                            f"{details['label_nl']} geopend"
+                        )
+                    except Exception:
+                        pass
 
             try:
                 subprocess.Popen(command)
@@ -8510,7 +9332,12 @@ def voer_commando_uit(tekst, spreek_hardop=True):
 
 @app.route('/')
 def index():
-    return render_template('index.html', instellingen=instellingen, spraak_beschikbaar=SPRAAK_BESCHIKBAAR)
+    return render_template(
+        'index.html',
+        instellingen=instellingen,
+        spraak_beschikbaar=SPRAAK_BESCHIKBAAR,
+        build_id=APP_BUILD_ID,
+    )
 
 
 @app.route('/api/runtime-version', methods=['GET'])
@@ -8786,6 +9613,14 @@ def bepaal_runtime_poort(voorkeurs_poort, max_poort):
     os.environ['ECHO_SELECTED_PORT'] = str(poort)
     return poort
 
+
+def voer_opstart_app_scan_uit(force=True):
+    try:
+        gevonden_apps = scan_geinstalleerde_apps(force=force)
+        print(f'Echo startup app scan complete: {len(gevonden_apps)} launchable apps indexed (no apps opened).')
+    except Exception as scan_error:
+        print(f'Echo startup app scan unavailable: {scan_error}')
+
 if __name__ == '__main__':
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
     poort_span = begrens_int_waarde(os.environ.get('ECHO_PORT_SPAN', '50'), 50, 0, 2000)
@@ -8818,11 +9653,8 @@ if __name__ == '__main__':
 
     print(f'Window mode: {window_mode} | Auto reload: {"on" if auto_reload else "off"}')
 
-    try:
-        gevonden_apps = scan_geinstalleerde_apps(force=True)
-        print(f'Echo app scan complete: {len(gevonden_apps)} apps found.')
-    except Exception as scan_error:
-        print(f'Echo app scan unavailable: {scan_error}')
+    if not auto_reload or is_reloader_child:
+        threading.Thread(target=voer_opstart_app_scan_uit, kwargs={"force": True}, daemon=True).start()
 
     if not auto_reload or is_reloader_child:
         start_planning_monitor()

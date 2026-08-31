@@ -67,6 +67,11 @@ Als `Echo-App.vbs` bestaat, gebruikt de snelkoppeling automatisch die one-click 
 Daarnaast wordt ook `Echo App (Live Sync).lnk` aangemaakt voor starten met continue code-sync.
 En er wordt `Echo App (Auto Sync).lnk` aangemaakt voor de nieuwe Auto-Sync launcher.
 Ook wordt `Echo Wake Listener.lnk` aangemaakt voor "hey echo" wake-open gedrag.
+En er wordt automatisch een opstart-snelkoppeling geplaatst in je Windows Opstart-map:
+
+- `Echo App (Auto Sync).lnk`
+
+Daardoor start Echo vanzelf bij inloggen, inclusief Auto Sync.
 
 ## GitHub auto-sync
 
