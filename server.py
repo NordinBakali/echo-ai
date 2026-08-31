@@ -1680,6 +1680,20 @@ def maak_pending_bevestiging_payload():
         if target:
             prompt_en = f"Safety check: confirm to delete {target}."
             prompt_nl = f"Veiligheidscontrole: bevestig om {target} te verwijderen."
+    elif wachtende_actie.startswith("apps uninstall::"):
+        kind = "app-uninstall"
+        app_naam = wachtende_actie.split("::", 1)[1]
+        match = vind_app_update_of_scan_match(app_naam)
+        target = match["name"] if match else schoon_computerdoel(app_naam)
+        if target:
+            prompt_en = f"Safety check: confirm to uninstall {target}."
+            prompt_nl = f"Veiligheidscontrole: bevestig om {target} te verwijderen."
+    elif wachtende_actie == "apps updates apply":
+        kind = "app-update"
+        updates = scan_app_updates_winget()
+        target = f"{len(updates)} apps"
+        prompt_en = f"Safety check: confirm to update {len(updates)} app(s)."
+        prompt_nl = f"Veiligheidscontrole: bevestig om {len(updates)} app(s) te updaten."
     elif wachtende_actie.startswith("overwrite file::"):
         kind = "workspace-overwrite"
         bestand_payload = wachtende_actie.split("::", 1)[1]
@@ -3800,6 +3814,7 @@ def categoriseer_actie(actie):
         "wifi off",
         "wifi toggle",
         "bluetooth ",
+        "app control::",
     )):
         return "automation"
 
@@ -5013,6 +5028,230 @@ def beschrijf_gescande_apps(force=False):
     )
 
 
+APP_UPDATE_CACHE = []
+APP_UPDATE_CACHE_AT = 0.0
+APP_UPDATE_LOCK = threading.Lock()
+APP_UPDATE_CACHE_TTL = 900
+
+
+def winget_beschikbaar():
+    return shutil.which("winget") is not None
+
+
+def scan_app_updates_winget(force=False):
+    global APP_UPDATE_CACHE, APP_UPDATE_CACHE_AT
+
+    with APP_UPDATE_LOCK:
+        if APP_UPDATE_CACHE and not force and time.time() - APP_UPDATE_CACHE_AT < APP_UPDATE_CACHE_TTL:
+            return list(APP_UPDATE_CACHE)
+
+        if not winget_beschikbaar():
+            APP_UPDATE_CACHE = []
+            APP_UPDATE_CACHE_AT = time.time()
+            return []
+
+        try:
+            resultaat = subprocess.run(
+                ["winget", "upgrade", "--accept-source-agreements", "--disable-interactivity"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=90,
+            )
+        except Exception:
+            return list(APP_UPDATE_CACHE)
+
+        updates = []
+        regels = [regel for regel in (resultaat.stdout or "").splitlines() if regel.strip()]
+        kopregel_index = next(
+            (index for index, regel in enumerate(regels) if re.search(r"\bId\b", regel) and re.search(r"\bVersion\b", regel)),
+            -1,
+        )
+
+        if kopregel_index != -1:
+            kopregel = regels[kopregel_index]
+            id_start = kopregel.find("Id")
+            version_start = kopregel.find("Version")
+            available_start = kopregel.find("Available")
+            source_start = kopregel.find("Source")
+
+            for regel in regels[kopregel_index + 1:]:
+                if regel.strip().startswith("-") or not regel.strip():
+                    continue
+                if "upgrade(s) available" in regel.lower() or "geen upgrades beschikbaar" in regel.lower():
+                    continue
+                if "version number" in regel.lower() or "versienummer" in regel.lower():
+                    continue
+
+                naam = regel[:id_start].strip()
+                app_id = regel[id_start:version_start].strip() if version_start > id_start else ""
+                huidige_versie = regel[version_start:available_start].strip() if available_start > version_start else ""
+                beschikbare_versie = regel[available_start:source_start].strip() if source_start > available_start else regel[available_start:].strip()
+
+                if naam and app_id:
+                    updates.append({
+                        "name": naam,
+                        "id": app_id,
+                        "current_version": huidige_versie,
+                        "available_version": beschikbare_versie,
+                    })
+
+        APP_UPDATE_CACHE = updates
+        APP_UPDATE_CACHE_AT = time.time()
+        return list(APP_UPDATE_CACHE)
+
+
+def beschrijf_app_updates(force=False):
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not check for app updates because winget is not available on this computer.",
+            "Ik kon geen app-updates controleren omdat winget niet beschikbaar is op deze computer."
+        )
+
+    updates = scan_app_updates_winget(force=force)
+    if not updates:
+        return tekst_voor_taal(
+            "All your apps are up to date.",
+            "Al je apps zijn up-to-date."
+        )
+
+    aantal = len(updates)
+    return tekst_voor_taal(
+        f"There {'is' if aantal == 1 else 'are'} {aantal} app update{'s' if aantal != 1 else ''} available. "
+        "Say 'confirm' if you want me to update them, or ask me to list them.",
+        f"Er {'is' if aantal == 1 else 'zijn'} {aantal} app-update{'s' if aantal != 1 else ''} beschikbaar. "
+        "Zeg 'bevestig' als je wilt dat ik ze update, of vraag me om ze op te noemen."
+    )
+
+
+def beschrijf_app_updates_lijst(force=False):
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not check for app updates because winget is not available on this computer.",
+            "Ik kon geen app-updates controleren omdat winget niet beschikbaar is op deze computer."
+        )
+
+    updates = scan_app_updates_winget(force=force)
+    if not updates:
+        return tekst_voor_taal(
+            "All your apps are up to date.",
+            "Al je apps zijn up-to-date."
+        )
+
+    zichtbaar = updates[:20]
+    regels_en = [f"{item['name']} ({item['current_version']} -> {item['available_version']})" for item in zichtbaar]
+    regels_nl = regels_en
+    extra = len(updates) - len(zichtbaar)
+    suffix_en = f" (+{extra} more)" if extra else ""
+    suffix_nl = f" (+{extra} meer)" if extra else ""
+
+    return tekst_voor_taal(
+        f"{len(updates)} apps can be updated: " + ", ".join(regels_en) + suffix_en
+        + " Say 'remove <app>' if you want me to uninstall one instead.",
+        f"{len(updates)} apps kunnen geupdatet worden: " + ", ".join(regels_nl) + suffix_nl
+        + " Zeg 'verwijder <app>' als je er een wilt laten verwijderen."
+    )
+
+
+def voer_app_updates_uit():
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not update apps because winget is not available on this computer.",
+            "Ik kon apps niet updaten omdat winget niet beschikbaar is op deze computer."
+        )
+
+    updates = scan_app_updates_winget(force=True)
+    if not updates:
+        return tekst_voor_taal(
+            "All your apps are already up to date.",
+            "Al je apps zijn al up-to-date."
+        )
+
+    try:
+        resultaat = subprocess.run(
+            ["winget", "upgrade", "--all", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=1800,
+        )
+    except Exception as e:
+        return tekst_voor_taal(f"Error updating apps: {e}", f"Fout bij updaten van apps: {e}")
+
+    with APP_UPDATE_LOCK:
+        global APP_UPDATE_CACHE, APP_UPDATE_CACHE_AT
+        APP_UPDATE_CACHE = []
+        APP_UPDATE_CACHE_AT = 0.0
+
+    if resultaat.returncode != 0:
+        foutmelding = (resultaat.stderr or resultaat.stdout or "winget upgrade failed").strip()
+        return tekst_voor_taal(
+            f"Some apps may not have updated correctly: {foutmelding}",
+            f"Sommige apps zijn mogelijk niet correct geupdatet: {foutmelding}"
+        )
+
+    aantal = len(updates)
+    return tekst_voor_taal(
+        f"Updated {aantal} app{'s' if aantal != 1 else ''}.",
+        f"{aantal} app{'s' if aantal != 1 else ''} geupdatet."
+    )
+
+
+def vind_app_update_of_scan_match(app_naam):
+    schoon = schoon_computerdoel(app_naam).casefold()
+    if not schoon:
+        return None
+
+    for item in scan_app_updates_winget():
+        if schoon in item["name"].casefold() or schoon in item["id"].casefold():
+            return {"name": item["name"], "id": item["id"]}
+
+    gescand = vind_gescande_app(app_naam, minimum_score=0.66)
+    if gescand:
+        return {"name": gescand["name"], "id": ""}
+
+    return None
+
+
+def voer_app_verwijderen_uit(app_naam):
+    match = vind_app_update_of_scan_match(app_naam)
+    naam_voor_weergave = match["name"] if match else schoon_computerdoel(app_naam)
+
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not uninstall the app because winget is not available on this computer.",
+            "Ik kon de app niet verwijderen omdat winget niet beschikbaar is op deze computer."
+        )
+
+    doel = match["id"] if match and match.get("id") else naam_voor_weergave
+    try:
+        resultaat = subprocess.run(
+            ["winget", "uninstall", "--accept-source-agreements", "--disable-interactivity", doel],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=120,
+        )
+    except Exception as e:
+        return tekst_voor_taal(f"Error removing app: {e}", f"Fout bij verwijderen van app: {e}")
+
+    if resultaat.returncode != 0:
+        foutmelding = (resultaat.stderr or resultaat.stdout or "winget uninstall failed").strip()
+        return tekst_voor_taal(
+            f"Could not remove {naam_voor_weergave}: {foutmelding}",
+            f"Kon {naam_voor_weergave} niet verwijderen: {foutmelding}"
+        )
+
+    with APP_UPDATE_LOCK:
+        global APP_UPDATE_CACHE
+        APP_UPDATE_CACHE = [item for item in APP_UPDATE_CACHE if item["name"] != naam_voor_weergave]
+
+    return tekst_voor_taal(f"{naam_voor_weergave} removed", f"{naam_voor_weergave} verwijderd")
+
+
 def maak_help_bericht():
     apps = scan_geinstalleerde_apps()
     app_namen = ", ".join(item["name"] for item in apps[:30])
@@ -5924,6 +6163,30 @@ def maak_informatie_actie(stap):
         return "apps scan"
 
     if re.fullmatch(
+        r"(?:list|show|noem|toon|laat zien)\s+(?:all\s+)?(?:the\s+)?(?:app\s+)?updates?"
+        r"|(?:welke\s+)?apps?\s+(?:moeten|kunnen)\s+updaten\s*(?:noem|welke)?",
+        stap,
+    ):
+        return "apps updates list"
+
+    if re.fullmatch(
+        r"(?:check|scan|zoek|bekijk)\s+(?:for\s+)?(?:app\s+)?updates?"
+        r"|(?:zijn er|are there)\s+(?:app\s+)?updates?"
+        r"|app\s*updates?",
+        stap,
+    ):
+        return "apps updates"
+
+    verwijder_app_match = re.match(
+        r"^(?:verwijder|deinstalleer|de-installeer|uninstall|remove)\s+(?:de\s+|het\s+|the\s+)?(?:app|programma|application|program)?\s*(.+)$",
+        stap,
+    )
+    if verwijder_app_match:
+        app_naam = schoon_computerdoel(verwijder_app_match.group(1))
+        if app_naam:
+            return f"apps uninstall::{app_naam}"
+
+    if re.fullmatch(
         r"(?:start|run|begin|launch|starten|draai|voer uit)?\s*(?:een\s+)?(?:system|windows|computer|systeem)?\s*(?:scan|diagnostics?|diagnose|integrity check|integriteitscontrole|repair scan|reparatiescan|bestandsscan|sfc scan)",
         stap,
     ):
@@ -6310,6 +6573,12 @@ def voer_bevestigde_actie_uit(actie):
 
     if actie.startswith("rewrite file::"):
         return voer_herschrijf_bestand_uit(actie)
+
+    if actie.startswith("apps uninstall::"):
+        return voer_app_verwijderen_uit(actie.split("::", 1)[1])
+
+    if actie == "apps updates apply":
+        return voer_app_updates_uit()
 
     return tekst_voor_taal(
         "There is no pending action to confirm.",
@@ -7612,6 +7881,123 @@ def voer_bluetooth_actie_uit(modus):
     )
 
 
+MEDIA_VK_PLAY_PAUSE = 0xB3
+MEDIA_VK_STOP = 0xB2
+MUZIEK_ALIASSEN = {"muziek", "music", "liedje", "liedjes", "songs", "song", "nummer", "nummers"}
+
+APP_PROCES_NAAM_OVERRIDES = {
+    "chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "discord": "Discord.exe",
+    "whatsapp": "WhatsApp.exe",
+    "steam": "steam.exe",
+    "spotify": "Spotify.exe",
+    "notepad": "notepad.exe",
+    "calculator": "CalculatorApp.exe",
+    "paint": "mspaint.exe",
+    "command prompt": "cmd.exe",
+    "powershell": "powershell.exe",
+    "file explorer": "explorer.exe",
+    "task manager": "Taskmgr.exe",
+    "control panel": "control.exe",
+    "snipping tool": "SnippingTool.exe",
+}
+
+
+def stuur_media_toets(vk_code):
+    KEYEVENTF_KEYUP = 0x0002
+    ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+    ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_KEYUP, 0)
+
+
+def voer_muziek_actie_uit(state):
+    try:
+        if state == "off":
+            stuur_media_toets(MEDIA_VK_STOP)
+            return tekst_voor_taal("Music stopped", "Muziek gestopt")
+        stuur_media_toets(MEDIA_VK_PLAY_PAUSE)
+        return tekst_voor_taal("Music playing", "Muziek aangezet")
+    except Exception as e:
+        return tekst_voor_taal(f"Error controlling music: {e}", f"Fout bij bedienen van muziek: {e}")
+
+
+def bepaal_proces_naam_voor_app(app_naam):
+    schoon = schoon_computerdoel(app_naam)
+    if not schoon:
+        return ""
+
+    sleutel = vind_alias_sleutel(schoon, SYSTEM_APP_TARGETS) or vind_alias_sleutel_fuzzy(schoon, SYSTEM_APP_TARGETS, minimum_score=0.76)
+    if sleutel in APP_PROCES_NAAM_OVERRIDES:
+        return APP_PROCES_NAAM_OVERRIDES[sleutel]
+    if sleutel and sleutel in SYSTEM_APP_TARGETS:
+        command = SYSTEM_APP_TARGETS[sleutel].get("command") or []
+        laatste = str(command[-1] if command else sleutel).strip()
+        if laatste:
+            return laatste if laatste.lower().endswith(".exe") else f"{laatste}.exe"
+
+    gescande_app = vind_gescande_app(schoon, minimum_score=0.66)
+    if gescande_app:
+        pad = Path(str(gescande_app.get("target", "")))
+        if pad.suffix.lower() == ".exe":
+            return pad.name
+
+    return ""
+
+
+def sluit_app_proces(app_naam):
+    proces_naam = bepaal_proces_naam_voor_app(app_naam)
+    if proces_naam:
+        resultaat = subprocess.run(
+            ["taskkill", "/IM", proces_naam, "/F", "/T"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        if resultaat.returncode == 0:
+            return True, proces_naam
+
+    if activeer_venster_op_zoekterm(app_naam):
+        venster = haal_actief_venster()
+        try:
+            if venster:
+                venster.close()
+                return True, app_naam
+        except Exception:
+            pass
+
+    return False, proces_naam
+
+
+def voer_app_aan_uit_uit(app_naam, state):
+    schoon = schoon_computerdoel(app_naam)
+    if not schoon:
+        return tekst_voor_taal(
+            "Tell me which app to turn on or off.",
+            "Vertel welke app ik aan of uit moet zetten."
+        )
+
+    if schoon in MUZIEK_ALIASSEN:
+        return voer_muziek_actie_uit(state)
+
+    if state == "off":
+        gelukt, _proces_naam = sluit_app_proces(schoon)
+        if gelukt:
+            return tekst_voor_taal(f"{schoon.title()} turned off", f"{schoon.title()} uitgezet")
+        return tekst_voor_taal(
+            f"Could not find a running app matching '{schoon}' to turn off.",
+            f"Ik kon geen actieve app vinden die overeenkomt met '{schoon}' om uit te zetten."
+        )
+
+    gelukt, _sleutel, match_naam = focus_of_open_app_voor_actie(schoon)
+    if gelukt:
+        return tekst_voor_taal(f"{match_naam} turned on", f"{match_naam} aangezet")
+    return tekst_voor_taal(
+        f"Could not find or start an app matching '{schoon}'.",
+        f"Ik kon geen app vinden of starten die overeenkomt met '{schoon}'."
+    )
+
+
 def begrens_percentage(waarde):
     return max(0, min(100, int(waarde)))
 
@@ -8226,6 +8612,16 @@ def maak_automation_actie(originele_stap, stap):
         richting = {"aan": "on", "uit": "off", None: "toggle"}.get(ruwe_richting, ruwe_richting)
         return f"bluetooth {richting}"
 
+    app_aan_uit_match = re.match(
+        r"^(?:doe|zet|schakel|turn on|turn off|turn|switch)\s+(?P<app>.+?)\s+(?:(?P<uit>uit|off)|(?P<aan>aan|on))$",
+        stap,
+    )
+    if app_aan_uit_match:
+        app_naam = schoon_computerdoel(app_aan_uit_match.group("app"))
+        if app_naam and app_naam not in {"wifi", "wi-fi", "bluetooth", "volume", "geluid", "helderheid", "brightness"}:
+            richting = "off" if app_aan_uit_match.group("uit") else "on"
+            return f"app control::{app_naam}||{richting}"
+
     return ""
 
 
@@ -8437,7 +8833,7 @@ def mapnaam_uit_actie(actie):
 
 def actie_prioriteit(stap):
     stap = stap.lower()
-    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "apps scan"}:
+    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "apps scan", "apps updates", "apps updates list", "apps updates apply"}:
         return 0
     if stap.startswith(("timer ", "reminder ", "task ", "agenda show")):
         return 1
@@ -8447,9 +8843,9 @@ def actie_prioriteit(stap):
         return 2
     if stap.startswith("calculate::"):
         return 2
-    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "apps scan", "battery status", "wifi quality", "disk space", "ip address", "current time")):
+    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "apps scan", "apps updates", "apps updates list", "apps updates apply", "apps uninstall::", "battery status", "wifi quality", "disk space", "ip address", "current time")):
         return 2
-    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::")):
+    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::", "app control::")):
         return 3
     if stap.startswith("create folder"):
         return 4
@@ -8600,6 +8996,18 @@ def voer_enkele_actie_uit(actie):
             f"Veiligheidscontrole: zeg bevestig om {doel_pad} te verwijderen."
         )
 
+    if actie.startswith("apps uninstall::"):
+        app_naam = actie.split("::", 1)[1]
+        match = vind_app_update_of_scan_match(app_naam)
+        naam_voor_weergave = match["name"] if match else schoon_computerdoel(app_naam)
+        if not naam_voor_weergave:
+            return tekst_voor_taal("Tell me which app to remove.", "Vertel welke app ik moet verwijderen.")
+        GESPREK_CONTEXT["wacht_op_bevestiging"] = f"apps uninstall::{app_naam}"
+        return tekst_voor_taal(
+            f"Safety check: say confirm to uninstall {naam_voor_weergave}.",
+            f"Veiligheidscontrole: zeg bevestig om {naam_voor_weergave} te verwijderen."
+        )
+
     if actie.startswith("overwrite file::"):
         payload = actie.split("::", 1)[1]
         doel_tekst = payload.split("||", 1)[0] if "||" in payload else payload
@@ -8678,7 +9086,7 @@ def voer_enkele_actie_uit(actie):
     if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "current time"}:
         return voer_systeeminfo_uit(actie)
 
-    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::")):
+    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "app control::")):
         blokkade = geavanceerde_besturing_geblokkeerd(actie)
         if blokkade:
             return blokkade
@@ -8989,6 +9397,14 @@ def voer_enkele_actie_uit(actie):
         except Exception as e:
             return tekst_voor_taal(f"Error changing Bluetooth: {e}", f"Fout bij aanpassen van bluetooth: {e}")
 
+    if actie.startswith("app control::"):
+        payload = actie.split("::", 1)[1]
+        app_naam, _sep, state = payload.rpartition("||")
+        try:
+            return voer_app_aan_uit_uit(app_naam, state)
+        except Exception as e:
+            return tekst_voor_taal(f"Error controlling app: {e}", f"Fout bij bedienen van app: {e}")
+
     if actie.startswith("open browser url::"):
         browser_sleutel, url = split_pad_payload(actie)
         try:
@@ -9141,6 +9557,17 @@ def voer_enkele_actie_uit(actie):
 
     if actie == "apps scan":
         return beschrijf_gescande_apps(force=True)
+
+    if actie == "apps updates list":
+        return beschrijf_app_updates_lijst(force=True)
+
+    if actie == "apps updates":
+        if not winget_beschikbaar():
+            return beschrijf_app_updates(force=True)
+        updates = scan_app_updates_winget(force=True)
+        if updates:
+            GESPREK_CONTEXT["wacht_op_bevestiging"] = "apps updates apply"
+        return beschrijf_app_updates(force=False)
 
     if actie.startswith("open app raw::"):
         app_doel = re.sub(r"^open app raw::", "", actie).strip()
@@ -9620,6 +10047,19 @@ def voer_opstart_app_scan_uit(force=True):
         print(f'Echo startup app scan complete: {len(gevonden_apps)} launchable apps indexed (no apps opened).')
     except Exception as scan_error:
         print(f'Echo startup app scan unavailable: {scan_error}')
+
+    try:
+        if winget_beschikbaar():
+            updates = scan_app_updates_winget(force=force)
+            if updates:
+                namen = ", ".join(item["name"] for item in updates[:10])
+                print(f'Echo startup update scan: {len(updates)} app(s) can be updated: {namen}. Zeg "app updates" om details te horen of "verwijder <app>" om er een te verwijderen.')
+            else:
+                print('Echo startup update scan: all apps are up to date.')
+        else:
+            print('Echo startup update scan skipped: winget is not available.')
+    except Exception as update_error:
+        print(f'Echo startup update scan unavailable: {update_error}')
 
 if __name__ == '__main__':
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
