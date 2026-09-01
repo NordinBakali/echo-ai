@@ -29,5 +29,8 @@
   "online_ai_modus": true,
   "online_ai_model": "gemini-1.5-flash",
   "ai_agent_primair": true,
-  "premium_tts_voice_id": ""
+  "premium_tts_voice_id": "",
+  "security_scan_daily_enabled": false,
+  "security_scan_daily_time": "03:00",
+  "discord_dm_vriend_aliases": {}
 }

@@ -1,3 +1,4 @@
+// DOM-referenties voor HUD, commandokanaal en statuspanelen.
 const body = document.body;
 
 const modeToggle = document.getElementById('modeToggle');
@@ -14,6 +15,10 @@ const wakeGateStatus = document.getElementById('wakeGateStatus');
 const commandStatus = document.getElementById('commandStatus');
 const threatLevelValue = document.getElementById('threatLevelValue');
 const threatLevelContext = document.getElementById('threatLevelContext');
+const dailySecurityKicker = document.getElementById('dailySecurityKicker');
+const dailySecurityState = document.getElementById('dailySecurityState');
+const dailySecuritySchedule = document.getElementById('dailySecuritySchedule');
+const dailySecurityResult = document.getElementById('dailySecurityResult');
 const commandForm = document.getElementById('commandForm');
 const commandInput = document.getElementById('commandInput');
 const sendBtn = document.getElementById('sendBtn');
@@ -32,6 +37,7 @@ const bootLog = document.getElementById('bootLog');
 const bootMeta = document.getElementById('bootMeta');
 const bootProgressFill = document.getElementById('bootProgressFill');
 
+// Centrale client-state voor spraak, dashboard en runtime watchers.
 const appState = {
     bootComplete: false,
     dashboardActive: true,
@@ -59,12 +65,23 @@ const appState = {
     voiceTranscriptTimer: null,
     lastVoiceTranscriptNormalized: '',
     lastVoiceTranscriptAt: 0,
+    lastAssistantMessageNormalized: '',
+    lastAssistantMessageAt: 0,
     activeAudio: null,
     activeAudioUrl: '',
     threatLevel: 'nominal',
     threatResetTimer: null,
     runtimeBuildId: '',
     runtimeVersionPollTimer: null,
+    dashboardPollTimer: null,
+    apiBaseUrl: '',
+    apiDiscoveryInFlight: null,
+    dailySecuritySnapshot: {
+        enabled: false,
+        scheduled_time: '03:00',
+        monitor_running: false,
+        supported: true,
+    },
     pendingCommands: {
         confirm: 'bevestig wachtende actie',
         cancel: 'annuleer wachtende actie',
@@ -72,8 +89,14 @@ const appState = {
 };
 
 const RUNTIME_VERSION_POLL_MS = 2200;
+const DASHBOARD_POLL_MS = 12000;
 const VOICE_DUPLICATE_WINDOW_MS = 2800;
+const ASSISTANT_DUPLICATE_WINDOW_MS = 7000;
+const API_DISCOVERY_TIMEOUT_MS = 420;
+const ECHO_RUNTIME_PORT_START = 5000;
+const ECHO_RUNTIME_PORT_SPAN = 50;
 
+// Threat-profielen sturen visuele state en contextlabels in de UI.
 const THREAT_LEVELS = {
     nominal: {
         label: 'NOMINAL',
@@ -97,6 +120,7 @@ const THREAT_LEVELS = {
     },
 };
 
+// Tweetalige UI-strings met variabele placeholders.
 const UI_STRINGS = {
     nl: {
         mode_voice: 'STEMMODUS',
@@ -125,8 +149,10 @@ const UI_STRINGS = {
         command_completed_ms: 'Voltooid in {duration} ms',
         command_failed: 'Opdracht mislukt',
         command_connection_error: 'Verbindingsfout',
+        command_duplicate_ignored: 'Dubbel antwoord genegeerd',
         wake_acknowledged: 'Wake bevestigd. Wacht op opdracht...',
         wake_confirmed_executing: 'Wake bevestigd. Spraakopdracht wordt uitgevoerd...',
+        wake_word_required: 'Zeg eerst "{wakeWord}" en daarna je opdracht.',
         wake_locked_first: 'Wake-gate vergrendeld. Zeg eerst "{wakeWord}".',
         wake_detected_inline: 'Wake gedetecteerd. Inline-opdracht wordt uitgevoerd...',
         wake_detected_waiting: 'Wake gedetecteerd. Wacht op spraakopdracht...',
@@ -165,6 +191,20 @@ const UI_STRINGS = {
         threat_context_transport_failure: 'VERBINDINGSFOUT',
         invalid_server_response: 'Ongeldig antwoord van server',
         request_failed: 'Verzoek mislukt',
+        request_failed_runtime_hint: 'Geen verbinding met Echo-server. Start Echo opnieuw via Start-Echo-App.bat en probeer opnieuw.',
+        daily_security_kicker: 'Dagelijkse Beveiligingsscan',
+        daily_security_state_unsupported: 'Dagelijkse scan niet ondersteund op dit systeem',
+        daily_security_state_disabled: 'Dagelijkse scan: UIT',
+        daily_security_state_enabled: 'Dagelijkse scan: AAN ({monitor})',
+        daily_security_monitor_online: 'monitor actief',
+        daily_security_monitor_offline: 'monitor uit',
+        daily_security_schedule_disabled: 'Schema: uitgeschakeld',
+        daily_security_schedule_basic: 'Schema: dagelijks om {time}',
+        daily_security_schedule_with_next: 'Schema: dagelijks om {time} | Volgende: {next}',
+        daily_security_last_never: 'Laatste: nog niet gestart',
+        daily_security_last_success: 'Laatste: gestart op {when}',
+        daily_security_last_skipped: 'Laatste: overgeslagen op {when}',
+        daily_security_result: 'Resultaat: {result}',
     },
     en: {
         mode_voice: 'VOICE MODE',
@@ -193,8 +233,10 @@ const UI_STRINGS = {
         command_completed_ms: 'Completed in {duration} ms',
         command_failed: 'Command failed',
         command_connection_error: 'Connection error',
+        command_duplicate_ignored: 'Duplicate reply ignored',
         wake_acknowledged: 'Wake acknowledged. Awaiting command...',
         wake_confirmed_executing: 'Wake confirmed. Executing voice command...',
+        wake_word_required: 'Say "{wakeWord}" first, then your command.',
         wake_locked_first: 'Wake gate locked. Say "{wakeWord}" first.',
         wake_detected_inline: 'Wake detected. Executing inline command...',
         wake_detected_waiting: 'Wake detected. Awaiting voice command...',
@@ -233,9 +275,24 @@ const UI_STRINGS = {
         threat_context_transport_failure: 'TRANSPORT FAILURE',
         invalid_server_response: 'Invalid response from server',
         request_failed: 'Request failed',
+        request_failed_runtime_hint: 'Could not reach the Echo server. Restart Echo with Start-Echo-App.bat and try again.',
+        daily_security_kicker: 'Daily Security Scan',
+        daily_security_state_unsupported: 'Daily scan is not supported on this system',
+        daily_security_state_disabled: 'Daily scan: OFF',
+        daily_security_state_enabled: 'Daily scan: ON ({monitor})',
+        daily_security_monitor_online: 'monitor active',
+        daily_security_monitor_offline: 'monitor idle',
+        daily_security_schedule_disabled: 'Schedule: disabled',
+        daily_security_schedule_basic: 'Schedule: every day at {time}',
+        daily_security_schedule_with_next: 'Schedule: every day at {time} | Next: {next}',
+        daily_security_last_never: 'Last: not started yet',
+        daily_security_last_success: 'Last: started at {when}',
+        daily_security_last_skipped: 'Last: skipped at {when}',
+        daily_security_result: 'Result: {result}',
     },
 };
 
+// Keywords om commando's grof te classificeren voor threat-indicator feedback.
 const THREAT_KEYWORDS = {
     critical: [
         'shutdown',
@@ -406,6 +463,7 @@ function actieveUiTaalCode() {
 }
 
 function uiTekst(sleutel, variabelen = {}) {
+    // Lookup met fallback + eenvoudige placeholdervervanging.
     const taalCode = actieveUiTaalCode();
     const woordenboek = UI_STRINGS[taalCode] || UI_STRINGS.en;
     let tekst = Object.prototype.hasOwnProperty.call(woordenboek, sleutel)
@@ -419,7 +477,102 @@ function uiTekst(sleutel, variabelen = {}) {
     return tekst;
 }
 
+function parseerBoolWaarde(waarde, standaard = false) {
+    // Accepteer zowel booleans als stringvarianten uit API/settings payloads.
+    if (typeof waarde === 'boolean') {
+        return waarde;
+    }
+
+    const tekst = String(waarde || '').trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'ja', 'on'].includes(tekst)) {
+        return true;
+    }
+    if (['0', 'false', 'no', 'n', 'nee', 'off'].includes(tekst)) {
+        return false;
+    }
+    return Boolean(standaard);
+}
+
+function formatteerLocaleDatumTijd(unixSeconden) {
+    // Toon planner-timestamps in de actieve UI-taal.
+    const waarde = Number(unixSeconden || 0);
+    if (!Number.isFinite(waarde) || waarde <= 0) {
+        return '';
+    }
+
+    try {
+        const taal = isNederlandsActief() ? 'nl-NL' : 'en-US';
+        return new Date(waarde * 1000).toLocaleString(taal, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    } catch (_error) {
+        return '';
+    }
+}
+
+function renderDailySecurityPanel(payload) {
+    // Render is tolerant: ontbrekende velden vallen terug op snapshot/defaults.
+    if (!dailySecurityState || !dailySecuritySchedule || !dailySecurityResult) {
+        return;
+    }
+
+    const data = payload && typeof payload === 'object' ? payload : {};
+    // Merge zodat laatste bekende status zichtbaar blijft bij tijdelijke fetch-fouten.
+    appState.dailySecuritySnapshot = {
+        ...appState.dailySecuritySnapshot,
+        ...data,
+    };
+
+    const supported = appState.dailySecuritySnapshot.supported !== false;
+    const enabled = parseerBoolWaarde(appState.dailySecuritySnapshot.enabled, false);
+    const monitorRunning = parseerBoolWaarde(appState.dailySecuritySnapshot.monitor_running, false);
+    const geplandeTijd = String(appState.dailySecuritySnapshot.scheduled_time || '03:00').trim() || '03:00';
+    const volgendeLabel = String(appState.dailySecuritySnapshot.next_run_label || '').trim()
+        || formatteerLocaleDatumTijd(appState.dailySecuritySnapshot.next_run_at);
+
+    let statusRegel = uiTekst('daily_security_state_disabled');
+    if (!supported) {
+        statusRegel = uiTekst('daily_security_state_unsupported');
+    } else if (enabled) {
+        statusRegel = uiTekst('daily_security_state_enabled', {
+            monitor: monitorRunning ? uiTekst('daily_security_monitor_online') : uiTekst('daily_security_monitor_offline'),
+        });
+    }
+    dailySecurityState.textContent = statusRegel;
+
+    let schemaRegel = uiTekst('daily_security_schedule_disabled');
+    if (supported && enabled) {
+        schemaRegel = volgendeLabel
+            ? uiTekst('daily_security_schedule_with_next', { time: geplandeTijd, next: volgendeLabel })
+            : uiTekst('daily_security_schedule_basic', { time: geplandeTijd });
+    }
+    dailySecuritySchedule.textContent = schemaRegel;
+
+    const laatsteTriggerTijd = Number(appState.dailySecuritySnapshot.last_triggered_at || 0);
+    const laatsteResultaat = String(appState.dailySecuritySnapshot.last_trigger_result || '').trim();
+    const laatsteTriggerSucces = appState.dailySecuritySnapshot.last_trigger_success === true;
+    const laatsteWhenLabel = formatteerLocaleDatumTijd(laatsteTriggerTijd);
+
+    let resultaatRegel = uiTekst('daily_security_last_never');
+    if (laatsteTriggerTijd > 0) {
+        resultaatRegel = uiTekst(
+            laatsteTriggerSucces ? 'daily_security_last_success' : 'daily_security_last_skipped',
+            { when: laatsteWhenLabel || '--' }
+        );
+    }
+
+    if (laatsteResultaat) {
+        resultaatRegel += ' | ' + uiTekst('daily_security_result', { result: laatsteResultaat });
+    }
+    dailySecurityResult.textContent = resultaatRegel;
+}
+
 function normalizeAppLanguage(taalCode) {
+    // Normaliseer varianten naar stabiele browsertaalcodes.
     const raw = String(taalCode || '').trim().toLowerCase();
     if (!raw) {
         return 'nl-NL';
@@ -475,6 +628,7 @@ function buildPremiumTtsCandidates() {
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+    // Uniform fetch-patroon met abort-timeout voor responsieve UI.
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
         controller.abort();
@@ -490,9 +644,219 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
     }
 }
 
+function isHttpPaginaContext() {
+    const protocol = String(window.location && window.location.protocol ? window.location.protocol : '').toLowerCase();
+    return protocol === 'http:' || protocol === 'https:';
+}
+
+function normaliseerApiBaseUrl(baseUrl) {
+    return String(baseUrl || '').trim().replace(/\/+$/, '');
+}
+
+function combineerApiUrl(path, baseUrl = '') {
+    const pad = String(path || '').startsWith('/') ? String(path || '') : '/' + String(path || '');
+    const base = normaliseerApiBaseUrl(baseUrl);
+    return base ? base + pad : pad;
+}
+
+function isZelfdeOriginUrl(url) {
+    if (!isHttpPaginaContext()) {
+        return false;
+    }
+
+    try {
+        return new URL(url, window.location.href).origin === window.location.origin;
+    } catch (_error) {
+        return false;
+    }
+}
+
+function verzameldeRuntimePoorten() {
+    const poorten = new Set();
+    const huidigePoort = Number.parseInt(String(window.location && window.location.port ? window.location.port : ''), 10);
+    if (Number.isInteger(huidigePoort) && huidigePoort > 0 && huidigePoort <= 65535) {
+        poorten.add(huidigePoort);
+    }
+
+    for (let poort = ECHO_RUNTIME_PORT_START; poort <= ECHO_RUNTIME_PORT_START + ECHO_RUNTIME_PORT_SPAN; poort += 1) {
+        poorten.add(poort);
+    }
+
+    return Array.from(poorten.values());
+}
+
+function verzamelApiBaseKandidaten() {
+    const hosts = [];
+    const locatieHost = String(window.location && window.location.hostname ? window.location.hostname : '').trim();
+    if (locatieHost && locatieHost !== '0.0.0.0') {
+        hosts.push(locatieHost);
+    }
+    hosts.push('127.0.0.1', 'localhost');
+
+    const uniekeHosts = Array.from(new Set(hosts));
+    const poorten = verzameldeRuntimePoorten();
+    const kandidaten = [];
+    for (const host of uniekeHosts) {
+        for (const poort of poorten) {
+            kandidaten.push(`http://${host}:${poort}`);
+        }
+    }
+
+    const schoon = kandidaten.map((waarde) => normaliseerApiBaseUrl(waarde)).filter(Boolean);
+    return Array.from(new Set(schoon));
+}
+
+async function eersteGeslaagdeWaarde(promises) {
+    if (!promises.length) {
+        return '';
+    }
+
+    if (typeof Promise.any === 'function') {
+        try {
+            return await Promise.any(promises);
+        } catch (_error) {
+            return '';
+        }
+    }
+
+    const resultaten = await Promise.allSettled(promises);
+    for (const resultaat of resultaten) {
+        if (resultaat.status === 'fulfilled' && resultaat.value) {
+            return resultaat.value;
+        }
+    }
+    return '';
+}
+
+async function probeApiRuntimeBase(baseUrl) {
+    const runtimeUrl = combineerApiUrl('/api/runtime-version', baseUrl);
+    const response = await fetchWithTimeout(runtimeUrl, {
+        method: 'GET',
+        cache: 'no-store',
+        mode: 'cors',
+    }, API_DISCOVERY_TIMEOUT_MS);
+
+    if (!response.ok) {
+        throw new Error('runtime endpoint unavailable');
+    }
+
+    const payload = await response.json().catch(() => null);
+    if (!payload || typeof payload !== 'object') {
+        throw new Error('runtime payload invalid');
+    }
+
+    if (!payload.build_id && !payload.started_at) {
+        throw new Error('runtime payload missing markers');
+    }
+
+    return normaliseerApiBaseUrl(baseUrl);
+}
+
+async function ontdekApiBaseUrl(force = false) {
+    if (!force && appState.apiBaseUrl) {
+        return appState.apiBaseUrl;
+    }
+
+    if (appState.apiDiscoveryInFlight) {
+        return appState.apiDiscoveryInFlight;
+    }
+
+    const discoveryTask = (async () => {
+        if (isHttpPaginaContext()) {
+            const originBase = normaliseerApiBaseUrl(window.location.origin);
+            try {
+                const originResponse = await fetchWithTimeout('/api/runtime-version', {
+                    method: 'GET',
+                    cache: 'no-store',
+                }, API_DISCOVERY_TIMEOUT_MS);
+                if (originResponse.ok) {
+                    appState.apiBaseUrl = originBase;
+                    return originBase;
+                }
+            } catch (_error) {
+                // Bij runtime-herstart proberen we alternatieve lokale poorten.
+            }
+        }
+
+        const kandidaten = verzamelApiBaseKandidaten();
+        const probes = kandidaten.map((baseUrl) => probeApiRuntimeBase(baseUrl));
+        const gevonden = await eersteGeslaagdeWaarde(probes);
+        if (gevonden) {
+            appState.apiBaseUrl = gevonden;
+        }
+        return gevonden;
+    })();
+
+    appState.apiDiscoveryInFlight = discoveryTask;
+    try {
+        return await discoveryTask;
+    } finally {
+        appState.apiDiscoveryInFlight = null;
+    }
+}
+
+function bouwFetchOptiesVoorApi(opties = {}, crossOrigin = false) {
+    const fetchOpties = {
+        ...opties,
+    };
+    if (crossOrigin) {
+        fetchOpties.mode = 'cors';
+    }
+    return fetchOpties;
+}
+
+async function fetchEchoApi(path, options = {}, timeoutMs = 5000) {
+    const pad = String(path || '').startsWith('/') ? String(path || '') : '/' + String(path || '');
+    let laatsteFout = null;
+
+    const probeer = async (url, gekoppeldeBase = '') => {
+        if (!url) {
+            return null;
+        }
+        try {
+            const crossOrigin = !isZelfdeOriginUrl(url);
+            const response = await fetchWithTimeout(url, bouwFetchOptiesVoorApi(options, crossOrigin), timeoutMs);
+            if (gekoppeldeBase) {
+                appState.apiBaseUrl = normaliseerApiBaseUrl(gekoppeldeBase);
+            } else if (isHttpPaginaContext()) {
+                appState.apiBaseUrl = normaliseerApiBaseUrl(window.location.origin);
+            }
+            return response;
+        } catch (error) {
+            laatsteFout = error;
+            return null;
+        }
+    };
+
+    if (isHttpPaginaContext()) {
+        const directResponse = await probeer(pad, window.location.origin);
+        if (directResponse) {
+            return directResponse;
+        }
+    }
+
+    const cachedBase = normaliseerApiBaseUrl(appState.apiBaseUrl);
+    if (cachedBase) {
+        const cachedResponse = await probeer(combineerApiUrl(pad, cachedBase), cachedBase);
+        if (cachedResponse) {
+            return cachedResponse;
+        }
+    }
+
+    const discoveredBase = await ontdekApiBaseUrl(true);
+    if (discoveredBase) {
+        const discoveredResponse = await probeer(combineerApiUrl(pad, discoveredBase), discoveredBase);
+        if (discoveredResponse) {
+            return discoveredResponse;
+        }
+    }
+
+    throw laatsteFout || new Error(uiTekst('request_failed'));
+}
+
 async function fetchRuntimeVersion() {
     try {
-        const response = await fetchWithTimeout('/api/runtime-version', {
+        const response = await fetchEchoApi('/api/runtime-version', {
             method: 'GET',
             cache: 'no-store',
         }, 1400);
@@ -534,6 +898,7 @@ async function checkRuntimeVersionUpdate() {
 }
 
 function stopRuntimeVersionWatcher() {
+    // Stop polling bij tab-close of mode-switch.
     if (!appState.runtimeVersionPollTimer) {
         return;
     }
@@ -542,7 +907,59 @@ function stopRuntimeVersionWatcher() {
     appState.runtimeVersionPollTimer = null;
 }
 
+function stopDashboardWatcher() {
+    // Stop dashboardpolling om dubbele interval-timers te voorkomen.
+    if (!appState.dashboardPollTimer) {
+        return;
+    }
+
+    window.clearInterval(appState.dashboardPollTimer);
+    appState.dashboardPollTimer = null;
+}
+
+async function refreshDashboardTelemetry() {
+    // Haal dashboard-data op voor live status zonder pagina-refresh.
+    try {
+        const response = await fetchEchoApi('/api/dashboard', {
+            method: 'GET',
+            cache: 'no-store',
+        }, 1800);
+
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json().catch(() => null);
+        if (!payload || typeof payload !== 'object') {
+            return;
+        }
+
+        renderDailySecurityPanel(payload.security_daily_scan);
+        if (payload.pending_confirmation) {
+            renderPendingConfirmation(payload.pending_confirmation);
+        }
+    } catch (_error) {
+        // Keep current panel values on transient network failures.
+    }
+}
+
+function startDashboardWatcher() {
+    // Poll alleen in browsercontexten waar HTTP API-calls beschikbaar zijn.
+    stopDashboardWatcher();
+
+    const protocol = String(window.location && window.location.protocol ? window.location.protocol : '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') {
+        return;
+    }
+
+    void refreshDashboardTelemetry();
+    appState.dashboardPollTimer = window.setInterval(() => {
+        void refreshDashboardTelemetry();
+    }, DASHBOARD_POLL_MS);
+}
+
 function startRuntimeVersionWatcher() {
+    // Versiebewaker forceert reload als backend-runtime wisselt.
     stopRuntimeVersionWatcher();
 
     const protocol = String(window.location && window.location.protocol ? window.location.protocol : '').toLowerCase();
@@ -1266,9 +1683,15 @@ function updateLocalizedUiLabels() {
         commandInput.placeholder = uiTekst('command_input_placeholder', { name: appState.aiName });
     }
 
+    if (dailySecurityKicker) {
+        dailySecurityKicker.textContent = uiTekst('daily_security_kicker');
+    }
+
     if (!pendingConfirm || pendingConfirm.classList.contains('is-hidden')) {
         resetPendingCommandsDefaults();
     }
+
+    renderDailySecurityPanel(appState.dailySecuritySnapshot);
 
     setMode(appState.dashboardActive);
     updateWakeGateStatus();
@@ -1278,7 +1701,7 @@ function updateLocalizedUiLabels() {
 
 async function persistLanguageSetting() {
     try {
-        await fetch('/api/instellingen', {
+        await fetchEchoApi('/api/instellingen', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1286,7 +1709,7 @@ async function persistLanguageSetting() {
             body: JSON.stringify({
                 taal: isNederlandsActief() ? 'Nederlands' : 'English',
             }),
-        });
+        }, 4500);
     } catch (_error) {
         // Keep local language state even when settings save fails.
     }
@@ -1353,6 +1776,21 @@ function setCommandStatus(text) {
     if (commandStatus) {
         commandStatus.textContent = text;
     }
+}
+
+function isRecentDuplicateAssistantMessage(text) {
+    const normalized = normalizeText(cleanTextForSpeech(text));
+    if (!normalized) {
+        return false;
+    }
+
+    const now = Date.now();
+    const isDuplicate = normalized === appState.lastAssistantMessageNormalized
+        && (now - appState.lastAssistantMessageAt) < ASSISTANT_DUPLICATE_WINDOW_MS;
+
+    appState.lastAssistantMessageNormalized = normalized;
+    appState.lastAssistantMessageAt = now;
+    return isDuplicate;
 }
 
 function setVoiceStatus(text) {
@@ -1561,8 +1999,11 @@ async function sendCommand(command, source = 'text') {
 
                 const isError = deviceStatus === 'error';
                 const needsConfirmation = deviceStatus === 'confirmation_required';
+                const isDuplicateReply = isRecentDuplicateAssistantMessage(deviceMessage);
 
-                if (isError) {
+                if (isDuplicateReply) {
+                    setCommandStatus(uiTekst('command_duplicate_ignored'));
+                } else if (isError) {
                     addMessage('error', deviceMessage);
                     setCommandStatus(uiTekst('command_device_failed'));
                     setThreatState('critical', uiTekst('threat_context_device_failure'), 10000);
@@ -1582,16 +2023,18 @@ async function sendCommand(command, source = 'text') {
                     ? 'confirmation'
                     : (isError ? 'warning' : profileForSpeechMessage(deviceMessage, profileForThreatLevel(threatProfile.level)));
 
-                const spoken = await speakText(deviceMessage, { profile: speechProfile });
-                if (!spoken) {
-                    pulseSpeaking(isError ? 1500 : 1200);
+                if (!isDuplicateReply) {
+                    const spoken = await speakText(deviceMessage, { profile: speechProfile });
+                    if (!spoken) {
+                        pulseSpeaking(isError ? 1500 : 1200);
+                    }
                 }
 
                 return;
             }
         }
 
-        const response = await fetch('/api/commando', {
+        const response = await fetchEchoApi('/api/commando', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1599,8 +2042,9 @@ async function sendCommand(command, source = 'text') {
             body: JSON.stringify({
                 commando: commandText,
                 server_speech: false,
+                source,
             }),
-        });
+        }, 12000);
 
         const data = await response.json().catch(() => ({
             status: 'error',
@@ -1612,6 +2056,12 @@ async function sendCommand(command, source = 'text') {
             ? tekstVoorTaal('Done.', 'Klaar.')
             : tekstVoorTaal('Command failed.', 'Opdracht mislukt.'));
         const hasPendingConfirmation = Boolean(data.pending_confirmation && data.pending_confirmation.pending);
+        if (data.duplicate_ignored) {
+            setCommandStatus(uiTekst('command_duplicate_ignored'));
+            renderPendingConfirmation(data.pending_confirmation);
+            return;
+        }
+
         const pendingPrompt = hasPendingConfirmation
             ? String(
                 data.pending_confirmation.prompt
@@ -1620,12 +2070,13 @@ async function sendCommand(command, source = 'text') {
                 || uiTekst('pending_waiting_confirmation')
             ).trim()
             : '';
+        const spokenText = pendingPrompt || message;
+        const isDuplicateReply = isRecentDuplicateAssistantMessage(spokenText);
 
-        if (ok) {
+        if (ok && !isDuplicateReply) {
             addMessage('ai', message);
             setCommandStatus(uiTekst('command_completed_ms', { duration: String(data.duration_ms || 0) }));
 
-            const spokenText = pendingPrompt || message;
             const preset = pendingPrompt
                 ? 'confirmation'
                 : profileForSpeechMessage(message, profileForThreatLevel(threatProfile.level));
@@ -1634,7 +2085,9 @@ async function sendCommand(command, source = 'text') {
             if (!spoken) {
                 pulseSpeaking();
             }
-        } else {
+        } else if (ok) {
+            setCommandStatus(uiTekst('command_duplicate_ignored'));
+        } else if (!isDuplicateReply) {
             addMessage('error', message);
             setCommandStatus(uiTekst('command_failed'));
             setThreatState('elevated', uiTekst('threat_context_command_failure'), 9000);
@@ -1645,6 +2098,8 @@ async function sendCommand(command, source = 'text') {
             if (!spoken) {
                 pulseSpeaking(1500);
             }
+        } else {
+            setCommandStatus(uiTekst('command_duplicate_ignored'));
         }
 
         renderPendingConfirmation(data.pending_confirmation);
@@ -1653,7 +2108,11 @@ async function sendCommand(command, source = 'text') {
             setThreatState('elevated', uiTekst('threat_context_pending_confirmation'), 12000);
         }
     } catch (error) {
-        const message = error instanceof Error ? error.message : uiTekst('request_failed');
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const isTransportError = /failed to fetch|networkerror|load failed|fetch/i.test(rawMessage);
+        const message = isTransportError
+            ? uiTekst('request_failed_runtime_hint')
+            : (rawMessage || uiTekst('request_failed'));
         addMessage('error', message);
         setCommandStatus(uiTekst('command_connection_error'));
         setThreatState('critical', uiTekst('threat_context_transport_failure'), 10000);
@@ -1688,9 +2147,13 @@ function processVoiceTranscript(transcript) {
         commandToSend = wakeExtraction.command;
         setWakeArmed(false);
         setCommandStatus(uiTekst('wake_detected_inline'));
-    } else {
+    } else if (appState.wakeArmed) {
         setWakeArmed(false);
         setCommandStatus(uiTekst('wake_confirmed_executing'));
+    } else {
+        setCommandStatus(uiTekst('wake_word_required', { wakeWord: appState.wakeWord }));
+        setVoiceStatus(uiTekst('voice_listening_for_wake', { wakeWord: appState.wakeWord }));
+        return;
     }
 
     const normalizedCommand = normalizeText(commandToSend);
@@ -1899,7 +2362,7 @@ function clearFeed() {
 
 async function loadSettings() {
     try {
-        const response = await fetch('/api/instellingen', { cache: 'no-store' });
+        const response = await fetchEchoApi('/api/instellingen', { cache: 'no-store' }, 3000);
         if (!response.ok) {
             return;
         }
@@ -1918,6 +2381,11 @@ async function loadSettings() {
         }
 
         await setAppLanguage(bepaalSpraakTaalUitInstellingen(settings));
+
+        renderDailySecurityPanel({
+            enabled: parseerBoolWaarde(settings.security_scan_daily_enabled, false),
+            scheduled_time: String(settings.security_scan_daily_time || '03:00').trim() || '03:00',
+        });
 
         document.title = appState.aiName;
 
@@ -2086,6 +2554,7 @@ async function init() {
     wireEvents();
     startVisualizer();
     startRuntimeVersionWatcher();
+    startDashboardWatcher();
 
     setVoiceStatus(uiTekst('boot_running'));
     setCommandStatus(uiTekst('core_initializing'));
@@ -2098,5 +2567,6 @@ window.addEventListener('load', () => {
 });
 
 window.addEventListener('beforeunload', () => {
+    stopDashboardWatcher();
     stopRuntimeVersionWatcher();
 });

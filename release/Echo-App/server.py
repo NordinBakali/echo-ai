@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import ast
 import base64
 import ctypes
+import datetime
 from difflib import SequenceMatcher
 import html
 import io
@@ -21,7 +22,7 @@ import wave
 from pathlib import Path
 import threading
 import time
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 try:
     import speech_recognition as sr
@@ -64,6 +65,18 @@ app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 app.jinja_env.auto_reload = True
+
+
+@app.after_request
+def voeg_api_cors_headers_toe(response):
+    pad = str(getattr(request, "path", "") or "")
+    if pad.startswith("/api/"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
 SETTINGS_FILE = "instellingen.json"
 ENV_FILE = Path(".env")
 MEMORY_FILE = "echo_geheugen.json"
@@ -84,6 +97,7 @@ DOCUMENT_CONTEXT_STOPWOORDEN = {
 }
 
 
+# Basis helpers voor het inladen en normaliseren van runtime-configuratie.
 def strip_omringende_quotes(waarde):
     waarde = str(waarde or "").strip()
     if len(waarde) >= 2 and waarde[0] == waarde[-1] and waarde[0] in {'"', "'"}:
@@ -121,6 +135,7 @@ def laad_env_variabelen(env_pad=ENV_FILE):
 laad_env_variabelen()
 
 # Standaard instellingen
+# Deze defaults worden gebruikt als het instellingenbestand velden mist.
 DEFAULT_SETTINGS = {
     "naam": "Echo",
     "client_naam": "",
@@ -152,13 +167,40 @@ DEFAULT_SETTINGS = {
     "computerbesturing_toestaan": False,
     "online_ai_modus": True,
     "online_ai_model": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
-    "ai_agent_primair": True
+    "ai_agent_primair": True,
+    "security_scan_daily_enabled": False,
+    "security_scan_daily_time": "03:00",
+    "discord_dm_vriend_aliases": {},
 }
 
 AUTOMATISERING_TIMEOUT_SECONDEN = 300
 APP_START_TIMESTAMP = time.time()
 APP_BUILD_ID = str(int(APP_START_TIMESTAMP * 1000))
 AUTO_OPEN_MARKER_FILE = Path(tempfile.gettempdir()) / "echo_auto_open.marker"
+DISCORD_DM_ALIAS_MAX_ITEMS = 80
+DISCORD_CALL_HOTKEY = ("ctrl", "[")
+DISCORD_VIDEO_CALL_HOTKEY = ("ctrl", "shift", "[")
+DISCORD_CALL_BUTTON_OFFSETS = {
+    "voice": [(-112, 52), (-124, 52), (-100, 52)],
+    "video": [(-76, 52), (-88, 52), (-66, 52)],
+}
+WHATSAPP_CALL_BUTTON_OFFSETS = {
+    "voice": (-118, 52),
+    "video": (-164, 52),
+}
+COMMAND_DUPLICATE_WINDOW_SECONDS = 6.0
+SPEECH_DUPLICATE_WINDOW_SECONDS = 6.0
+AUTO_AUTOMATISERING_ACTION_PREFIXEN = (
+    "whatsapp send::",
+    "whatsapp call::",
+    "discord send::",
+    "discord dm::",
+    "discord call::",
+    "app search::",
+)
+AUTO_AUTOMATISERING_ACTION_EXACT = {
+    "run macro discord-call-button",
+}
 
 
 def normaliseer_taalwaarde(taal):
@@ -210,6 +252,60 @@ def parseer_bool_waarde(waarde, standaard=False):
     return bool(standaard)
 
 
+def normaliseer_dagelijkse_security_scan_tijd(waarde):
+    # Hou het schema altijd op een voorspelbaar HH:MM-formaat.
+    tekst = str(waarde or "").strip()
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", tekst)
+    if not match:
+        return "03:00"
+
+    uur = int(match.group(1))
+    minuut = int(match.group(2))
+    if uur < 0 or uur > 23 or minuut < 0 or minuut > 59:
+        return "03:00"
+
+    return f"{uur:02d}:{minuut:02d}"
+
+
+def strip_discord_vriend_prefix(doel):
+    doel = str(doel or "").strip()
+    doel = re.sub(
+        r"^(?:friend|vriend|vriendin|buddy|maat|met\s+(?:vriend|vriendin)|naar\s+(?:vriend|vriendin))\s+",
+        "",
+        doel,
+        flags=re.IGNORECASE,
+    )
+    return doel.strip(" .")
+
+
+def normaliseer_discord_alias_sleutel(waarde):
+    tekst = strip_omringende_quotes(str(waarde or "").strip().lower())
+    tekst = re.sub(r"[^a-z0-9 @._-]", " ", tekst)
+    tekst = re.sub(r"\s+", " ", tekst).strip(" ._-")
+    if tekst.startswith("@"):
+        tekst = tekst[1:].strip(" ._-")
+    return tekst
+
+
+def normaliseer_discord_dm_aliases(waarde):
+    if not isinstance(waarde, dict):
+        return {}
+
+    aliases = {}
+    for alias_naam, discord_doel in waarde.items():
+        if len(aliases) >= DISCORD_DM_ALIAS_MAX_ITEMS:
+            break
+
+        alias_sleutel = normaliseer_discord_alias_sleutel(alias_naam)
+        doel_waarde = strip_omringende_quotes(str(discord_doel or "").strip())
+        doel_waarde = re.sub(r"\s+", " ", doel_waarde).strip(" .")
+        doel_waarde = doel_waarde.lstrip("@").strip(" .")
+        if alias_sleutel and doel_waarde:
+            aliases[alias_sleutel] = doel_waarde
+
+    return aliases
+
+
 def normaliseer_spraak_provider(provider):
     provider = str(provider or "").strip().lower()
     if provider not in {"local", "google"}:
@@ -249,6 +345,7 @@ def normaliseer_whisper_compute_type(compute_type):
     return compute_type
 
 
+# Synchroniseer en valideer alle instellingen op één centrale plek.
 def synchroniseer_taalinstellingen(configuratie):
     configuratie["taal"] = normaliseer_taalwaarde(configuratie.get("taal", DEFAULT_SETTINGS["taal"]))
     configuratie["spraak_taal"] = standaard_spraak_taal(configuratie["taal"])
@@ -288,6 +385,17 @@ def synchroniseer_taalinstellingen(configuratie):
         minimum=-20.0,
         maximum=20.0,
     )
+    # Dagelijkse scan-instellingen normaliseren voordat ze naar API/UI gaan.
+    configuratie["security_scan_daily_enabled"] = parseer_bool_waarde(
+        configuratie.get("security_scan_daily_enabled", DEFAULT_SETTINGS["security_scan_daily_enabled"]),
+        standaard=False,
+    )
+    configuratie["security_scan_daily_time"] = normaliseer_dagelijkse_security_scan_tijd(
+        configuratie.get("security_scan_daily_time", DEFAULT_SETTINGS["security_scan_daily_time"])
+    )
+    configuratie["discord_dm_vriend_aliases"] = normaliseer_discord_dm_aliases(
+        configuratie.get("discord_dm_vriend_aliases", DEFAULT_SETTINGS["discord_dm_vriend_aliases"])
+    )
 
     if not str(configuratie.get("wake_word", "")).strip():
         configuratie["wake_word"] = "hee echo" if configuratie["taal"] == "Nederlands" else "hey echo"
@@ -310,13 +418,20 @@ def sla_instellingen_op(instellingen):
     with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
         json.dump(instellingen, f, ensure_ascii=False, indent=2)
 
+
+# Globale gesprekstoestand die commandopvolging, bevestigingen en notificaties bewaart.
 instellingen = laad_instellingen()
 
 GESPREK_CONTEXT = {
     "laatste_plan": [],
     "laatste_resultaten": [],
+    "laatste_commando_norm": "",
     "laatste_map": "",
     "laatste_webactie": "",
+    "laatste_assistent_antwoord_norm": "",
+    "laatste_assistent_antwoord_at": 0.0,
+    "laatste_spreektekst_norm": "",
+    "laatste_spreektekst_at": 0.0,
     "laatste_routering": {},
     "wacht_op_bevestiging": "",
     "automatisering_actief_tot": 0.0,
@@ -368,20 +483,88 @@ def opschonen_korte_tekst(tekst, max_lengte=240):
     return tekst
 
 
+def normaliseer_vergelijktekst(tekst, max_lengte=180):
+    genormaliseerd = re.sub(r"[^a-z0-9]+", " ", str(tekst or "").lower())
+    genormaliseerd = re.sub(r"\s+", " ", genormaliseerd).strip()
+    return genormaliseerd[:max_lengte]
+
+
+def bevat_herhaal_intentie(tekst):
+    tekst = re.sub(r"\s+", " ", str(tekst or "").lower()).strip()
+    if not tekst:
+        return False
+    return bool(re.search(r"\b(?:again|repeat|redo|opnieuw|herhaal|nog\s+een\s+keer)\b", tekst))
+
+
+def markeer_laatste_commando(commando):
+    GESPREK_CONTEXT["laatste_commando"] = str(commando or "").strip()
+    GESPREK_CONTEXT["laatste_commando_norm"] = normaliseer_vergelijktekst(commando, max_lengte=140)
+    GESPREK_CONTEXT["laatste_commando_at"] = time.time()
+
+
+def is_recente_dubbele_spraakopdracht(commando):
+    if bevat_herhaal_intentie(commando):
+        return False
+
+    commando_norm = normaliseer_vergelijktekst(commando, max_lengte=140)
+    if not commando_norm:
+        return False
+
+    vorige_norm = str(GESPREK_CONTEXT.get("laatste_commando_norm", "") or "").strip()
+    vorige_at = float(GESPREK_CONTEXT.get("laatste_commando_at", 0.0) or 0.0)
+    if not vorige_norm or commando_norm != vorige_norm:
+        return False
+
+    return (time.time() - vorige_at) <= COMMAND_DUPLICATE_WINDOW_SECONDS
+
+
+def verwijder_directe_herhaling_uit_antwoord(tekst):
+    tekst = str(tekst or "").strip()
+    if not tekst:
+        return ""
+
+    zinnen = [deel.strip() for deel in re.split(r"(?<=[.!?])\s+", tekst) if deel.strip()]
+    if len(zinnen) <= 1:
+        return re.sub(r"\s+", " ", tekst).strip()
+
+    opgeschoond = []
+    vorige_norm = ""
+    for zin in zinnen:
+        zin_norm = normaliseer_vergelijktekst(zin, max_lengte=220)
+        if zin_norm and zin_norm == vorige_norm:
+            continue
+        opgeschoond.append(zin)
+        if zin_norm:
+            vorige_norm = zin_norm
+
+    return " ".join(opgeschoond).strip()
+
+
+def maak_eenduidig_antwoord(tekst):
+    tekst = verwijder_directe_herhaling_uit_antwoord(tekst)
+    return re.sub(r"\s+", " ", str(tekst or "")).strip()
+
+
+def markeer_laatste_assistent_antwoord(antwoord):
+    GESPREK_CONTEXT["laatste_assistent_antwoord_norm"] = normaliseer_vergelijktekst(antwoord, max_lengte=220)
+    GESPREK_CONTEXT["laatste_assistent_antwoord_at"] = time.time()
+
+
 def kan_niet_oproepen_bericht(verzoek=""):
     verzoek = opschonen_korte_tekst(verzoek, max_lengte=80)
     if verzoek:
         return tekst_voor_taal(
             f"I can't call or open '{verzoek}' right now. Tell me in a simpler way what you want to open, read, search, or explain, and I'll try a different route.",
-            f"Ik kan '{verzoek}' nu niet voor je oproepen. Herhaal u vraag."
+            f"Ik kan '{verzoek}' nu niet direct uitvoeren. Zeg kort en duidelijk wat je wilt openen, lezen, zoeken of uitleggen."
         )
 
     return tekst_voor_taal(
         "I can't call or open that right now. Tell me in a simpler way what you want to open, read, search, or explain, and I'll try a different route.",
-        "Ik kan dat nu niet voor je oproepen. Herhaal u vraag."
+        "Ik kan dat nu niet direct uitvoeren. Zeg kort en duidelijk wat je wilt openen, lezen, zoeken of uitleggen."
     )
 
 
+# Langetermijngeheugen: profiel, feiten en notities.
 def standaard_langetermijn_geheugen():
     return {
         "profiel": {},
@@ -704,9 +887,11 @@ def behandel_geheugen_commando(tekst):
     return ""
 
 
+# Runtime-cache van langetermijngeheugen na validatie van het opslagbestand.
 LANGETERMIJN_GEHEUGEN = laad_langetermijn_geheugen()
 
 
+# Planner-domein: timers, reminders en taken met persistente opslag.
 def standaard_planning_data():
     return {
         "next_id": 1,
@@ -800,6 +985,7 @@ def laad_planning_data():
     return planning
 
 
+# Gedeelde state/locks voor planner, scans en dagelijkse scheduler.
 PLANNER_LOCK = threading.Lock()
 PLANNING_DATA = laad_planning_data()
 PLANNER_MONITOR_GESTART = False
@@ -843,7 +1029,53 @@ def standaard_system_scan_data():
     }
 
 
+# Systeemscanstatus voor DISM/SFC voortgang en feedback.
 SYSTEM_SCAN_STATE = standaard_system_scan_data()
+
+SECURITY_SCAN_LOCK = threading.Lock()
+MAX_SECURITY_SCAN_LOGS = 24
+SECURITY_THREAT_SUMMARY_MAX_ITEMS = 6
+
+
+def standaard_security_scan_data():
+    return {
+        "running": False,
+        "state": "idle",
+        "started_at": 0.0,
+        "updated_at": 0.0,
+        "finished_at": 0.0,
+        "stage": "",
+        "progress_percent": 0,
+        "threat_count": 0,
+        "detection_count": 0,
+        "threat_ids": [],
+        "threat_names": [],
+        "last_result": "",
+        "cleanup_last_result": "",
+        "recent_logs": [],
+    }
+
+
+# Security-scanstatus voor Defender-scan en threat-cleanup feedback.
+SECURITY_SCAN_STATE = standaard_security_scan_data()
+
+
+# Dagelijkse scheduler-state voor één-run-per-dag gedrag.
+DAILY_SECURITY_SCAN_LOCK = threading.Lock()
+DAILY_SECURITY_SCAN_MONITOR_GESTART = False
+
+
+def standaard_dagelijkse_security_scan_data():
+    return {
+        "last_run_date": "",
+        "last_triggered_at": 0.0,
+        "last_trigger_success": False,
+        "last_trigger_result": "",
+        "updated_at": 0.0,
+    }
+
+
+DAILY_SECURITY_SCAN_STATE = standaard_dagelijkse_security_scan_data()
 
 
 def sla_planning_data_op():
@@ -1091,6 +1323,7 @@ def agenda_overzicht_bericht():
     return " ".join(delen)
 
 
+# Tick-functie die verlopen planneritems afhandelt en notificaties triggert.
 def verwerk_verlopen_planning_items():
     verlopen_items = []
     huidige_tijd = time.time()
@@ -1123,6 +1356,7 @@ def verwerk_verlopen_planning_items():
 
 
 def planner_monitor_worker():
+    # Houd timers/reminders actueel in een lichte achtergrondlus.
     while True:
         try:
             verwerk_verlopen_planning_items()
@@ -1139,6 +1373,7 @@ def start_planning_monitor():
     PLANNER_MONITOR_GESTART = True
 
 
+# Veiligheidscheck voor acties die administratorrechten vereisen.
 def heeft_windows_adminrechten():
     if platform.system().lower() != "windows":
         return False
@@ -1162,6 +1397,7 @@ def system_scan_log_toevoegen(bericht):
         del logs[:-MAX_SYSTEM_SCAN_LOGS]
 
 
+# Samenvatter voor commandline-output zodat UI/logs compact blijven.
 def system_scan_output_samenvatting(stdout_tekst, stderr_tekst, max_regels=3):
     regels = []
     for bron in (stdout_tekst, stderr_tekst):
@@ -1225,6 +1461,7 @@ def system_scan_status_bericht():
     )
 
 
+# Worker die DISM/SFC stappen serieel uitvoert met foutafhandeling per stap.
 def voer_system_scan_worker_uit():
     totaal = max(1, len(SYSTEM_SCAN_STAPPEN))
 
@@ -1353,6 +1590,7 @@ def voer_system_scan_worker_uit():
 
 
 def start_system_scan():
+    # Startpunt voor systeemscan; bewaakt platform, rechten en dubbele runs.
     if platform.system().lower() != "windows":
         return False, tekst_voor_taal(
             "System scan is only available on Windows.",
@@ -1396,7 +1634,639 @@ def start_system_scan():
     )
 
 
+def security_scan_log_toevoegen(bericht):
+    opgeschoond = opschonen_korte_tekst(bericht, max_lengte=280)
+    if not opgeschoond:
+        return
+
+    logs = SECURITY_SCAN_STATE.setdefault("recent_logs", [])
+    logs.append({
+        "message": opgeschoond,
+        "at": time.time(),
+    })
+    if len(logs) > MAX_SECURITY_SCAN_LOGS:
+        del logs[:-MAX_SECURITY_SCAN_LOGS]
+
+
+# Probeert uit PowerShell-output het eerste bruikbare JSON-object te halen.
+def json_object_uit_stdout(stdout_tekst):
+    tekst = str(stdout_tekst or "").strip()
+    if not tekst:
+        return {}
+
+    kandidaten = [tekst]
+    regels = [regel.strip() for regel in tekst.splitlines() if regel.strip()]
+    kandidaten.extend(reversed(regels))
+
+    for kandidaat in kandidaten:
+        try:
+            data = json.loads(kandidaat)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def formatteer_security_threat_namen(threat_names, max_items=3):
+    unieke_namen = []
+    for naam in threat_names or []:
+        opgeschoond = opschonen_korte_tekst(naam, max_lengte=90)
+        if not opgeschoond or opgeschoond in unieke_namen:
+            continue
+        unieke_namen.append(opgeschoond)
+        if len(unieke_namen) >= max_items:
+            break
+    return ", ".join(unieke_namen)
+
+
+# Vraagt Microsoft Defender uit voor actieve dreigingen en detectierecords.
+def haal_defender_threat_overzicht(max_items=SECURITY_THREAT_SUMMARY_MAX_ITEMS):
+    max_items = max(1, int(max_items or SECURITY_THREAT_SUMMARY_MAX_ITEMS))
+    script = f"""
+$maxItems = {max_items}
+$detections = @()
+$threats = @()
+try {{ $detections = @(Get-MpThreatDetection -ErrorAction SilentlyContinue) }} catch {{}}
+try {{ $threats = @(Get-MpThreat -ErrorAction SilentlyContinue) }} catch {{}}
+
+$ids = New-Object System.Collections.Generic.List[string]
+$names = New-Object System.Collections.Generic.List[string]
+
+foreach ($item in @($threats) + @($detections)) {{
+    if ($null -ne $item.ThreatID -and "" -ne [string]$item.ThreatID) {{
+        $ids.Add([string]$item.ThreatID)
+    }}
+    if ($null -ne $item.ThreatName -and "" -ne [string]$item.ThreatName) {{
+        $names.Add([string]$item.ThreatName)
+    }}
+}}
+
+$payload = @{{
+    detection_count = @($detections).Count
+    threat_count = @($threats).Count
+    threat_ids = @($ids | Select-Object -Unique | Select-Object -First $maxItems)
+    threat_names = @($names | Select-Object -Unique | Select-Object -First $maxItems)
+}}
+
+$payload | ConvertTo-Json -Compress
+"""
+
+    resultaat = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        timeout=120,
+    )
+
+    if resultaat.returncode != 0:
+        raise RuntimeError((resultaat.stderr or resultaat.stdout or "Windows Defender query failed").strip())
+
+    data = json_object_uit_stdout(resultaat.stdout)
+    if not data:
+        raise RuntimeError("Windows Defender query returned no parseable JSON.")
+
+    def als_lijst(waarde):
+        if isinstance(waarde, list):
+            return waarde
+        if waarde is None or waarde == "":
+            return []
+        return [waarde]
+
+    threat_ids = []
+    for item in als_lijst(data.get("threat_ids", [])):
+        schoon_id = re.sub(r"[^0-9]", "", str(item or "").strip())
+        if schoon_id and schoon_id not in threat_ids:
+            threat_ids.append(schoon_id)
+
+    threat_names = []
+    for item in als_lijst(data.get("threat_names", [])):
+        naam = opschonen_korte_tekst(item, max_lengte=90)
+        if naam and naam not in threat_names:
+            threat_names.append(naam)
+
+    threat_count = begrens_int_waarde(data.get("threat_count", len(threat_ids)), standaard=len(threat_ids), minimum=0)
+    detection_count = begrens_int_waarde(data.get("detection_count", threat_count), standaard=threat_count, minimum=0)
+    return {
+        "threat_count": threat_count,
+        "detection_count": detection_count,
+        "threat_ids": threat_ids[:max_items],
+        "threat_names": threat_names[:max_items],
+    }
+
+
+def update_security_scan_state_met_overzicht(overzicht):
+    threat_count = max(0, int(overzicht.get("threat_count", 0) or 0))
+    detection_count = max(0, int(overzicht.get("detection_count", threat_count) or threat_count))
+    threat_ids = [str(item).strip() for item in overzicht.get("threat_ids", []) if str(item).strip()]
+    threat_names = [str(item).strip() for item in overzicht.get("threat_names", []) if str(item).strip()]
+
+    with SECURITY_SCAN_LOCK:
+        SECURITY_SCAN_STATE.update({
+            "threat_count": threat_count,
+            "detection_count": detection_count,
+            "threat_ids": threat_ids[:SECURITY_THREAT_SUMMARY_MAX_ITEMS],
+            "threat_names": threat_names[:SECURITY_THREAT_SUMMARY_MAX_ITEMS],
+            "updated_at": time.time(),
+        })
+
+
+def huidige_security_scan_payload():
+    with SECURITY_SCAN_LOCK:
+        payload = dict(SECURITY_SCAN_STATE)
+        payload["recent_logs"] = list(SECURITY_SCAN_STATE.get("recent_logs", []))
+
+    laatste_log = payload["recent_logs"][-1] if payload["recent_logs"] else {}
+    payload["last_log"] = str(laatste_log.get("message", "") or "").strip()
+    payload["updated_at_label"] = (
+        time.strftime("%H:%M:%S", time.localtime(float(payload.get("updated_at", 0.0) or 0.0)))
+        if payload.get("updated_at")
+        else ""
+    )
+    return payload
+
+
+def security_scan_status_bericht():
+    scan = huidige_security_scan_payload()
+    status = str(scan.get("state", "idle") or "idle")
+    stage = str(scan.get("stage", "") or "").strip()
+    progressie = int(scan.get("progress_percent", 0) or 0)
+    resultaat = str(scan.get("last_result", "") or "").strip()
+
+    if scan.get("running"):
+        return tekst_voor_taal(
+            f"Security threat scan in progress: {stage or 'working'} ({progressie}%).",
+            f"Beveiligingsscan bezig: {stage or 'bezig'} ({progressie}%)."
+        )
+
+    if status == "completed":
+        return resultaat or tekst_voor_taal(
+            "Security scan completed.",
+            "Beveiligingsscan voltooid."
+        )
+
+    if status == "error":
+        return resultaat or tekst_voor_taal(
+            "Security scan stopped with an error.",
+            "Beveiligingsscan is gestopt met een fout."
+        )
+
+    return tekst_voor_taal(
+        "Security scan is idle. Say security scan to start a Defender quick scan.",
+        "Beveiligingsscan staat stand-by. Zeg beveiligingsscan om een Defender quick scan te starten."
+    )
+
+
+def markeer_security_scan_fout(fout_bericht):
+    with SECURITY_SCAN_LOCK:
+        SECURITY_SCAN_STATE.update({
+            "running": False,
+            "state": "error",
+            "finished_at": time.time(),
+            "updated_at": time.time(),
+            "last_result": fout_bericht,
+        })
+        security_scan_log_toevoegen(fout_bericht)
+    registreer_notificatie(fout_bericht)
+
+
+# Worker die Defender quick scan uitvoert en de status opbouwt voor UI/spraak.
+def voer_security_threat_scan_worker_uit():
+    with SECURITY_SCAN_LOCK:
+        SECURITY_SCAN_STATE.update({
+            "stage": tekst_voor_taal("Running Microsoft Defender quick scan", "Microsoft Defender quick scan draait"),
+            "progress_percent": 12,
+            "updated_at": time.time(),
+        })
+        security_scan_log_toevoegen(
+            tekst_voor_taal(
+                "Security scan started with Microsoft Defender Quick Scan.",
+                "Beveiligingsscan gestart met Microsoft Defender Quick Scan."
+            )
+        )
+
+    try:
+        resultaat = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Start-MpScan -ScanType QuickScan -ErrorAction Stop"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2400,
+        )
+    except FileNotFoundError:
+        markeer_security_scan_fout(
+            tekst_voor_taal(
+                "Security scan failed: PowerShell was not found.",
+                "Beveiligingsscan mislukt: PowerShell is niet gevonden."
+            )
+        )
+        return
+    except subprocess.TimeoutExpired:
+        markeer_security_scan_fout(
+            tekst_voor_taal(
+                "Security scan timed out while running Defender Quick Scan.",
+                "Beveiligingsscan timeout tijdens Defender Quick Scan."
+            )
+        )
+        return
+    except Exception as e:
+        markeer_security_scan_fout(
+            tekst_voor_taal(
+                f"Security scan failed to start Defender: {e}",
+                f"Beveiligingsscan kon Defender niet starten: {e}"
+            )
+        )
+        return
+
+    if int(resultaat.returncode) != 0:
+        fout = (resultaat.stderr or resultaat.stdout or "Start-MpScan failed").strip()
+        markeer_security_scan_fout(
+            tekst_voor_taal(
+                f"Security scan failed: {fout}",
+                f"Beveiligingsscan mislukt: {fout}"
+            )
+        )
+        return
+
+    with SECURITY_SCAN_LOCK:
+        SECURITY_SCAN_STATE.update({
+            "stage": tekst_voor_taal("Collecting threat results", "Dreigingsresultaten worden verzameld"),
+            "progress_percent": 82,
+            "updated_at": time.time(),
+        })
+        security_scan_log_toevoegen(
+            tekst_voor_taal(
+                "Defender quick scan finished. Collecting active threat details.",
+                "Defender quick scan klaar. Actieve dreigingsdetails worden opgehaald."
+            )
+        )
+
+    try:
+        overzicht = haal_defender_threat_overzicht()
+    except Exception as e:
+        markeer_security_scan_fout(
+            tekst_voor_taal(
+                f"Security scan finished but threat summary failed: {e}",
+                f"Beveiligingsscan klaar, maar dreigingsoverzicht mislukt: {e}"
+            )
+        )
+        return
+
+    update_security_scan_state_met_overzicht(overzicht)
+    threat_count = int(overzicht.get("threat_count", 0) or 0)
+    detection_count = int(overzicht.get("detection_count", threat_count) or threat_count)
+    threat_namen = formatteer_security_threat_namen(overzicht.get("threat_names", []))
+
+    if threat_count > 0:
+        detail = f" ({threat_namen})" if threat_namen else ""
+        eindbericht = tekst_voor_taal(
+            f"Security scan completed. I found {threat_count} active threat(s){detail}. Say remove threats and then confirm to clean them up.",
+            f"Beveiligingsscan voltooid. Ik vond {threat_count} actieve dreiging(en){detail}. Zeg verwijder dreigingen en bevestig daarna om op te ruimen."
+        )
+    elif detection_count > 0:
+        eindbericht = tekst_voor_taal(
+            f"Security scan completed. No active threats found. Defender still shows {detection_count} detection record(s).",
+            f"Beveiligingsscan voltooid. Geen actieve dreigingen gevonden. Defender toont nog {detection_count} detectierecord(s)."
+        )
+    else:
+        eindbericht = tekst_voor_taal(
+            "Security scan completed. No active threats found.",
+            "Beveiligingsscan voltooid. Geen actieve dreigingen gevonden."
+        )
+
+    with SECURITY_SCAN_LOCK:
+        SECURITY_SCAN_STATE.update({
+            "running": False,
+            "state": "completed",
+            "finished_at": time.time(),
+            "updated_at": time.time(),
+            "progress_percent": 100,
+            "stage": tekst_voor_taal("Security scan complete", "Beveiligingsscan afgerond"),
+            "last_result": eindbericht,
+        })
+        security_scan_log_toevoegen(eindbericht)
+    registreer_notificatie(eindbericht)
+
+
+def start_security_threat_scan():
+    # Publiek startpunt voor handmatige of geplande dreigingsscan.
+    if platform.system().lower() != "windows":
+        return False, tekst_voor_taal(
+            "Security scan is only available on Windows.",
+            "Beveiligingsscan is alleen beschikbaar op Windows."
+        )
+
+    with SECURITY_SCAN_LOCK:
+        if SECURITY_SCAN_STATE.get("running"):
+            return False, tekst_voor_taal(
+                "Security threat scan is already running.",
+                "Beveiligingsscan draait al."
+            )
+
+        now = time.time()
+        SECURITY_SCAN_STATE.update(standaard_security_scan_data())
+        SECURITY_SCAN_STATE.update({
+            "running": True,
+            "state": "running",
+            "started_at": now,
+            "updated_at": now,
+            "stage": tekst_voor_taal("Preparing Defender quick scan", "Defender quick scan wordt voorbereid"),
+            "progress_percent": 4,
+        })
+        security_scan_log_toevoegen(
+            tekst_voor_taal(
+                "Security threat scan started in the background.",
+                "Beveiligingsscan is op de achtergrond gestart."
+            )
+        )
+
+    threading.Thread(target=voer_security_threat_scan_worker_uit, daemon=True).start()
+    return True, tekst_voor_taal(
+        "Security threat scan started. I am running a Defender quick scan in the background.",
+        "Beveiligingsscan gestart. Ik voer op de achtergrond een Defender quick scan uit."
+    )
+
+
+def parseer_security_scan_tijdstip(tijdstip):
+    # Alle scheduler-paden gebruiken dezelfde tijdnormalisatie.
+    genormaliseerd = normaliseer_dagelijkse_security_scan_tijd(tijdstip)
+    uur_tekst, minuut_tekst = genormaliseerd.split(":", 1)
+    return int(uur_tekst), int(minuut_tekst), genormaliseerd
+
+
+def bereken_volgende_dagelijkse_security_scan_timestamp(tijdstip, nu_timestamp=None):
+    # Bepaal altijd de eerstvolgende toekomstige run (vandaag of morgen).
+    if nu_timestamp is None:
+        nu_dt = datetime.datetime.now()
+    else:
+        nu_dt = datetime.datetime.fromtimestamp(float(nu_timestamp))
+
+    uur, minuut, genormaliseerd = parseer_security_scan_tijdstip(tijdstip)
+    geplande_dt = nu_dt.replace(hour=uur, minute=minuut, second=0, microsecond=0)
+    if geplande_dt <= nu_dt:
+        geplande_dt += datetime.timedelta(days=1)
+
+    return geplande_dt.timestamp(), genormaliseerd
+
+
+def moet_dagelijkse_security_scan_starten(nu_timestamp, tijdstip, laatste_run_datum=""):
+    uur, minuut, _ = parseer_security_scan_tijdstip(tijdstip)
+    nu_local = time.localtime(float(nu_timestamp))
+    datumcode = f"{nu_local.tm_year:04d}-{nu_local.tm_mon:02d}-{nu_local.tm_mday:02d}"
+
+    # Voorkom dat dezelfde dagelijkse job meerdere keren op een dag start.
+    if str(laatste_run_datum or "").strip() == datumcode:
+        return False, datumcode
+
+    nu_seconden = (nu_local.tm_hour * 3600) + (nu_local.tm_min * 60) + nu_local.tm_sec
+    gepland_seconden = (uur * 3600) + (minuut * 60)
+    return nu_seconden >= gepland_seconden, datumcode
+
+
+def huidige_dagelijkse_security_scan_payload():
+    # Dashboard krijgt een compacte snapshot met planning + laatste triggerstatus.
+    ingeschakeld = parseer_bool_waarde(
+        instellingen.get("security_scan_daily_enabled", DEFAULT_SETTINGS["security_scan_daily_enabled"]),
+        standaard=False,
+    )
+    tijdstip = normaliseer_dagelijkse_security_scan_tijd(
+        instellingen.get("security_scan_daily_time", DEFAULT_SETTINGS["security_scan_daily_time"])
+    )
+
+    volgende_run_at = 0.0
+    if ingeschakeld:
+        volgende_run_at, tijdstip = bereken_volgende_dagelijkse_security_scan_timestamp(tijdstip)
+
+    with DAILY_SECURITY_SCAN_LOCK:
+        payload = dict(DAILY_SECURITY_SCAN_STATE)
+
+    payload.update({
+        "enabled": bool(ingeschakeld),
+        "scheduled_time": tijdstip,
+        "next_run_at": float(volgende_run_at or 0.0),
+        "next_run_label": time.strftime("%Y-%m-%d %H:%M", time.localtime(volgende_run_at)) if volgende_run_at else "",
+        "monitor_running": bool(DAILY_SECURITY_SCAN_MONITOR_GESTART),
+        "supported": platform.system().lower() == "windows",
+    })
+    return payload
+
+
+def verwerk_dagelijkse_security_scan(nu_timestamp=None):
+    # Deze scheduler gebruikt bewust alleen Windows Defender op Windows.
+    if platform.system().lower() != "windows":
+        return False
+
+    ingeschakeld = parseer_bool_waarde(
+        instellingen.get("security_scan_daily_enabled", DEFAULT_SETTINGS["security_scan_daily_enabled"]),
+        standaard=False,
+    )
+    if not ingeschakeld:
+        return False
+
+    tijdstip = normaliseer_dagelijkse_security_scan_tijd(
+        instellingen.get("security_scan_daily_time", DEFAULT_SETTINGS["security_scan_daily_time"])
+    )
+    nu = float(time.time() if nu_timestamp is None else nu_timestamp)
+
+    with DAILY_SECURITY_SCAN_LOCK:
+        laatste_run_datum = str(DAILY_SECURITY_SCAN_STATE.get("last_run_date", "") or "")
+
+    moet_starten, datumcode = moet_dagelijkse_security_scan_starten(nu, tijdstip, laatste_run_datum)
+    if not moet_starten:
+        return False
+
+    gestart, bericht = start_security_threat_scan()
+    bericht_schoon = opschonen_korte_tekst(bericht, max_lengte=280) or str(bericht or "")
+
+    # Sla altijd op dat dit dagslot verwerkt is, ook als Defender al draaide.
+    with DAILY_SECURITY_SCAN_LOCK:
+        DAILY_SECURITY_SCAN_STATE.update({
+            "last_run_date": datumcode,
+            "last_triggered_at": nu,
+            "last_trigger_success": bool(gestart),
+            "last_trigger_result": bericht_schoon,
+            "updated_at": time.time(),
+        })
+
+    if gestart:
+        security_scan_log_toevoegen(
+            tekst_voor_taal(
+                "Daily scheduled security scan started.",
+                "Dagelijkse geplande beveiligingsscan gestart."
+            )
+        )
+    else:
+        security_scan_log_toevoegen(
+            tekst_voor_taal(
+                f"Daily scheduled security scan skipped: {bericht_schoon}",
+                f"Dagelijkse geplande beveiligingsscan overgeslagen: {bericht_schoon}"
+            )
+        )
+
+    return bool(gestart)
+
+
+def dagelijkse_security_scan_monitor_worker():
+    # Lage pollfrequentie is genoeg; de dag/time-guard voorkomt dubbele starts.
+    while True:
+        try:
+            verwerk_dagelijkse_security_scan()
+        except Exception:
+            pass
+        time.sleep(20.0)
+
+
+def start_dagelijkse_security_scan_monitor():
+    global DAILY_SECURITY_SCAN_MONITOR_GESTART
+    # Singleton-start voorkomt extra monitorthreads na herstart/reload.
+    if DAILY_SECURITY_SCAN_MONITOR_GESTART:
+        return
+    threading.Thread(target=dagelijkse_security_scan_monitor_worker, daemon=True).start()
+    DAILY_SECURITY_SCAN_MONITOR_GESTART = True
+
+
+# Opruimflow met bevestiging: verwijdert dreigingen op basis van Defender threat IDs.
+def voer_security_threat_cleanup_uit():
+    if platform.system().lower() != "windows":
+        return tekst_voor_taal(
+            "Threat cleanup is only available on Windows.",
+            "Dreiging-opruimen is alleen beschikbaar op Windows."
+        )
+
+    if not heeft_windows_adminrechten():
+        return tekst_voor_taal(
+            "Threat cleanup needs administrator rights. Start Echo as administrator and try again.",
+            "Dreiging-opruimen heeft administratorrechten nodig. Start Echo als administrator en probeer opnieuw."
+        )
+
+    try:
+        overzicht_voor = haal_defender_threat_overzicht(max_items=12)
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Could not read Defender threats: {e}",
+            f"Kon Defender-dreigingen niet uitlezen: {e}"
+        )
+
+    update_security_scan_state_met_overzicht(overzicht_voor)
+    threat_count_voor = int(overzicht_voor.get("threat_count", 0) or 0)
+    if threat_count_voor <= 0:
+        bericht = tekst_voor_taal(
+            "No active threats found to clean up.",
+            "Geen actieve dreigingen gevonden om op te ruimen."
+        )
+        with SECURITY_SCAN_LOCK:
+            SECURITY_SCAN_STATE["cleanup_last_result"] = bericht
+            SECURITY_SCAN_STATE["updated_at"] = time.time()
+            security_scan_log_toevoegen(bericht)
+        return bericht
+
+    threat_ids = []
+    for item in overzicht_voor.get("threat_ids", []):
+        schoon_id = re.sub(r"[^0-9]", "", str(item or "").strip())
+        if schoon_id and schoon_id not in threat_ids:
+            threat_ids.append(schoon_id)
+
+    if not threat_ids:
+        return tekst_voor_taal(
+            "I found active threats but no removable threat IDs.",
+            "Ik vond actieve dreigingen maar geen verwijderbare dreiging-ID's."
+        )
+
+    ids_argument = ", ".join(threat_ids)
+    script = f"""
+$ids = @({ids_argument})
+$errors = New-Object System.Collections.Generic.List[string]
+foreach ($id in $ids) {{
+    try {{
+        Remove-MpThreat -ThreatID $id -ErrorAction Stop | Out-Null
+    }} catch {{
+        $errors.Add($_.Exception.Message)
+    }}
+}}
+
+$remaining = @()
+try {{ $remaining = @(Get-MpThreat -ErrorAction SilentlyContinue) }} catch {{}}
+
+$payload = @{{
+    attempted = @($ids).Count
+    remaining = @($remaining).Count
+    errors = @($errors)
+}}
+
+$payload | ConvertTo-Json -Compress
+"""
+
+    resultaat = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        timeout=240,
+    )
+
+    if resultaat.returncode != 0:
+        return tekst_voor_taal(
+            f"Threat cleanup failed: {(resultaat.stderr or resultaat.stdout or 'Remove-MpThreat failed').strip()}",
+            f"Dreiging-opruimen mislukt: {(resultaat.stderr or resultaat.stdout or 'Remove-MpThreat mislukt').strip()}"
+        )
+
+    cleanup_data = json_object_uit_stdout(resultaat.stdout)
+    errors = cleanup_data.get("errors", []) if isinstance(cleanup_data, dict) else []
+    if not isinstance(errors, list):
+        errors = [str(errors)] if errors else []
+
+    try:
+        overzicht_na = haal_defender_threat_overzicht(max_items=12)
+        update_security_scan_state_met_overzicht(overzicht_na)
+        threat_count_na = int(overzicht_na.get("threat_count", 0) or 0)
+    except Exception:
+        threat_count_na = begrens_int_waarde(cleanup_data.get("remaining", threat_count_voor), standaard=threat_count_voor, minimum=0)
+        overzicht_na = {
+            "threat_count": threat_count_na,
+            "detection_count": threat_count_na,
+            "threat_ids": [],
+            "threat_names": [],
+        }
+        update_security_scan_state_met_overzicht(overzicht_na)
+
+    verwijderd = max(0, threat_count_voor - threat_count_na)
+    if threat_count_na == 0:
+        bericht = tekst_voor_taal(
+            f"Threat cleanup completed. Active threats removed: {max(verwijderd, 1)}.",
+            f"Dreiging-opruimen voltooid. Actieve dreigingen verwijderd: {max(verwijderd, 1)}."
+        )
+    elif verwijderd > 0:
+        bericht = tekst_voor_taal(
+            f"Threat cleanup partially completed. Removed {verwijderd}, {threat_count_na} active threat(s) remain.",
+            f"Dreiging-opruimen deels voltooid. {verwijderd} verwijderd, {threat_count_na} actieve dreiging(en) blijven over."
+        )
+    else:
+        bericht = tekst_voor_taal(
+            f"Threat cleanup finished but {threat_count_na} active threat(s) remain.",
+            f"Dreiging-opruimen klaar, maar {threat_count_na} actieve dreiging(en) blijven over."
+        )
+
+    if errors:
+        eerste_fout = opschonen_korte_tekst(errors[0], max_lengte=180)
+        if eerste_fout:
+            bericht += tekst_voor_taal(
+                f" First cleanup error: {eerste_fout}",
+                f" Eerste opruimfout: {eerste_fout}"
+            )
+
+    with SECURITY_SCAN_LOCK:
+        SECURITY_SCAN_STATE["cleanup_last_result"] = bericht
+        SECURITY_SCAN_STATE["updated_at"] = time.time()
+        security_scan_log_toevoegen(bericht)
+    return bericht
+
+
 def model_basis_url():
+    # Ondersteunt zowel OpenAI-compatibele endpoints als Azure OpenAI.
     azure_endpoint = str(os.environ.get("AZURE_OPENAI_ENDPOINT", "") or "").strip()
     if azure_endpoint:
         return azure_endpoint.rstrip("/")
@@ -1461,6 +2331,7 @@ def model_tags_url(basis_url):
     return basis + "/api/tags"
 
 
+# Health/config-status voor dashboard en routebeslissingen.
 def haal_model_status(force=False):
     huidige_tijd = time.time()
     with MODEL_STATUS_LOCK:
@@ -1641,6 +2512,7 @@ def dashboard_bestand_suggesties(max_items=8):
     return resultaten[:max_items]
 
 
+# Uniform payloadformaat voor alle "pending confirmation" safety prompts.
 def maak_pending_bevestiging_payload():
     wachtende_actie = str(GESPREK_CONTEXT.get("wacht_op_bevestiging", "") or "").strip()
 
@@ -1680,6 +2552,37 @@ def maak_pending_bevestiging_payload():
         if target:
             prompt_en = f"Safety check: confirm to delete {target}."
             prompt_nl = f"Veiligheidscontrole: bevestig om {target} te verwijderen."
+    elif wachtende_actie.startswith("apps uninstall::"):
+        kind = "app-uninstall"
+        app_naam = wachtende_actie.split("::", 1)[1]
+        match = vind_app_update_of_scan_match(app_naam)
+        target = match["name"] if match else schoon_computerdoel(app_naam)
+        if target:
+            prompt_en = f"Safety check: confirm to uninstall {target}."
+            prompt_nl = f"Veiligheidscontrole: bevestig om {target} te verwijderen."
+    elif wachtende_actie == "apps updates apply":
+        kind = "app-update"
+        updates = scan_app_updates_winget()
+        target = f"{len(updates)} apps"
+        prompt_en = f"Safety check: confirm to update {len(updates)} app(s)."
+        prompt_nl = f"Veiligheidscontrole: bevestig om {len(updates)} app(s) te updaten."
+    elif wachtende_actie == "security threat cleanup":
+        kind = "security-cleanup"
+        security_scan = huidige_security_scan_payload()
+        threat_count = max(0, int(security_scan.get("threat_count", 0) or 0))
+        threat_namen = formatteer_security_threat_namen(security_scan.get("threat_names", []))
+        if threat_count > 0:
+            target = f"{threat_count} active threat(s)"
+            prompt_en = f"Safety check: confirm to clean up {threat_count} active threat(s)."
+            prompt_nl = f"Veiligheidscontrole: bevestig om {threat_count} actieve dreiging(en) op te ruimen."
+        else:
+            target = "active threats"
+            prompt_en = "Safety check: confirm to clean up active threats."
+            prompt_nl = "Veiligheidscontrole: bevestig om actieve dreigingen op te ruimen."
+
+        if threat_namen:
+            prompt_en += f" Detected: {threat_namen}."
+            prompt_nl += f" Gedetecteerd: {threat_namen}."
     elif wachtende_actie.startswith("overwrite file::"):
         kind = "workspace-overwrite"
         bestand_payload = wachtende_actie.split("::", 1)[1]
@@ -1710,6 +2613,7 @@ def maak_pending_bevestiging_payload():
     return payload
 
 
+# Centrale dashboard snapshot die frontend periodiek kan ophalen.
 def maak_dashboard_payload():
     verwerk_verlopen_planning_items()
     huidige_tijd = time.time()
@@ -1784,6 +2688,8 @@ def maak_dashboard_payload():
             "suggested_files": dashboard_bestand_suggesties(),
         },
         "system_scan": huidige_system_scan_payload(),
+        "security_scan": huidige_security_scan_payload(),
+        "security_daily_scan": huidige_dagelijkse_security_scan_payload(),
         "pending_confirmation": maak_pending_bevestiging_payload(),
     }
 
@@ -3238,6 +4144,7 @@ AI_AGENT_BEKENDE_PREFIXEN = (
     "search youtube ",
     "calculate::",
     "browser ",
+    "browser click link::",
     "timer ",
     "reminder ",
     "task ",
@@ -3268,6 +4175,9 @@ AI_AGENT_BEKENDE_PREFIXEN = (
     "system info",
     "system scan start",
     "system scan status",
+    "security threat scan start",
+    "security threat scan status",
+    "security threat cleanup",
     "battery status",
     "disk space",
     "ip address",
@@ -3282,6 +4192,12 @@ AI_AGENT_BEKENDE_PREFIXEN = (
     "window ",
     "wifi ",
     "bluetooth ",
+    "whatsapp send::",
+    "whatsapp call::",
+    "discord send::",
+    "discord dm::",
+    "discord call::",
+    "help topic::",
 )
 
 AI_AGENT_MAX_TOOL_CALLS = 4
@@ -3466,7 +4382,7 @@ def ai_agent_tool_schema():
                     "properties": {
                         "kind": {
                             "type": "string",
-                            "enum": ["system", "battery", "disk", "ip", "time", "scan"],
+                            "enum": ["system", "battery", "disk", "ip", "time", "scan", "threats"],
                             "description": "Type of status to retrieve.",
                         },
                     },
@@ -3494,6 +4410,7 @@ def ai_agent_tool_schema():
 
 
 def parse_ai_tool_arguments(arguments):
+    # Verdraagt zowel dict-input als stringified JSON van tool-calls.
     if isinstance(arguments, dict):
         return arguments
 
@@ -3510,6 +4427,7 @@ def parse_ai_tool_arguments(arguments):
 
 
 def actie_uit_ai_tool_call(tool_call):
+    # Zet AI-tool-calls om naar Echo-acties die lokaal uitvoerbaar zijn.
     if not isinstance(tool_call, dict):
         return ""
 
@@ -3564,6 +4482,7 @@ def actie_uit_ai_tool_call(tool_call):
             "ip": "ip address",
             "time": "current time",
             "scan": "system scan status",
+            "threats": "security threat scan status",
         }
         return mapping.get(status_soort, "system info")
     if naam == "run_echo_action":
@@ -3586,6 +4505,7 @@ def schoon_json_antwoord(tekst):
 
 
 def zoekwoorden_uit_tekst(tekst):
+    # Selecteert betekenisvolle zoekwoorden voor documentcontext zonder stopwoorden.
     gevonden = []
     for woord in re.findall(r"[a-z0-9_]{3,}", str(tekst or "").lower()):
         if woord in DOCUMENT_CONTEXT_STOPWOORDEN or woord in gevonden:
@@ -3640,6 +4560,7 @@ def beste_document_snippet(inhoud, zoekwoorden):
 
 
 def document_context_snippets(tekst, max_snippets=MAX_DOCUMENT_SNIPPETS):
+    # Bouwt kleine relevante snippets uit workspace-bestanden voor betere AI-context.
     zoekwoorden = zoekwoorden_uit_tekst(tekst)
     if not zoekwoorden:
         return []
@@ -3692,6 +4613,7 @@ def blok_document_context(tekst):
 
 
 def context_voor_ai_agent(tekst=""):
+    # Combineert runtime-status, recent gesprek, planning en documentcontext.
     regels = [
         tekst_voor_taal("Language mode", "Taalmodus") + f": {instellingen.get('taal', DEFAULT_SETTINGS['taal'])}",
         tekst_voor_taal("Advanced computer control", "Geavanceerde computerbesturing") + ": " + (
@@ -3731,6 +4653,7 @@ def context_voor_ai_agent(tekst=""):
 
 
 def actie_is_uitvoerbaar_door_echo(actie):
+    # Controleert of een actie binnen de lokale veiligheids- en capabilitygrenzen valt.
     genormaliseerde_actie = normaliseer_actie(str(actie or "").strip())
     if not genormaliseerde_actie:
         return "", False
@@ -3800,6 +4723,12 @@ def categoriseer_actie(actie):
         "wifi off",
         "wifi toggle",
         "bluetooth ",
+        "whatsapp send::",
+        "whatsapp call::",
+        "discord send::",
+        "discord dm::",
+        "discord call::",
+        "app control::",
     )):
         return "automation"
 
@@ -3815,6 +4744,9 @@ def categoriseer_actie(actie):
         "system info",
         "system scan start",
         "system scan status",
+        "security threat scan start",
+        "security threat scan status",
+        "security threat cleanup",
         "battery status",
         "wifi quality",
         "disk space",
@@ -3836,6 +4768,8 @@ def categoriseer_verzoek_tekst(tekst):
         return "planner"
     if any(woord in tekst for woord in ("page", "pagina", "browser", "chrome", "edge", "tab", "website", "url", "formulier", "form")):
         return "browser"
+    if re.search(r"\b(?:virus|viruses|virusen|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", tekst):
+        return "system"
     if any(woord in tekst for woord in ("bestand", "file", "folder", "map", "readme", "zoek", "search", "rename", "copy", "move", "delete", "rewrite", "herschrijf", "overschrijf", "append")):
         return "workspace"
     if re.search(r"\b(?:wifi|wi-fi|internet|netwerk)\b", tekst) and re.search(r"\b(?:kwaliteit|quality|speed|snelheid|upload|download|ping|latency|diagnose|check|test)\b", tekst):
@@ -3860,6 +4794,7 @@ def tekst_lijkt_actiegericht(tekst):
 
 
 def analyseer_verzoek_routering(tekst):
+    # Bepaalt intent, categorie en toolstrategie voor elk gebruikersverzoek.
     ruwe_plan = maak_actie_plan(tekst)
     verrijkt_plan = verrijk_plan_met_context(tekst, ruwe_plan)
     genormaliseerd_plan = [genormaliseerde_stap for stap in verrijkt_plan if (genormaliseerde_stap := normaliseer_actie(stap))]
@@ -3901,6 +4836,7 @@ def analyseer_verzoek_routering(tekst):
 
 
 def vraag_online_ai_agent_acties(tekst, routering=None):
+    # Vraagt de online agent om tool-calls en converteert die terug naar lokale acties.
     routering = routering or analyseer_verzoek_routering(tekst)
     systeem_prompt = tekst_voor_taal(
         "You are Echo's tool orchestrator. For action requests, call the provided tools instead of describing what to do. You may call up to 4 tools. Use a short content reply only for useful context. If no tool is needed, provide a concise direct reply.",
@@ -4008,6 +4944,7 @@ def combineer_agent_bericht(reply, resultaten):
 
 
 def probeer_online_ai_agent(tekst, routering=None):
+    # Alleen inzetten wanneer lokaal plan leeg is en online agent toegestaan/beschikbaar is.
     if not online_ai_beschikbaar() or not instellingen.get("ai_agent_primair", True):
         return None
 
@@ -4051,6 +4988,7 @@ def probeer_online_ai_agent(tekst, routering=None):
 
 
 def voer_plan_uit(plan):
+    # Voert elke geplande actie uit en bewaart ook welke stappen onbekend bleven.
     resultaten = []
     bekende_stappen = []
     bekende_resultaten = []
@@ -4180,6 +5118,7 @@ def maak_meedenk_antwoord(tekst, uitgevoerde_resultaten=None):
     return " ".join(delen)
 
 
+# Browser/site-intent mapping voor natuurlijke taalvarianten.
 SITE_ALIASES = {
     "youtube": {"youtube", "yt"},
     "google": {"google"},
@@ -4294,6 +5233,7 @@ def maak_browser_workflow_actie(originele_stap, stap):
     return ""
 
 
+# Bekende systeemdoelen met startcommando's en aliassen.
 SYSTEM_APP_TARGETS = {
     "notepad": {
         "aliases": {"notepad", "kladblok"},
@@ -4376,6 +5316,7 @@ SYSTEM_APP_TARGETS = {
 }
 
 
+# Ondersteunde Windows-instellingen die direct geopend kunnen worden.
 SYSTEM_SETTING_TARGETS = {
     "settings": {
         "aliases": {
@@ -4435,6 +5376,7 @@ SYSTEM_SETTING_TARGETS = {
 }
 
 
+# Veelgebruikte mappen om "open folder ..." robuust te maken.
 COMMON_FOLDER_TARGETS = {
     "desktop": {
         "aliases": {"desktop", "bureaublad"},
@@ -4481,6 +5423,7 @@ COMMON_FOLDER_TARGETS = {
 }
 
 
+# Gevaarlijke acties gaan altijd via expliciete confirm/cancel-flow.
 DANGEROUS_SYSTEM_ACTIONS = {
     "lock computer": {
         "aliases": {"lock computer", "lock pc", "lock screen", "vergrendel computer", "vergrendel pc", "vergrendel scherm"},
@@ -4552,6 +5495,7 @@ TOETS_ALIASES = {
 }
 
 
+# Venster-heuristiek voor focus en automation-routes.
 WINDOW_TITLE_HINTS = {
     "vscode": ["visual studio code", " - code"],
     "chrome": ["google chrome", "chrome"],
@@ -4564,6 +5508,7 @@ WINDOW_TITLE_HINTS = {
 }
 
 
+# Fallback startcommando's voor app-focus en macro-uitvoering.
 APP_LAUNCH_COMMANDS = {
     "vscode": ["cmd", "/c", "start", "", "vscode"],
     "chrome": ["cmd", "/c", "start", "", "chrome"],
@@ -4575,6 +5520,7 @@ APP_LAUNCH_COMMANDS = {
     "explorer": ["explorer"],
 }
 
+# Cache en filters voor snelle app-scan zonder technische ruis.
 APP_SCAN_CACHE = []
 APP_SCAN_CACHE_AT = 0.0
 APP_SCAN_LOCK = threading.Lock()
@@ -4720,6 +5666,7 @@ APP_IN_APP_ZOEK_ENTER_BEVESTIG = {"discord"}
 
 
 def normaliseer_app_naam(naam):
+    # Normaliseert labels zodat fuzzy-matching stabiel blijft.
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ._-]", " ", str(naam or "").lower())).strip(" ._-")
 
 
@@ -4729,6 +5676,7 @@ def tokeniseer_app_naam(naam):
 
 
 def app_naam_match_score(zoeknaam, kandidaat_naam):
+    # Hybride score: substring, sequence-ratio en token-overlap.
     zoeknaam = normaliseer_app_naam(zoeknaam)
     kandidaat_naam = normaliseer_app_naam(kandidaat_naam)
     if not zoeknaam or not kandidaat_naam:
@@ -4855,6 +5803,7 @@ def voeg_app_kandidaat_toe(gevonden, kandidaat, uitgesloten):
 
 
 def scan_geinstalleerde_apps(force=False):
+    # Bouwt een cache van bruikbare startbare apps uit Startmenu/Desktop/Programs.
     global APP_SCAN_CACHE, APP_SCAN_CACHE_AT
 
     with APP_SCAN_LOCK:
@@ -4937,6 +5886,7 @@ def scan_geinstalleerde_apps(force=False):
 
 
 def vind_gescande_app(doel, minimum_score=None):
+    # Zoekt beste app-match op basis van drempel per zoekterm-lengte.
     sleutel = normaliseer_app_naam(doel).casefold()
     if not sleutel:
         return None
@@ -4996,6 +5946,7 @@ def vind_gescande_app_voor_sleutel(app_sleutel, details, minimum_score=0.66):
 
 
 def beschrijf_gescande_apps(force=False):
+    # Menselijke samenvatting voor "welke apps zie je"-vragen.
     apps = scan_geinstalleerde_apps(force=force)
     namen = [item["name"] for item in apps]
     if not namen:
@@ -5013,17 +5964,356 @@ def beschrijf_gescande_apps(force=False):
     )
 
 
+APP_UPDATE_CACHE = []
+APP_UPDATE_CACHE_AT = 0.0
+APP_UPDATE_LOCK = threading.Lock()
+APP_UPDATE_CACHE_TTL = 900
+
+
+def winget_beschikbaar():
+    return shutil.which("winget") is not None
+
+
+def scan_app_updates_winget(force=False):
+    # Leest winget-upgrades en cached de lijst voor dashboard/commando's.
+    global APP_UPDATE_CACHE, APP_UPDATE_CACHE_AT
+
+    with APP_UPDATE_LOCK:
+        if APP_UPDATE_CACHE and not force and time.time() - APP_UPDATE_CACHE_AT < APP_UPDATE_CACHE_TTL:
+            return list(APP_UPDATE_CACHE)
+
+        if not winget_beschikbaar():
+            APP_UPDATE_CACHE = []
+            APP_UPDATE_CACHE_AT = time.time()
+            return []
+
+        try:
+            resultaat = subprocess.run(
+                ["winget", "upgrade", "--accept-source-agreements", "--disable-interactivity"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=90,
+            )
+        except Exception:
+            return list(APP_UPDATE_CACHE)
+
+        updates = []
+        regels = [regel for regel in (resultaat.stdout or "").splitlines() if regel.strip()]
+        kopregel_index = next(
+            (index for index, regel in enumerate(regels) if re.search(r"\bId\b", regel) and re.search(r"\bVersion\b", regel)),
+            -1,
+        )
+
+        if kopregel_index != -1:
+            kopregel = regels[kopregel_index]
+            id_start = kopregel.find("Id")
+            version_start = kopregel.find("Version")
+            available_start = kopregel.find("Available")
+            source_start = kopregel.find("Source")
+
+            for regel in regels[kopregel_index + 1:]:
+                if regel.strip().startswith("-") or not regel.strip():
+                    continue
+                if "upgrade(s) available" in regel.lower() or "geen upgrades beschikbaar" in regel.lower():
+                    continue
+                if "version number" in regel.lower() or "versienummer" in regel.lower():
+                    continue
+
+                naam = regel[:id_start].strip()
+                app_id = regel[id_start:version_start].strip() if version_start > id_start else ""
+                huidige_versie = regel[version_start:available_start].strip() if available_start > version_start else ""
+                beschikbare_versie = regel[available_start:source_start].strip() if source_start > available_start else regel[available_start:].strip()
+
+                if naam and app_id:
+                    updates.append({
+                        "name": naam,
+                        "id": app_id,
+                        "current_version": huidige_versie,
+                        "available_version": beschikbare_versie,
+                    })
+
+        APP_UPDATE_CACHE = updates
+        APP_UPDATE_CACHE_AT = time.time()
+        return list(APP_UPDATE_CACHE)
+
+
+def beschrijf_app_updates(force=False):
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not check for app updates because winget is not available on this computer.",
+            "Ik kon geen app-updates controleren omdat winget niet beschikbaar is op deze computer."
+        )
+
+    updates = scan_app_updates_winget(force=force)
+    if not updates:
+        return tekst_voor_taal(
+            "All your apps are up to date.",
+            "Al je apps zijn up-to-date."
+        )
+
+    aantal = len(updates)
+    return tekst_voor_taal(
+        f"There {'is' if aantal == 1 else 'are'} {aantal} app update{'s' if aantal != 1 else ''} available. "
+        "Say 'confirm' if you want me to update them, or ask me to list them.",
+        f"Er {'is' if aantal == 1 else 'zijn'} {aantal} app-update{'s' if aantal != 1 else ''} beschikbaar. "
+        "Zeg 'bevestig' als je wilt dat ik ze update, of vraag me om ze op te noemen."
+    )
+
+
+def beschrijf_app_updates_lijst(force=False):
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not check for app updates because winget is not available on this computer.",
+            "Ik kon geen app-updates controleren omdat winget niet beschikbaar is op deze computer."
+        )
+
+    updates = scan_app_updates_winget(force=force)
+    if not updates:
+        return tekst_voor_taal(
+            "All your apps are up to date.",
+            "Al je apps zijn up-to-date."
+        )
+
+    zichtbaar = updates[:20]
+    regels_en = [f"{item['name']} ({item['current_version']} -> {item['available_version']})" for item in zichtbaar]
+    regels_nl = regels_en
+    extra = len(updates) - len(zichtbaar)
+    suffix_en = f" (+{extra} more)" if extra else ""
+    suffix_nl = f" (+{extra} meer)" if extra else ""
+
+    return tekst_voor_taal(
+        f"{len(updates)} apps can be updated: " + ", ".join(regels_en) + suffix_en
+        + " Say 'remove <app>' if you want me to uninstall one instead.",
+        f"{len(updates)} apps kunnen geupdatet worden: " + ", ".join(regels_nl) + suffix_nl
+        + " Zeg 'verwijder <app>' als je er een wilt laten verwijderen."
+    )
+
+
+def voer_app_updates_uit():
+    # Voert bulk-upgrade uit via winget wanneer gebruiker bevestigt.
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not update apps because winget is not available on this computer.",
+            "Ik kon apps niet updaten omdat winget niet beschikbaar is op deze computer."
+        )
+
+    updates = scan_app_updates_winget(force=True)
+    if not updates:
+        return tekst_voor_taal(
+            "All your apps are already up to date.",
+            "Al je apps zijn al up-to-date."
+        )
+
+    try:
+        resultaat = subprocess.run(
+            ["winget", "upgrade", "--all", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=1800,
+        )
+    except Exception as e:
+        return tekst_voor_taal(f"Error updating apps: {e}", f"Fout bij updaten van apps: {e}")
+
+    with APP_UPDATE_LOCK:
+        global APP_UPDATE_CACHE, APP_UPDATE_CACHE_AT
+        APP_UPDATE_CACHE = []
+        APP_UPDATE_CACHE_AT = 0.0
+
+    if resultaat.returncode != 0:
+        foutmelding = (resultaat.stderr or resultaat.stdout or "winget upgrade failed").strip()
+        return tekst_voor_taal(
+            f"Some apps may not have updated correctly: {foutmelding}",
+            f"Sommige apps zijn mogelijk niet correct geupdatet: {foutmelding}"
+        )
+
+    aantal = len(updates)
+    return tekst_voor_taal(
+        f"Updated {aantal} app{'s' if aantal != 1 else ''}.",
+        f"{aantal} app{'s' if aantal != 1 else ''} geupdatet."
+    )
+
+
+def vind_app_update_of_scan_match(app_naam):
+    schoon = schoon_computerdoel(app_naam).casefold()
+    if not schoon:
+        return None
+
+    for item in scan_app_updates_winget():
+        if schoon in item["name"].casefold() or schoon in item["id"].casefold():
+            return {"name": item["name"], "id": item["id"]}
+
+    gescand = vind_gescande_app(app_naam, minimum_score=0.66)
+    if gescand:
+        return {"name": gescand["name"], "id": ""}
+
+    return None
+
+
+def voer_app_verwijderen_uit(app_naam):
+    match = vind_app_update_of_scan_match(app_naam)
+    naam_voor_weergave = match["name"] if match else schoon_computerdoel(app_naam)
+
+    if not winget_beschikbaar():
+        return tekst_voor_taal(
+            "I could not uninstall the app because winget is not available on this computer.",
+            "Ik kon de app niet verwijderen omdat winget niet beschikbaar is op deze computer."
+        )
+
+    doel = match["id"] if match and match.get("id") else naam_voor_weergave
+    try:
+        resultaat = subprocess.run(
+            ["winget", "uninstall", "--accept-source-agreements", "--disable-interactivity", doel],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=120,
+        )
+    except Exception as e:
+        return tekst_voor_taal(f"Error removing app: {e}", f"Fout bij verwijderen van app: {e}")
+
+    if resultaat.returncode != 0:
+        foutmelding = (resultaat.stderr or resultaat.stdout or "winget uninstall failed").strip()
+        return tekst_voor_taal(
+            f"Could not remove {naam_voor_weergave}: {foutmelding}",
+            f"Kon {naam_voor_weergave} niet verwijderen: {foutmelding}"
+        )
+
+    with APP_UPDATE_LOCK:
+        global APP_UPDATE_CACHE
+        APP_UPDATE_CACHE = [item for item in APP_UPDATE_CACHE if item["name"] != naam_voor_weergave]
+
+    return tekst_voor_taal(f"{naam_voor_weergave} removed", f"{naam_voor_weergave} verwijderd")
+
+
 def maak_help_bericht():
     apps = scan_geinstalleerde_apps()
     app_namen = ", ".join(item["name"] for item in apps[:30])
     app_regel = f" Gevonden apps: {app_namen}." if app_namen else ""
     return tekst_voor_taal(
-        "I can open apps and websites, search Google or YouTube, work with files and folders, calculate, show system and battery information, manage tasks, timers and reminders, remember notes, control supported computer functions, scan your apps, and answer questions." + app_regel,
-        "Ik kan apps en websites openen, zoeken op Google of YouTube, met bestanden en mappen werken, rekenen, systeem- en batterij-informatie geven, taken, timers en herinneringen beheren, notities onthouden, ondersteunde computerfuncties bedienen, je apps scannen en vragen beantwoorden." + app_regel
+        "I can open apps and websites, search Google or YouTube, click a specific link from search results, send messages through WhatsApp, start WhatsApp voice or video calls with contacts, send Discord channel messages, send Discord 1-on-1 DMs to friends, start Discord voice or video calls with friends, work with files and folders, calculate, show system and battery information, run system diagnostics, run Windows Defender threat scans, clean detected threats after confirmation, manage tasks, timers and reminders, remember notes, control supported computer functions, scan your apps, and answer questions." + app_regel,
+        "Ik kan apps en websites openen, zoeken op Google of YouTube, een specifieke link uit zoekresultaten openen, berichten sturen via WhatsApp, WhatsApp voice- of videocalls met contacten proberen te starten, Discord-kanaalberichten sturen, Discord 1-op-1 DM-berichten naar vrienden sturen, Discord voice- of videocalls met vrienden starten, met bestanden en mappen werken, rekenen, systeem- en batterij-informatie geven, systeemdiagnose uitvoeren, Windows Defender dreigingsscans draaien, gevonden dreigingen na bevestiging opruimen, taken, timers en herinneringen beheren, notities onthouden, ondersteunde computerfuncties bedienen, je apps scannen en vragen beantwoorden." + app_regel
+    )
+
+
+SPECIFIEKE_HELP_ONDERWERPEN = {
+    "discord": {
+        "aliases": {"discord", "dm", "direct message", "private message", "bericht discord"},
+        "requires_automation": True,
+        "response_en": "For Discord I can: send channel messages, send 1-on-1 DMs to friends, start 1-on-1 voice or video calls with friends, and search inside Discord with 'search <term> in discord'.",
+        "response_nl": "Met Discord kan ik: kanaalberichten sturen, 1-op-1 DM's naar vrienden sturen, 1-op-1 voice- of videocalls starten met vrienden, en in Discord zoeken met 'zoek <term> in discord'.",
+    },
+    "whatsapp": {
+        "aliases": {"whatsapp", "app"},
+        "requires_automation": True,
+        "response_en": "For WhatsApp I can: open a web message draft by phone number, send desktop WhatsApp messages by contact name, open a contact chat, and try to start a voice or video call.",
+        "response_nl": "Met WhatsApp kan ik: een web-berichtvoorstel openen via telefoonnummer, desktop-WhatsApp berichten sturen op contactnaam, een contactchat openen en een voice- of videocall proberen te starten.",
+    },
+    "browser": {
+        "aliases": {"browser", "web", "internet", "chrome", "edge", "website", "websites"},
+        "requires_automation": False,
+        "response_en": "For browser tasks I can: open websites, open multiple tabs, run Google or YouTube searches, and read or summarize web pages.",
+        "response_nl": "Voor browsertaken kan ik: websites openen, meerdere tabs openen, op Google of YouTube zoeken, en webpagina's lezen of samenvatten.",
+    },
+    "links": {
+        "aliases": {"link", "links", "zoekresultaat", "search result", "search results"},
+        "requires_automation": False,
+        "response_en": "For links I can: click a specific search-result link by number (for example link 3) or by text match (for example 'echo docs').",
+        "response_nl": "Voor links kan ik: een specifieke zoekresultaat-link openen op nummer (bijvoorbeeld link 3) of op tekstmatch (bijvoorbeeld 'echo docs').",
+    },
+    "bestanden": {
+        "aliases": {"bestand", "bestanden", "file", "files", "folder", "map", "mappen", "workspace", "project"},
+        "requires_automation": False,
+        "response_en": "For files and folders I can: create, list, read, summarize, append, overwrite, rewrite, search, copy, move, rename, and delete paths with safety checks.",
+        "response_nl": "Voor bestanden en mappen kan ik: aanmaken, tonen, lezen, samenvatten, toevoegen, overschrijven, herschrijven, zoeken, kopieren, verplaatsen, hernoemen en paden verwijderen met veiligheidschecks.",
+    },
+    "security": {
+        "aliases": {"security", "beveiliging", "defender", "virus", "virussen", "malware", "threat", "dreiging", "dreigingen"},
+        "requires_automation": False,
+        "response_en": "For security I can: start a Windows Defender threat scan, show scan status, and clean detected threats after your confirmation.",
+        "response_nl": "Voor beveiliging kan ik: een Windows Defender dreigingsscan starten, scanstatus tonen, en gevonden dreigingen opruimen na jouw bevestiging.",
+    },
+    "systeem": {
+        "aliases": {"systeem", "system", "computer", "battery", "batterij", "wifi", "disk", "schijf", "ip", "tijd", "time"},
+        "requires_automation": False,
+        "response_en": "For system checks I can: show system info, battery status, Wi-Fi quality, disk space, IP address, and current time.",
+        "response_nl": "Voor systeemchecks kan ik: systeeminfo, batterijstatus, wifi-kwaliteit, schijfruimte, IP-adres en huidige tijd tonen.",
+    },
+    "apps": {
+        "aliases": {"apps", "app", "programma", "programmas", "programs", "software", "updates"},
+        "requires_automation": False,
+        "response_en": "For apps I can: scan installed apps, show available updates, apply updates, open apps, and remove apps through winget when available.",
+        "response_nl": "Voor apps kan ik: geinstalleerde apps scannen, beschikbare updates tonen, updates toepassen, apps openen, en apps verwijderen via winget als dat beschikbaar is.",
+    },
+    "steam": {
+        "aliases": {"steam", "game", "games", "spel", "spellen"},
+        "requires_automation": False,
+        "response_en": "For Steam I can: open a game by name, open by AppID, or open the Steam search page for your game query.",
+        "response_nl": "Voor Steam kan ik: een spel op naam openen, op AppID openen, of de Steam-zoekpagina openen voor je gamezoekterm.",
+    },
+    "taken": {
+        "aliases": {"taken", "tasks", "task", "agenda", "reminder", "herinnering", "timer", "planning"},
+        "requires_automation": False,
+        "response_en": "For planning I can: create tasks, reminders, and timers, and show your agenda/task overview.",
+        "response_nl": "Voor planning kan ik: taken, herinneringen en timers maken, en je agenda/takenoverzicht tonen.",
+    },
+    "automation": {
+        "aliases": {"automation", "automatisering", "macro", "muis", "mouse", "keyboard", "toetsen", "hotkey", "screenshot"},
+        "requires_automation": True,
+        "response_en": "For automation I can: run macros, type text, press keys/hotkeys, move or click the mouse, take screenshots, and control volume/brightness/window state.",
+        "response_nl": "Voor automation kan ik: macro's uitvoeren, tekst typen, toetsen/sneltoetsen drukken, de muis bewegen of klikken, screenshots maken, en volume/helderheid/vensterstatus bedienen.",
+    },
+}
+
+
+def normaliseer_help_onderwerp_tekst(onderwerp):
+    onderwerp = schoon_vraag_onderwerp(strip_omringende_quotes(str(onderwerp or ""))).lower()
+    onderwerp = re.sub(r"[^a-z0-9 @._-]", " ", onderwerp)
+    onderwerp = re.sub(r"\s+", " ", onderwerp).strip(" ._-")
+    return onderwerp
+
+
+def resolve_specifiek_help_onderwerp(onderwerp):
+    onderwerp_norm = normaliseer_help_onderwerp_tekst(onderwerp)
+    if not onderwerp_norm:
+        return ""
+
+    for sleutel, details in SPECIFIEKE_HELP_ONDERWERPEN.items():
+        aliassen = sorted(details.get("aliases", set()), key=len, reverse=True)
+        for alias in aliassen:
+            if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", onderwerp_norm):
+                return sleutel
+    return ""
+
+
+def maak_specifiek_help_bericht(onderwerp):
+    onderwerp_tekst = schoon_vraag_onderwerp(onderwerp)
+    onderwerp_sleutel = resolve_specifiek_help_onderwerp(onderwerp_tekst)
+
+    if onderwerp_sleutel:
+        details = SPECIFIEKE_HELP_ONDERWERPEN[onderwerp_sleutel]
+        bericht = tekst_voor_taal(details["response_en"], details["response_nl"])
+        if details.get("requires_automation"):
+            bericht += " " + tekst_voor_taal(
+                "Note: advanced computer control and automation mode must be enabled for this.",
+                "Let op: geavanceerde computerbesturing en automation-modus moeten hiervoor aan staan."
+            )
+        return bericht
+
+    bekende_onderwerpen = "discord, whatsapp, browser, links, bestanden, security, systeem, apps, steam, taken"
+    onderwerp_label = onderwerp_tekst or tekst_voor_taal("that topic", "dat onderwerp")
+    return tekst_voor_taal(
+        f"I don't have a dedicated feature list for '{onderwerp_label}' yet. Try one of these topics: {bekende_onderwerpen}.",
+        f"Ik heb nog geen aparte mogelijkhedenlijst voor '{onderwerp_label}'. Probeer een van deze onderwerpen: {bekende_onderwerpen}."
     )
 
 
 def open_url_in_browser(browser_sleutel, url):
+    # Opent bij voorkeur in gekozen browser, anders generieke fallback.
     command = list(APP_LAUNCH_COMMANDS.get(browser_sleutel, []))
     if not command:
         webbrowser.open(url)
@@ -5039,6 +6329,7 @@ def strip_markdown_code_blokken(tekst):
 
 
 def maak_extractieve_samenvatting(inhoud, max_zinnen=3, max_tekens=520):
+    # Eenvoudige lokale samenvatting als AI-samenvatting niet beschikbaar is.
     inhoud = re.sub(r"\s+", " ", str(inhoud or "")).strip()
     if not inhoud:
         return ""
@@ -5059,6 +6350,7 @@ def maak_extractieve_samenvatting(inhoud, max_zinnen=3, max_tekens=520):
 
 
 def vraag_korte_samenvatting_via_ai(bron_label, inhoud):
+    # Vraagt cloudmodel om compacte samenvatting van webpagina of bestand.
     if not online_ai_beschikbaar():
         return ""
 
@@ -5124,6 +6416,7 @@ def strip_html_naar_tekst(html_tekst):
 
 
 def haal_webpagina_context(url):
+    # Haalt URL op en maakt platte tekstcontext voor preview/samenvatting.
     url = normaliseer_url_voor_browser_taak(url)
     if not url:
         raise ValueError("Invalid URL")
@@ -5198,6 +6491,7 @@ def actieve_browser_sleutel():
 
 
 def browser_automation_blokkade_bericht():
+    # Uniforme blokkademelding voor browser-automation gating.
     if not instellingen.get("computerbesturing_toestaan", False):
         return tekst_voor_taal(
             "Enable advanced computer control in Settings first.",
@@ -5285,6 +6579,7 @@ def vul_browser_formulier_in(waarden):
 
 
 def voer_geavanceerde_browser_actie_uit(actie):
+    # Dispatcher voor browser-specifieke read/summarize/fill/submit acties.
     try:
         if actie == "browser current url":
             url = lees_huidige_browser_url()
@@ -5295,6 +6590,9 @@ def voer_geavanceerde_browser_actie_uit(actie):
 
         if actie == "browser summarize current":
             return samenvatting_van_webpagina(lees_huidige_browser_url())
+
+        if actie.startswith("browser click link::"):
+            return voer_browser_link_selectie_uit(actie.split("::", 1)[1])
 
         if actie.startswith("browser read url::"):
             return preview_van_webpagina(actie.split("::", 1)[1])
@@ -5376,6 +6674,20 @@ APP_MACROS = {
         "steps": [("hotkey", ["ctrl", "shift", "m"])],
         "label_en": "Discord mute toggle",
         "label_nl": "Discord mute-toggle",
+    },
+    "discord-call-button": {
+        "aliases": {
+            "bel op discord",
+            "discord bel knop",
+            "druk op de bel knop in discord",
+            "druk op discord bel knop",
+            "discord call button",
+            "press discord call button",
+        },
+        "app": "discord",
+        "steps": [("hotkey", ["ctrl", "["])],
+        "label_en": "Discord call button",
+        "label_nl": "Discord belknop",
     },
     "whatsapp-new-chat": {
         "aliases": {"whatsapp new chat", "new chat in whatsapp", "nieuw chat in whatsapp", "open whatsapp new chat"},
@@ -5677,6 +6989,7 @@ def split_pad_payload(actie):
 
 
 def split_tekst_en_pad_opdracht(payload_tekst):
+    # Probeert "tekst naar pad" opdrachten te splitsen zonder strikte syntax.
     payload_tekst = re.sub(r"\s+", " ", str(payload_tekst or "")).strip()
     if not payload_tekst:
         return "", ""
@@ -5709,6 +7022,7 @@ def formatteer_bestandsgrootte(aantal_bytes):
 
 
 def lees_tekst_preview(bestand_pad, max_regels=18, max_tekens=1500):
+    # Veilige preview: weigert binaire bestanden en begrenst outputlengte.
     bestand_pad = Path(bestand_pad)
     try:
         rauw = bestand_pad.read_bytes()
@@ -5763,6 +7077,7 @@ def vat_tekstbestand_samen(bestand_pad):
 
 
 def herschrijf_tekst_met_ai(bron_label, inhoud, instructie):
+    # Laat AI bestaande bestandstekst transformeren op basis van instructie.
     if not online_ai_beschikbaar():
         raise RuntimeError(tekst_voor_taal("AI rewrite is not available right now.", "AI-herschrijven is nu niet beschikbaar."))
 
@@ -5917,11 +7232,77 @@ def haal_lokaal_ip_adres():
 
 
 def maak_informatie_actie(stap):
+    # Herkent status/check-opdrachten en mapt ze op informatieve systeemacties.
     if re.fullmatch(
         r"(?:scan|show|list|check|inventariseer|bekijk|toon|laat zien)\s+(?:my|mijn|the|de)?\s*(?:installed )?(?:apps?|applications?|programma's?|programmas?|programma's op mijn computer)",
         stap,
     ):
         return "apps scan"
+
+    if re.fullmatch(
+        r"(?:list|show|noem|toon|laat zien)\s+(?:all\s+)?(?:the\s+)?(?:app\s+)?updates?"
+        r"|(?:welke\s+)?apps?\s+(?:moeten|kunnen)\s+updaten\s*(?:noem|welke)?",
+        stap,
+    ):
+        return "apps updates list"
+
+    if re.fullmatch(
+        r"(?:check|scan|zoek|bekijk)\s+(?:for\s+)?(?:app\s+)?updates?"
+        r"|(?:zijn er|are there)\s+(?:app\s+)?updates?"
+        r"|app\s*updates?",
+        stap,
+    ):
+        return "apps updates"
+
+    verwijder_app_match = re.match(
+        r"^(?:verwijder|deinstalleer|de-installeer|uninstall|remove)\s+(?:de\s+|het\s+|the\s+)?(?:app|programma|application|program)?\s*(.+)$",
+        stap,
+    )
+    if verwijder_app_match:
+        doel_tekst = str(verwijder_app_match.group(1) or "")
+        if re.search(r"\b(?:virus|viruses|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", doel_tekst.lower()):
+            return "security threat cleanup"
+
+        app_naam = schoon_computerdoel(doel_tekst)
+        if app_naam:
+            return f"apps uninstall::{app_naam}"
+
+    if re.fullmatch(
+        r"(?:security threat scan status|security scan status|threat scan status|virus scan status|malware scan status|defender scan status|beveiligingsscan status|dreigingsscan status|status beveiligingsscan|status dreigingsscan|status virusscan)",
+        stap,
+    ):
+        return "security threat scan status"
+
+    if re.search(r"\b(?:virus|viruses|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", stap) and re.search(r"\b(?:status|voortgang|progress)\b", stap):
+        return "security threat scan status"
+
+    if re.fullmatch(
+        r"(?:remove|clean|cleanup|quarantine|delete|verwijder|ruim op|opruimen|schoonmaken|haal(?:\s+het)?\s+weg)\s+(?:de\s+|het\s+|the\s+)?(?:windows\s+defender\s+)?(?:security\s+)?(?:threats?|dreigingen?|viruses?|virussen?|malware|gevaar(?:en)?|verdachte(?:\s+bestanden?)?)",
+        stap,
+    ):
+        return "security threat cleanup"
+
+    if (
+        re.search(r"\b(?:virus|viruses|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", stap)
+        and (
+            re.search(r"\b(?:remove|cleanup|clean|quarantine|delete|verwijder|opruim|schoonmaak)\b", stap)
+            or re.search(r"\bhaal\b.*\bweg\b", stap)
+        )
+    ):
+        return "security threat cleanup"
+
+    if re.fullmatch(
+        r"(?:start|run|begin|launch|do|perform|voer uit|starten|draai)?\s*(?:een\s+)?(?:windows\s+defender\s+)?(?:security|threat|virus|malware|beveiliging|veiligheid|dreiging)\s*(?:scan|check|test|controle|diagnose)",
+        stap,
+    ):
+        return "security threat scan start"
+
+    if (
+        re.search(r"\b(?:virus|viruses|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", stap)
+        and re.search(r"\b(?:scan|check|test|controle|diagnose)\b", stap)
+        and not re.search(r"\b(?:status|voortgang|progress|remove|cleanup|clean|quarantine|delete|verwijder|opruim|schoonmaak)\b", stap)
+    ):
+        return "security threat scan start"
 
     if re.fullmatch(
         r"(?:start|run|begin|launch|starten|draai|voer uit)?\s*(?:een\s+)?(?:system|windows|computer|systeem)?\s*(?:scan|diagnostics?|diagnose|integrity check|integriteitscontrole|repair scan|reparatiescan|bestandsscan|sfc scan)",
@@ -5970,6 +7351,7 @@ def maak_informatie_actie(stap):
 
 
 def maak_bestands_actie(originele_stap, stap):
+    # Parser voor workspace-acties (lezen, schrijven, kopieren, verplaatsen, zoeken).
     if re.match(r"^(?:move|verplaats)\s+(?:mouse|cursor|muis|venster|window)\b", stap):
         return ""
 
@@ -6070,7 +7452,10 @@ def maak_bestands_actie(originele_stap, stap):
 
     delete_match = re.match(r"^(?:delete|remove|verwijder|wis)\s+(.+)$", originele_stap, re.IGNORECASE)
     if delete_match:
-        doel_pad = schoon_pad_argument(delete_match.group(1))
+        doel_tekst = str(delete_match.group(1) or "")
+        if re.search(r"\b(?:virus|viruses|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", doel_tekst.lower()):
+            return ""
+        doel_pad = schoon_pad_argument(doel_tekst)
         if doel_pad:
             return f"delete path::{doel_pad}"
 
@@ -6078,6 +7463,7 @@ def maak_bestands_actie(originele_stap, stap):
 
 
 def maak_planner_actie(originele_stap, stap):
+    # Parser voor agenda/timer/reminder/task commando's.
     if re.fullmatch(r"(?:show|list|toon|laat zien)(?:\s+(?:my|mijn))?\s+(?:agenda|planner)", stap):
         return "agenda show"
 
@@ -6163,6 +7549,7 @@ def is_direct_doel_commando(stap):
 
 
 def maak_systeem_actie(stap):
+    # Vangt systeemniveau-intenties (openen, afsluiten, settings, confirm-flow).
     if re.fullmatch(
         r"(?:close|exit|quit|stop|shutdown|shut down|turn off|sluit|sluiten|stoppen|afsluiten|uitzetten)(?:\s+(?:echo|the echo app|de echo app|app|de app))?(?:\s+(?:af|app|programma|uit|uitzetten))?|(?:echo|the echo app|de echo app)\s+(?:close|exit|quit|stop|shutdown|shut down|turn off|sluit|sluiten|stoppen|afsluiten|uitzetten)|(?:zet|schakel)\s+(?:echo|de echo app|de app)\s+uit",
         stap,
@@ -6174,6 +7561,35 @@ def maak_systeem_actie(stap):
 
     if re.fullmatch(r"(?:cancel|annuleer|laat maar|niet doen)(?:\s+.+)?", stap):
         return "cancel pending action"
+
+    if (
+        re.search(r"\b(?:virus|viruses|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", stap)
+        and re.search(r"\b(?:scan|check|test|controle|diagnose|status|remove|cleanup|clean|quarantine|delete|verwijder|opruim|schoonmaak)\b", stap)
+    ):
+        return ""
+
+    if (
+        re.search(r"\b(?:vc|voice\s*call|voicecall|video\s*call|videocall|videochat)\b", stap)
+        and re.search(r"\b(?:discord|whatsapp)\b", stap)
+        and re.search(r"\b(?:met|naar|to|with)\b", stap)
+    ):
+        return ""
+
+    doel_eerst_open_match = re.match(r"^(?P<doel>.+?)\s+(?:open|openen|start|launch|run|draai)$", stap)
+    if doel_eerst_open_match:
+        doel_tekst = schoon_computerdoel(doel_eerst_open_match.group("doel"))
+        if doel_tekst:
+            setting_sleutel = vind_alias_sleutel(doel_tekst, SYSTEM_SETTING_TARGETS)
+            if not setting_sleutel:
+                setting_sleutel = vind_alias_sleutel_fuzzy(doel_tekst, SYSTEM_SETTING_TARGETS, minimum_score=0.75)
+            if setting_sleutel:
+                return f"open setting {setting_sleutel}"
+
+            app_sleutel = vind_alias_sleutel(doel_tekst, SYSTEM_APP_TARGETS)
+            if not app_sleutel:
+                app_sleutel = vind_alias_sleutel_fuzzy(doel_tekst, SYSTEM_APP_TARGETS, minimum_score=0.8)
+            if app_sleutel:
+                return f"open app {app_sleutel}"
 
     for actie, data in DANGEROUS_SYSTEM_ACTIONS.items():
         if stap in data["aliases"]:
@@ -6310,6 +7726,15 @@ def voer_bevestigde_actie_uit(actie):
 
     if actie.startswith("rewrite file::"):
         return voer_herschrijf_bestand_uit(actie)
+
+    if actie.startswith("apps uninstall::"):
+        return voer_app_verwijderen_uit(actie.split("::", 1)[1])
+
+    if actie == "apps updates apply":
+        return voer_app_updates_uit()
+
+    if actie == "security threat cleanup":
+        return voer_security_threat_cleanup_uit()
 
     return tekst_voor_taal(
         "There is no pending action to confirm.",
@@ -6837,6 +8262,13 @@ def automatisering_status_bericht():
     )
 
 
+def actie_mag_automatisering_auto_starten(actie):
+    actie = str(actie or "").strip().lower()
+    if not actie:
+        return False
+    return actie.startswith(AUTO_AUTOMATISERING_ACTION_PREFIXEN) or actie in AUTO_AUTOMATISERING_ACTION_EXACT
+
+
 def geavanceerde_besturing_geblokkeerd(actie):
     if not instellingen.get("computerbesturing_toestaan", False):
         return tekst_voor_taal(
@@ -6845,12 +8277,34 @@ def geavanceerde_besturing_geblokkeerd(actie):
         )
 
     if not automatisering_actief():
+        if actie_mag_automatisering_auto_starten(actie):
+            activeer_automatisering_modus()
+        else:
+            return tekst_voor_taal(
+                "Automation mode is off. Say enable automation mode first. It stays active for 5 minutes.",
+                "Automation-modus staat uit. Zeg eerst schakel automation-modus in. Die blijft 5 minuten actief."
+            )
+
+    if not automatisering_actief():
         return tekst_voor_taal(
             "Automation mode is off. Say enable automation mode first. It stays active for 5 minutes.",
             "Automation-modus staat uit. Zeg eerst schakel automation-modus in. Die blijft 5 minuten actief."
         )
 
-    if actie.startswith(("mouse ", "type text::", "press key::", "press hotkey::", "window ", "run macro ")) and not AUTOMATISERING_BESCHIKBAAR:
+    if actie.startswith((
+        "mouse ",
+        "type text::",
+        "press key::",
+        "press hotkey::",
+        "window ",
+        "run macro ",
+        "app search::",
+        "whatsapp send::",
+        "whatsapp call::",
+        "discord send::",
+        "discord dm::",
+        "discord call::",
+    )) and not AUTOMATISERING_BESCHIKBAAR:
         return tekst_voor_taal(
             "Automation support is not available because PyAutoGUI could not be loaded.",
             "Automation-ondersteuning is niet beschikbaar omdat PyAutoGUI niet geladen kon worden."
@@ -7026,12 +8480,474 @@ def open_doel_url_of_protocol(url):
             return False
 
 
+def ordinaal_link_index(waarde):
+    waarde = re.sub(r"\s+", " ", str(waarde or "").strip().lower())
+    waarde = waarde.strip(" .,")
+    if not waarde:
+        return 0
+
+    if re.fullmatch(r"\d{1,2}", waarde):
+        return int(waarde)
+
+    suffix_match = re.fullmatch(r"(\d{1,2})(?:e|de|ste)", waarde)
+    if suffix_match:
+        return int(suffix_match.group(1))
+
+    ordinaal_map = {
+        "first": 1,
+        "eerste": 1,
+        "second": 2,
+        "tweede": 2,
+        "third": 3,
+        "derde": 3,
+        "fourth": 4,
+        "vierde": 4,
+        "fifth": 5,
+        "vijfde": 5,
+        "sixth": 6,
+        "zesde": 6,
+        "seventh": 7,
+        "zevende": 7,
+        "eighth": 8,
+        "achtste": 8,
+        "ninth": 9,
+        "negende": 9,
+        "tenth": 10,
+        "tiende": 10,
+    }
+    return ordinaal_map.get(waarde, 0)
+
+
+def bron_url_van_webactie(actie):
+    actie = normaliseer_actie(str(actie or "").strip())
+    if not actie:
+        return ""
+
+    if actie.startswith("search google "):
+        zoekterm = actie[len("search google "):].strip()
+        return f"https://www.google.com/search?q={quote_plus(zoekterm)}" if zoekterm else ""
+
+    if actie.startswith("search youtube "):
+        zoekterm = actie[len("search youtube "):].strip()
+        return f"https://www.youtube.com/results?search_query={quote_plus(zoekterm)}" if zoekterm else ""
+
+    if actie.startswith("open browser url::"):
+        delen = split_pad_payload(actie)
+        if len(delen) >= 2:
+            return normaliseer_url_voor_browser_taak(delen[1]) or ""
+
+    if actie.startswith("open website "):
+        doel = re.sub(r"^open website\s*", "", actie).strip()
+        return normaliseer_url_voor_browser_taak(webdoel_naar_url(doel)) or ""
+
+    if actie.startswith("open new tab "):
+        doel = re.sub(r"^open new tab\s*", "", actie).strip()
+        return normaliseer_url_voor_browser_taak(webdoel_naar_url(doel)) or ""
+
+    if actie.startswith("open websites "):
+        doelen = haal_webdoelen_uit_actie(actie, "open websites")
+        if doelen:
+            return normaliseer_url_voor_browser_taak(webdoel_naar_url(doelen[0])) or ""
+
+    if actie.startswith("open new tabs "):
+        doelen = haal_webdoelen_uit_actie(actie, "open new tabs")
+        if doelen:
+            return normaliseer_url_voor_browser_taak(webdoel_naar_url(doelen[0])) or ""
+
+    return ""
+
+
+def bron_url_voor_link_selectie():
+    context_url = bron_url_van_webactie(GESPREK_CONTEXT.get("laatste_webactie", ""))
+    if context_url:
+        return context_url, ""
+
+    try:
+        return lees_huidige_browser_url(), ""
+    except Exception as e:
+        return "", str(e)
+
+
+def haal_webpagina_html(url):
+    url = normaliseer_url_voor_browser_taak(url)
+    if not url:
+        raise ValueError("Invalid URL")
+
+    request_obj = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "EchoDesktop/1.0",
+            "Accept": "text/html, text/plain;q=0.9, */*;q=0.1",
+        },
+    )
+    with urllib.request.urlopen(request_obj, timeout=25) as response:
+        rauw = response.read(450_000)
+        inhoud_type = str(response.headers.get("Content-Type", "")).lower()
+        charset = response.headers.get_content_charset() or "utf-8"
+
+    if "text/" not in inhoud_type and "html" not in inhoud_type:
+        raise ValueError("Unsupported page content")
+
+    html_tekst = rauw.decode(charset, errors="ignore")
+    titel_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html_tekst)
+    titel = html.unescape(titel_match.group(1)).strip() if titel_match else url
+    return {
+        "url": url,
+        "title": opschonen_korte_tekst(titel, max_lengte=140),
+        "html": html_tekst,
+    }
+
+
+def normaliseer_link_href(href, basis_url):
+    href = html.unescape(str(href or "").strip())
+    if not href:
+        return ""
+
+    href_lower = href.lower()
+    if href_lower.startswith(("#", "javascript:", "mailto:", "tel:", "data:")):
+        return ""
+
+    absolute_url = urljoin(basis_url, href)
+    parsed = urlparse(absolute_url)
+    if "google." in parsed.netloc.lower() and parsed.path == "/url":
+        redirect_doel = str((parse_qs(parsed.query).get("q") or [""])[0] or "").strip()
+        if redirect_doel:
+            absolute_url = redirect_doel
+
+    return normaliseer_url_voor_browser_taak(absolute_url) or ""
+
+
+def extraheer_ankertekst_uit_html(fragment):
+    tekst = strip_html_naar_tekst(fragment)
+    tekst = re.sub(r"\s+", " ", str(tekst or "")).strip()
+    return opschonen_korte_tekst(tekst, max_lengte=160)
+
+
+def extraheer_klikbare_links_uit_html(html_tekst, basis_url, max_items=70):
+    links = []
+    gezien_urls = set()
+
+    for match in re.finditer(r"(?is)<a\b[^>]*href\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</a>", str(html_tekst or "")):
+        url = normaliseer_link_href(match.group(2), basis_url)
+        if not url or url in gezien_urls:
+            continue
+
+        ankertekst = extraheer_ankertekst_uit_html(match.group(3))
+        if not ankertekst:
+            parsed = urlparse(url)
+            ankertekst = opschonen_korte_tekst((parsed.netloc + parsed.path).strip("/"), max_lengte=120) or url
+
+        links.append({
+            "index": len(links) + 1,
+            "url": url,
+            "text": ankertekst,
+        })
+        gezien_urls.add(url)
+
+        if len(links) >= max_items:
+            break
+
+    return links
+
+
+def zoek_link_op_zoektekst(links, zoektekst):
+    zoek_norm = normaliseer_app_naam(zoektekst)
+    if not zoek_norm:
+        return None, 0.0
+
+    beste_match = None
+    beste_score = 0.0
+    for link_item in links:
+        tekst_norm = normaliseer_app_naam(link_item.get("text", ""))
+        url_norm = normaliseer_app_naam(link_item.get("url", ""))
+
+        score = max(
+            app_naam_match_score(zoek_norm, tekst_norm),
+            app_naam_match_score(zoek_norm, url_norm),
+        )
+
+        if zoek_norm in tekst_norm:
+            score = max(score, 0.82)
+        if zoek_norm in url_norm:
+            score = max(score, 0.72)
+
+        if score > beste_score:
+            beste_match = link_item
+            beste_score = score
+
+    return beste_match, beste_score
+
+
+def voer_browser_link_selectie_uit(selectie_payload):
+    if "||" not in str(selectie_payload or ""):
+        return tekst_voor_taal(
+            "Tell me which link to open, for example: click link 2.",
+            "Vertel welke link ik moet openen, bijvoorbeeld: klik link 2."
+        )
+
+    selectie_type, selectie_waarde = str(selectie_payload).split("||", 1)
+    selectie_type = str(selectie_type or "").strip().lower()
+    selectie_waarde = strip_omringende_quotes(str(selectie_waarde or "").strip())
+
+    bron_url, bron_fout = bron_url_voor_link_selectie()
+    if not bron_url:
+        suffix = f" ({bron_fout})" if bron_fout else ""
+        return tekst_voor_taal(
+            "I could not determine which page to inspect. Start a search first, then ask me to click a link." + suffix,
+            "Ik kon niet bepalen welke pagina ik moet uitlezen. Start eerst een zoekopdracht, en vraag daarna welke link ik moet openen." + suffix
+        )
+
+    try:
+        pagina = haal_webpagina_html(bron_url)
+    except Exception as e:
+        return tekst_voor_taal(
+            f"I could not read that page: {e}",
+            f"Ik kon die pagina niet uitlezen: {e}"
+        )
+
+    links = extraheer_klikbare_links_uit_html(pagina.get("html", ""), pagina.get("url", bron_url))
+    if not links:
+        return tekst_voor_taal(
+            "I could not find clickable links on that page.",
+            "Ik kon geen klikbare links op die pagina vinden."
+        )
+
+    gekozen_link = None
+    if selectie_type == "index":
+        index = ordinaal_link_index(selectie_waarde)
+        if index <= 0:
+            return tekst_voor_taal(
+                "That link number is not valid.",
+                "Dat linknummer is niet geldig."
+            )
+        if index > len(links):
+            return tekst_voor_taal(
+                f"I found {len(links)} link(s), so link {index} does not exist.",
+                f"Ik vond {len(links)} link(s), dus link {index} bestaat niet."
+            )
+        gekozen_link = links[index - 1]
+    else:
+        gekozen_link, score = zoek_link_op_zoektekst(links, selectie_waarde)
+        if not gekozen_link or score < 0.56:
+            suggesties = ", ".join(item["text"] for item in links[:6])
+            return tekst_voor_taal(
+                f"I could not find a close link match for '{selectie_waarde}'. Top links: {suggesties}",
+                f"Ik kon geen goede linkmatch vinden voor '{selectie_waarde}'. Bovenste links: {suggesties}"
+            )
+
+    if not open_doel_url_of_protocol(gekozen_link["url"]):
+        return tekst_voor_taal(
+            "I found the link but could not open it.",
+            "Ik vond de link, maar kon hem niet openen."
+        )
+
+    # Update context zodat opvolgopdrachten op de nieuw geopende pagina kunnen verdergaan.
+    GESPREK_CONTEXT["laatste_webactie"] = f"open website {gekozen_link['url']}"
+
+    return tekst_voor_taal(
+        f"Opened link {gekozen_link['index']}: {gekozen_link['text']}",
+        f"Link {gekozen_link['index']} geopend: {gekozen_link['text']}"
+    )
+
+
 def normaliseer_whatsapp_nummer(contact):
     nummer = re.sub(r"[^0-9+]", "", str(contact or "").strip())
     if nummer.startswith("00"):
         nummer = nummer[2:]
     nummer = nummer.lstrip("+")
     return nummer if len(nummer) >= 8 else ""
+
+
+def normaliseer_beltype(waarde):
+    tekst = re.sub(r"\s+", " ", str(waarde or "").strip().lower())
+    if not tekst:
+        return "voice"
+    if any(fragment in tekst for fragment in ("video", "videocall", "video call", "videochat")):
+        return "video"
+    if any(fragment in tekst for fragment in ("voice", "voicecall", "voice call", "vc")):
+        return "voice"
+    return "voice"
+
+
+def normaliseer_beldoel_tekst(bestemming):
+    doel = strip_omringende_quotes(str(bestemming or "").strip())
+    doel = re.sub(r"\s+", " ", doel).strip(" .:")
+    doel = strip_discord_vriend_prefix(doel)
+    doel = re.sub(r"^(?:contact|persoon|person|vriend|friend)\s+", "", doel, flags=re.IGNORECASE)
+    doel = doel.strip(" .:")
+    doel = re.sub(r"^<\s*(.*?)\s*>$", r"\1", doel)
+    doel = re.sub(r"^:+\s*", "", doel)
+    doel = re.sub(r"\s*:+$", "", doel)
+    return doel.strip(" .:")
+
+
+def parseer_bel_payload(payload, standaard_beltype="voice"):
+    payload_tekst = strip_omringende_quotes(str(payload or "").strip())
+    if not payload_tekst:
+        return normaliseer_beltype(standaard_beltype), ""
+
+    if "||" not in payload_tekst:
+        return normaliseer_beltype(standaard_beltype), normaliseer_beldoel_tekst(payload_tekst)
+
+    beltype_raw, doel_raw = payload_tekst.split("||", 1)
+    beltype = normaliseer_beltype(beltype_raw)
+    doel = normaliseer_beldoel_tekst(doel_raw)
+
+    if doel:
+        return beltype, doel
+
+    # Compatibiliteit: als payload per ongeluk omgedraaid is, probeer dat automatisch te herstellen.
+    fallback_doel = normaliseer_beldoel_tekst(beltype_raw)
+    fallback_beltype = normaliseer_beltype(doel_raw)
+    return fallback_beltype, fallback_doel
+
+
+def beltype_labels(beltype):
+    if normaliseer_beltype(beltype) == "video":
+        return "video call", "videocall"
+    return "voice call", "voicecall"
+
+
+def open_whatsapp_doel_via_zoeken(bestemming):
+    doel = normaliseer_beldoel_tekst(bestemming)
+    if not doel:
+        return ""
+
+    pyautogui.hotkey("ctrl", "n")
+    time.sleep(0.35)
+    pyautogui.write(doel, interval=0.02)
+    time.sleep(0.25)
+    pyautogui.press("enter")
+    time.sleep(0.55)
+    return doel
+
+
+def klik_whatsapp_call_knop(beltype="voice"):
+    venster = haal_actief_venster()
+    if not venster:
+        return False
+
+    if getattr(venster, "isMinimized", False):
+        try:
+            venster.restore()
+            time.sleep(0.15)
+        except Exception:
+            return False
+
+    try:
+        venster.activate()
+        time.sleep(0.15)
+    except Exception:
+        pass
+
+    links = int(getattr(venster, "left", 0))
+    boven = int(getattr(venster, "top", 0))
+    breedte = int(getattr(venster, "width", 0))
+    hoogte = int(getattr(venster, "height", 0))
+    if breedte <= 0 or hoogte <= 0:
+        return False
+
+    beltype_norm = normaliseer_beltype(beltype)
+    x_offset, y_offset = WHATSAPP_CALL_BUTTON_OFFSETS.get(
+        beltype_norm,
+        WHATSAPP_CALL_BUTTON_OFFSETS["voice"],
+    )
+
+    doel_x = int(max(links + 30, links + breedte + int(x_offset)))
+    doel_y = int(max(boven + 30, boven + int(y_offset)))
+
+    pyautogui.moveTo(doel_x, doel_y, duration=0.12)
+    pyautogui.click()
+    time.sleep(0.25)
+    return True
+
+
+def normaliseer_discord_doel(bestemming, dm_mode=False):
+    doel = strip_omringende_quotes(str(bestemming or "").strip())
+    doel = re.sub(r"\s+", " ", doel).strip(" .")
+    if not doel:
+        return ""
+
+    doel_zonder_prefix = strip_discord_vriend_prefix(doel)
+    if dm_mode:
+        alias_map = normaliseer_discord_dm_aliases(instellingen.get("discord_dm_vriend_aliases", {}))
+        kandidaat_sleutels = [
+            normaliseer_discord_alias_sleutel(doel),
+            normaliseer_discord_alias_sleutel(doel_zonder_prefix),
+            normaliseer_discord_alias_sleutel(doel.lstrip("@")),
+        ]
+        for sleutel in kandidaat_sleutels:
+            if sleutel and sleutel in alias_map:
+                doel_zonder_prefix = alias_map[sleutel]
+                break
+
+    doel = doel_zonder_prefix.strip(" .")
+    if not doel:
+        return ""
+
+    if dm_mode:
+        doel = doel.lstrip("@").strip(" .")
+        return f"@{doel}" if doel else ""
+    return doel
+
+
+def open_discord_doel_via_quickswitcher(bestemming, dm_mode=False):
+    bestemming_norm = normaliseer_discord_doel(bestemming, dm_mode=bool(dm_mode))
+    if not bestemming_norm:
+        return ""
+
+    pyautogui.hotkey("ctrl", "k")
+    time.sleep(0.35)
+    pyautogui.write(bestemming_norm, interval=0.02)
+    time.sleep(0.25)
+    pyautogui.press("enter")
+    time.sleep(0.55)
+    return bestemming_norm
+
+
+def klik_discord_belknop(beltype="voice"):
+    venster = haal_actief_venster()
+    if not venster:
+        return False
+
+    if getattr(venster, "isMinimized", False):
+        try:
+            venster.restore()
+            time.sleep(0.15)
+        except Exception:
+            return False
+
+    try:
+        venster.activate()
+        time.sleep(0.15)
+    except Exception:
+        pass
+
+    links = int(getattr(venster, "left", 0))
+    boven = int(getattr(venster, "top", 0))
+    breedte = int(getattr(venster, "width", 0))
+    hoogte = int(getattr(venster, "height", 0))
+    if breedte <= 0 or hoogte <= 0:
+        return False
+
+    beltype_norm = normaliseer_beltype(beltype)
+    kandidaten = DISCORD_CALL_BUTTON_OFFSETS.get(
+        beltype_norm,
+        DISCORD_CALL_BUTTON_OFFSETS["voice"],
+    )
+
+    for x_offset, y_offset in kandidaten:
+        doel_x = int(max(links + 30, links + breedte + int(x_offset)))
+        doel_y = int(max(boven + 24, boven + int(y_offset)))
+        try:
+            pyautogui.moveTo(doel_x, doel_y, duration=0.12)
+            pyautogui.click()
+            time.sleep(0.2)
+            return True
+        except Exception:
+            continue
+
+    return False
 
 
 def voer_steam_game_actie_uit(spel_zoekterm):
@@ -7124,6 +9040,163 @@ def voer_whatsapp_bericht_actie_uit(contact, bericht):
         return tekst_voor_taal(
             f"Error sending WhatsApp message: {e}",
             f"Fout bij versturen van WhatsApp-bericht: {e}"
+        )
+
+
+def voer_discord_bericht_actie_uit(bestemming, bericht, dm_mode=False):
+    bestemming = strip_omringende_quotes(str(bestemming or "").strip())
+    bericht = strip_omringende_quotes(str(bericht or "").strip())
+    if not bericht:
+        return tekst_voor_taal(
+            "Provide a Discord message to send.",
+            "Geef een Discord-bericht op om te versturen."
+        )
+
+    bestemming_norm = normaliseer_discord_doel(bestemming, dm_mode=bool(dm_mode))
+    if dm_mode and not bestemming_norm:
+        return tekst_voor_taal(
+            "For a Discord 1-on-1 message, tell me which friend to send it to.",
+            "Voor een Discord 1-op-1 bericht moet je zeggen naar welke vriend ik het stuur."
+        )
+
+    blokkade = geavanceerde_besturing_geblokkeerd("discord send::channel")
+    if blokkade:
+        return blokkade
+
+    gefocust, _app_sleutel, _match_naam = focus_of_open_app_voor_actie("discord")
+    if not gefocust:
+        return tekst_voor_taal(
+            "Could not focus Discord. Open Discord first and try again.",
+            "Kon Discord niet activeren. Open Discord eerst en probeer opnieuw."
+        )
+
+    try:
+        if bestemming_norm:
+            bestemming_norm = open_discord_doel_via_quickswitcher(bestemming, dm_mode=bool(dm_mode))
+            if not bestemming_norm:
+                return tekst_voor_taal(
+                    "Could not open that Discord chat target.",
+                    "Kon dat Discord-chatdoel niet openen."
+                )
+
+        pyautogui.write(bericht, interval=0.02)
+        pyautogui.press("enter")
+
+        if bestemming_norm and dm_mode:
+            return tekst_voor_taal(
+                f"Discord 1-on-1 message sent to {bestemming_norm.lstrip('@')}.",
+                f"Discord 1-op-1 bericht verstuurd naar {bestemming_norm.lstrip('@')}."
+            )
+
+        if bestemming_norm:
+            return tekst_voor_taal(
+                f"Discord message sent to {bestemming_norm.lstrip('@')}.",
+                f"Discord-bericht verstuurd naar {bestemming_norm.lstrip('@')}."
+            )
+        return tekst_voor_taal(
+            "Discord message sent in the active channel.",
+            "Discord-bericht verstuurd in het actieve kanaal."
+        )
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Error sending Discord message: {e}",
+            f"Fout bij versturen van Discord-bericht: {e}"
+        )
+
+
+def voer_discord_bel_actie_uit(bestemming, beltype="voice"):
+    bestemming = normaliseer_beldoel_tekst(bestemming)
+    beltype = normaliseer_beltype(beltype)
+    if not bestemming:
+        return tekst_voor_taal(
+            "Tell me who to call on Discord.",
+            "Zeg wie ik op Discord moet bellen."
+        )
+
+    blokkade = geavanceerde_besturing_geblokkeerd("discord call::friend")
+    if blokkade:
+        return blokkade
+
+    gefocust, _app_sleutel, _match_naam = focus_of_open_app_voor_actie("discord")
+    if not gefocust:
+        return tekst_voor_taal(
+            "Could not focus Discord. Open Discord first and try again.",
+            "Kon Discord niet activeren. Open Discord eerst en probeer opnieuw."
+        )
+
+    try:
+        bestemming_norm = open_discord_doel_via_quickswitcher(bestemming, dm_mode=True)
+        if not bestemming_norm:
+            return tekst_voor_taal(
+                "For a Discord call, tell me which friend to call.",
+                "Voor een Discord-call moet je zeggen welke vriend ik moet bellen."
+            )
+
+        call_en, call_nl = beltype_labels(beltype)
+        if klik_discord_belknop(beltype):
+            return tekst_voor_taal(
+                f"Clicked the Discord {call_en} button for {bestemming_norm.lstrip('@')}.",
+                f"Discord {call_nl}-knop aangeklikt voor {bestemming_norm.lstrip('@')}."
+            )
+
+        hotkey = DISCORD_VIDEO_CALL_HOTKEY if beltype == "video" else DISCORD_CALL_HOTKEY
+        pyautogui.hotkey(*hotkey)
+        time.sleep(0.25)
+        return tekst_voor_taal(
+            f"Tried to start a Discord {call_en} with {bestemming_norm.lstrip('@')} via shortcut fallback.",
+            f"Discord-{call_nl} geprobeerd te starten met {bestemming_norm.lstrip('@')} via sneltoets-fallback."
+        )
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Error starting Discord call: {e}",
+            f"Fout bij starten van Discord-call: {e}"
+        )
+
+
+def voer_whatsapp_bel_actie_uit(bestemming, beltype="voice"):
+    bestemming = normaliseer_beldoel_tekst(bestemming)
+    beltype = normaliseer_beltype(beltype)
+    if not bestemming:
+        return tekst_voor_taal(
+            "Tell me who to call on WhatsApp.",
+            "Zeg wie ik op WhatsApp moet bellen."
+        )
+
+    blokkade = geavanceerde_besturing_geblokkeerd("whatsapp call::friend")
+    if blokkade:
+        return blokkade
+
+    gefocust, _app_sleutel, _match_naam = focus_of_open_app_voor_actie("whatsapp")
+    if not gefocust:
+        return tekst_voor_taal(
+            "Could not focus WhatsApp. Open WhatsApp first and try again.",
+            "Kon WhatsApp niet activeren. Open WhatsApp eerst en probeer opnieuw."
+        )
+
+    try:
+        bestemming_norm = open_whatsapp_doel_via_zoeken(bestemming)
+        if not bestemming_norm:
+            return tekst_voor_taal(
+                "For a WhatsApp call, tell me which contact to call.",
+                "Voor een WhatsApp-call moet je zeggen welk contact ik moet bellen."
+            )
+
+        if not klik_whatsapp_call_knop(beltype):
+            call_en, call_nl = beltype_labels(beltype)
+            return tekst_voor_taal(
+                f"Opened WhatsApp chat with {bestemming_norm}, but I could not locate the {call_en} button automatically.",
+                f"WhatsApp-chat met {bestemming_norm} is geopend, maar ik kon de {call_nl}-knop niet automatisch vinden."
+            )
+
+        call_en, call_nl = beltype_labels(beltype)
+        return tekst_voor_taal(
+            f"Tried to start a WhatsApp {call_en} with {bestemming_norm}.",
+            f"WhatsApp-{call_nl} geprobeerd te starten met {bestemming_norm}."
+        )
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Error starting WhatsApp call: {e}",
+            f"Fout bij starten van WhatsApp-call: {e}"
         )
 
 
@@ -7612,6 +9685,123 @@ def voer_bluetooth_actie_uit(modus):
     )
 
 
+MEDIA_VK_PLAY_PAUSE = 0xB3
+MEDIA_VK_STOP = 0xB2
+MUZIEK_ALIASSEN = {"muziek", "music", "liedje", "liedjes", "songs", "song", "nummer", "nummers"}
+
+APP_PROCES_NAAM_OVERRIDES = {
+    "chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "discord": "Discord.exe",
+    "whatsapp": "WhatsApp.exe",
+    "steam": "steam.exe",
+    "spotify": "Spotify.exe",
+    "notepad": "notepad.exe",
+    "calculator": "CalculatorApp.exe",
+    "paint": "mspaint.exe",
+    "command prompt": "cmd.exe",
+    "powershell": "powershell.exe",
+    "file explorer": "explorer.exe",
+    "task manager": "Taskmgr.exe",
+    "control panel": "control.exe",
+    "snipping tool": "SnippingTool.exe",
+}
+
+
+def stuur_media_toets(vk_code):
+    KEYEVENTF_KEYUP = 0x0002
+    ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+    ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_KEYUP, 0)
+
+
+def voer_muziek_actie_uit(state):
+    try:
+        if state == "off":
+            stuur_media_toets(MEDIA_VK_STOP)
+            return tekst_voor_taal("Music stopped", "Muziek gestopt")
+        stuur_media_toets(MEDIA_VK_PLAY_PAUSE)
+        return tekst_voor_taal("Music playing", "Muziek aangezet")
+    except Exception as e:
+        return tekst_voor_taal(f"Error controlling music: {e}", f"Fout bij bedienen van muziek: {e}")
+
+
+def bepaal_proces_naam_voor_app(app_naam):
+    schoon = schoon_computerdoel(app_naam)
+    if not schoon:
+        return ""
+
+    sleutel = vind_alias_sleutel(schoon, SYSTEM_APP_TARGETS) or vind_alias_sleutel_fuzzy(schoon, SYSTEM_APP_TARGETS, minimum_score=0.76)
+    if sleutel in APP_PROCES_NAAM_OVERRIDES:
+        return APP_PROCES_NAAM_OVERRIDES[sleutel]
+    if sleutel and sleutel in SYSTEM_APP_TARGETS:
+        command = SYSTEM_APP_TARGETS[sleutel].get("command") or []
+        laatste = str(command[-1] if command else sleutel).strip()
+        if laatste:
+            return laatste if laatste.lower().endswith(".exe") else f"{laatste}.exe"
+
+    gescande_app = vind_gescande_app(schoon, minimum_score=0.66)
+    if gescande_app:
+        pad = Path(str(gescande_app.get("target", "")))
+        if pad.suffix.lower() == ".exe":
+            return pad.name
+
+    return ""
+
+
+def sluit_app_proces(app_naam):
+    proces_naam = bepaal_proces_naam_voor_app(app_naam)
+    if proces_naam:
+        resultaat = subprocess.run(
+            ["taskkill", "/IM", proces_naam, "/F", "/T"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+        if resultaat.returncode == 0:
+            return True, proces_naam
+
+    if activeer_venster_op_zoekterm(app_naam):
+        venster = haal_actief_venster()
+        try:
+            if venster:
+                venster.close()
+                return True, app_naam
+        except Exception:
+            pass
+
+    return False, proces_naam
+
+
+def voer_app_aan_uit_uit(app_naam, state):
+    schoon = schoon_computerdoel(app_naam)
+    if not schoon:
+        return tekst_voor_taal(
+            "Tell me which app to turn on or off.",
+            "Vertel welke app ik aan of uit moet zetten."
+        )
+
+    if schoon in MUZIEK_ALIASSEN:
+        return voer_muziek_actie_uit(state)
+
+    if state == "off":
+        gelukt, _proces_naam = sluit_app_proces(schoon)
+        if gelukt:
+            return tekst_voor_taal(f"{schoon.title()} turned off", f"{schoon.title()} uitgezet")
+        return tekst_voor_taal(
+            f"Could not find a running app matching '{schoon}' to turn off.",
+            f"Ik kon geen actieve app vinden die overeenkomt met '{schoon}' om uit te zetten."
+        )
+
+    gelukt, _sleutel, match_naam = focus_of_open_app_voor_actie(schoon)
+    if gelukt:
+        return tekst_voor_taal(f"{match_naam} turned on", f"{match_naam} aangezet")
+    return tekst_voor_taal(
+        f"Could not find or start an app matching '{schoon}'.",
+        f"Ik kon geen app vinden of starten die overeenkomt met '{schoon}'."
+    )
+
+
 def begrens_percentage(waarde):
     return max(0, min(100, int(waarde)))
 
@@ -7984,6 +10174,7 @@ def voer_macro_uit(macro_sleutel):
 
 
 def maak_automation_actie(originele_stap, stap):
+    # Parser voor geavanceerde besturing: macro's, hotkeys, muis en app-control.
     if re.fullmatch(r"(?:enable|activate|turn on|start|zet|schakel) automation mode(?: on)?", stap):
         return "automation enable"
 
@@ -8024,6 +10215,127 @@ def maak_automation_actie(originele_stap, stap):
         bericht = strip_omringende_quotes(whatsapp_match.group("message").strip())
         if contact and bericht:
             return f"whatsapp send::{contact.replace('||', '|')}||{bericht.replace('||', '|')}"
+
+    beltype_app_patronen = [
+        r"^(?:start|begin|doe|maak|initieer|open)?\s*(?:een\s+)?(?P<call>(?:vc|voice\s*call|voicecall|video\s*call|videocall|videochat))\s+(?:met|naar|to|with)\s*:?[\s]*(?P<target>.+?)\s+(?:op|via|in|on)\s+(?P<app>discord|whatsapp)$",
+        r"^(?:start|begin|doe|maak|initieer|open)?\s*(?:een\s+)?(?P<app>discord|whatsapp)\s+(?P<call>(?:vc|voice\s*call|voicecall|video\s*call|videocall|videochat))\s+(?:met|naar|to|with)\s*:?[\s]*(?P<target>.+)$",
+        r"^(?:start|begin|doe|maak|initieer|open)?\s*(?:een\s+)?(?P<call>(?:vc|voice\s*call|voicecall|video\s*call|videocall|videochat))\s+(?:op|via|in|on)\s+(?P<app>discord|whatsapp)\s+(?:met|naar|to|with)\s*:?[\s]*(?P<target>.+)$",
+        r"^(?P<app>discord|whatsapp)\s*[,:-]?\s*(?:start\s+)?(?:een\s+)?(?P<call>(?:vc|voice\s*call|voicecall|video\s*call|videocall|videochat))\s+(?:met|naar|to|with)\s*:?[\s]*(?P<target>.+)$",
+    ]
+    beltype_app_kandidaten = [originele_stap]
+    for prefix_patroon in (
+        r"^(?:echo\s*[,:-]?\s*)?(?:(?:kan|kun|wil|zou)\s+je)\s+",
+        r"^(?:ik\s+wil\s+dat\s+(?:echo|je|jij)\s+)",
+    ):
+        vereenvoudigd = re.sub(prefix_patroon, "", originele_stap, flags=re.IGNORECASE).strip()
+        vereenvoudigd = re.sub(r"^(?:voor\s+(?:me|mij)\s+)", "", vereenvoudigd, flags=re.IGNORECASE).strip()
+        if vereenvoudigd and vereenvoudigd not in beltype_app_kandidaten:
+            beltype_app_kandidaten.append(vereenvoudigd)
+
+    for kandidaat in beltype_app_kandidaten:
+        for patroon in beltype_app_patronen:
+            bel_match = re.match(patroon, kandidaat, re.IGNORECASE)
+            if not bel_match:
+                continue
+
+            app_naam = schoon_computerdoel(str(bel_match.groupdict().get("app") or ""))
+            beltype = normaliseer_beltype(bel_match.groupdict().get("call"))
+            target = normaliseer_beldoel_tekst(str(bel_match.groupdict().get("target") or ""))
+            if app_naam in {"discord", "whatsapp"} and target:
+                return f"{app_naam} call::{beltype}||{target.replace('||', '|')}"
+
+    discord_call_patronen = [
+        r"^(?:bel|bellen|call|ring)\s+(?:op|via|in|on)\s+discord\s+(?:naar|to|met|with)\s*:?[\s]*(?P<target>.+)$",
+        r"^(?:bel|bellen|call|ring)\s+(?:op|via|in|on)\s+discord\s+(?P<target>.+)$",
+        r"^(?:bel|bellen|call|ring|start)\s+(?:naar|to|met|with)\s*:?[\s]*(?P<target>.+?)\s+(?:op|via|in|on)\s+discord$",
+        r"^(?:bel|bellen|call|ring)\s+(?P<target>.+?)\s+(?:op|via|in|on)\s+discord$",
+        r"^(?P<target>.+?)\s+(?:bellen|callen|call)\s+(?:op|via|in|on)\s+discord$",
+        r"^(?:start|begin|doe)\s+(?:een\s+)?(?:discord\s+)?(?:call|voice call|gesprek)\s+(?:met|with|naar|to)\s*:?[\s]*(?P<target>.+)$",
+        r"^(?:discord)\s*[,:-]?\s*(?:call|bel)\s+(?:naar|to|met|with)\s*:?[\s]*(?P<target>.+)$",
+        r"^(?:discord)\s*[,:-]?\s*(?:call|bel)\s+(?P<target>.+)$",
+    ]
+    discord_call_kandidaten = [originele_stap]
+    for prefix_patroon in (
+        r"^(?:echo\s*[,:-]?\s*)?(?:(?:kan|kun|wil|zou)\s+je)\s+",
+        r"^(?:ik\s+wil\s+dat\s+(?:echo|je|jij)\s+)",
+    ):
+        vereenvoudigd = re.sub(prefix_patroon, "", originele_stap, flags=re.IGNORECASE).strip()
+        vereenvoudigd = re.sub(r"^(?:voor\s+(?:me|mij)\s+)", "", vereenvoudigd, flags=re.IGNORECASE).strip()
+        if vereenvoudigd and vereenvoudigd not in discord_call_kandidaten:
+            discord_call_kandidaten.append(vereenvoudigd)
+
+    for call_kandidaat in discord_call_kandidaten:
+        for patroon in discord_call_patronen:
+            call_match = re.match(patroon, call_kandidaat, re.IGNORECASE)
+            if not call_match:
+                continue
+
+            target = strip_omringende_quotes(str(call_match.groupdict().get("target") or "").strip(" ."))
+            target = re.sub(
+                r"^(?:echo\s*[,:-]?\s*)?(?:(?:kan|kun|wil|zou)\s+je)\s+",
+                "",
+                target,
+                flags=re.IGNORECASE,
+            ).strip()
+            target = re.sub(r"^(?:voor\s+(?:me|mij)\s+)", "", target, flags=re.IGNORECASE).strip()
+            if target:
+                return f"discord call::{target.replace('||', '|')}"
+
+    discord_dm_patronen = [
+        r"^(?:send|stuur|verstuur)\s+(?:a\s+|een\s+)?(?:discord\s+)?(?:dm|direct message|private message|priv(?:e|é)\s+bericht|1[\s-]*op[\s-]*1(?:\s+bericht)?)\s+(?:to|naar)\s+(?P<target>.+?)\s+(?:on|in|op|via)?\s*(?:discord)?\s*(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:discord)\s+(?:dm|direct message|private message|priv(?:e|é)\s+bericht|1[\s-]*op[\s-]*1(?:\s+bericht)?)\s+(?:to|naar)\s+(?P<target>.+?)\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:dm|discord\s+dm)\s+(?:to|naar)\s+(?P<target>.+?)\s+(?:saying|met|:)\s+(?P<message>.+)$",
+    ]
+    for patroon in discord_dm_patronen:
+        discord_dm_match = re.match(patroon, originele_stap, re.IGNORECASE)
+        if not discord_dm_match:
+            continue
+
+        target = strip_omringende_quotes(str(discord_dm_match.groupdict().get("target") or "").strip(" ."))
+        bericht = strip_omringende_quotes(str(discord_dm_match.groupdict().get("message") or "").strip())
+        if target and bericht:
+            return f"discord dm::{target.replace('||', '|')}||{bericht.replace('||', '|')}"
+
+    # Snelle Discord-variant: "stuur naar <naam> met <bericht>" of "stuur naar @naam <bericht>".
+    discord_snelle_dm_patronen = [
+        r"^(?:send|stuur|verstuur)\s+(?:naar|to)\s+(?P<target>.+?)\s+(?:op|via|in|on)\s+discord\s*(?:met|saying|:)\s*(?P<message>.+)$",
+        r"^(?:discord\s+)?(?:send|stuur|verstuur)\s+(?:naar|to)\s+(?P<target>.+?)\s*(?:met|saying|:)\s+(?P<message>.+)$",
+        r"^(?:discord\s+)?(?:send|stuur|verstuur)\s+(?:naar|to)\s+(?P<target>@?[a-z0-9._-]{2,32})\s+(?P<message>.+)$",
+    ]
+    for patroon in discord_snelle_dm_patronen:
+        snelle_match = re.match(patroon, originele_stap, re.IGNORECASE)
+        if not snelle_match:
+            continue
+
+        if re.search(r"\bwhatsapp\b", originele_stap, re.IGNORECASE):
+            continue
+
+        target = strip_omringende_quotes(str(snelle_match.groupdict().get("target") or "").strip(" ."))
+        bericht = strip_omringende_quotes(str(snelle_match.groupdict().get("message") or "").strip())
+        if not target or not bericht:
+            continue
+
+        if re.fullmatch(r"(?i)(?:map|folder|bestand|file|google|youtube|steam|wifi|bluetooth)", target):
+            continue
+
+        return f"discord dm::{target.replace('||', '|')}||{bericht.replace('||', '|')}"
+
+    discord_patronen = [
+        r"^(?:send|stuur|verstuur)\s+(?:a\s+|een\s+)?(?:discord\s+)?(?:message|bericht)\s+(?:to|naar)\s+(?P<target>.+?)\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:send|stuur|verstuur)\s+(?:to|naar)\s+(?P<target>.+?)\s+(?:on|in|op|via)\s+discord\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:discord)\s+(?:message|bericht)\s+(?:to|naar)\s+(?P<target>.+?)\s+(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:send|stuur|verstuur)\s+(?:a\s+|een\s+)?(?:discord\s+)?(?:message|bericht)\s*(?:saying|met|:)\s+(?P<message>.+)$",
+        r"^(?:discord)\s+(?:message|bericht)\s*(?:saying|met|:)\s+(?P<message>.+)$",
+    ]
+    for patroon in discord_patronen:
+        discord_match = re.match(patroon, originele_stap, re.IGNORECASE)
+        if not discord_match:
+            continue
+
+        target = strip_omringende_quotes(str(discord_match.groupdict().get("target") or "").strip(" ."))
+        bericht = strip_omringende_quotes(str(discord_match.groupdict().get("message") or "").strip())
+        if bericht:
+            return f"discord send::{target.replace('||', '|')}||{bericht.replace('||', '|')}"
 
     app_zoek_patronen = [
         r"^(?:search|find|zoek|vind)\s+(?P<query>.+?)\s+(?:in|on|op)\s+(?P<app>[a-z0-9 ._-]{2,40})$",
@@ -8226,10 +10538,21 @@ def maak_automation_actie(originele_stap, stap):
         richting = {"aan": "on", "uit": "off", None: "toggle"}.get(ruwe_richting, ruwe_richting)
         return f"bluetooth {richting}"
 
+    app_aan_uit_match = re.match(
+        r"^(?:doe|zet|schakel|turn on|turn off|turn|switch)\s+(?P<app>.+?)\s+(?:(?P<uit>uit|off)|(?P<aan>aan|on))$",
+        stap,
+    )
+    if app_aan_uit_match:
+        app_naam = schoon_computerdoel(app_aan_uit_match.group("app"))
+        if app_naam and app_naam not in {"wifi", "wi-fi", "bluetooth", "volume", "geluid", "helderheid", "brightness"}:
+            richting = "off" if app_aan_uit_match.group("uit") else "on"
+            return f"app control::{app_naam}||{richting}"
+
     return ""
 
 
 def maak_geavanceerde_browser_actie(originele_stap, stap):
+    # Parser voor browser-read/summarize/fill acties via automation.
     if re.fullmatch(r"(?:current tab url|current page url|tab url|huidige tab url|huidige pagina url)", stap):
         return "browser current url"
 
@@ -8238,6 +10561,34 @@ def maak_geavanceerde_browser_actie(originele_stap, stap):
 
     if re.fullmatch(r"(?:summari[sz]e|samenvat|vat samen)(?:\s+(?:this|current|active|deze|huidige|actieve))\s+(?:tab|page|pagina)", stap):
         return "browser summarize current"
+
+    link_index_match = re.match(
+        r"^(?:click|klik|open)\s+(?:op\s+)?(?:de\s+)?(?:link|result(?:aat)?|zoekresult(?:aat)?)\s*(?:nummer\s*)?(?P<index>\d{1,2})$",
+        stap,
+        re.IGNORECASE,
+    )
+    if link_index_match:
+        return f"browser click link::index||{int(link_index_match.group('index'))}"
+
+    link_ordinaal_match = re.match(
+        r"^(?:click|klik|open)\s+(?:op\s+)?(?:de\s+)?(?P<ordinaal>[a-z0-9]+)\s+(?:link|result(?:aat)?|zoekresult(?:aat)?)$",
+        stap,
+        re.IGNORECASE,
+    )
+    if link_ordinaal_match:
+        index = ordinaal_link_index(link_ordinaal_match.group("ordinaal"))
+        if index > 0:
+            return f"browser click link::index||{index}"
+
+    link_tekst_match = re.match(
+        r"^(?:click|klik|open)\s+(?:op\s+)?(?:de\s+)?(?:link|result(?:aat)?|zoekresult(?:aat)?)\s+(?:met(?:\s+tekst)?|named|genaamd|called|voor|containing)\s+(.+)$",
+        originele_stap,
+        re.IGNORECASE,
+    )
+    if link_tekst_match:
+        zoektekst = strip_omringende_quotes(link_tekst_match.group(1).strip(" ."))
+        if zoektekst:
+            return f"browser click link::text||{zoektekst.replace('||', '|')}"
 
     lees_url_match = re.match(r"^(?:read|show|lees|toon)(?:\s+(?:page|pagina))?\s+(.+)$", originele_stap, re.IGNORECASE)
     if lees_url_match:
@@ -8274,6 +10625,7 @@ def maak_geavanceerde_browser_actie(originele_stap, stap):
 
 
 def maak_browser_actie(stap):
+    # Parser voor gewone browsernavigatie en zoekopdrachten.
     google_match = re.match(
         r"^(?:search(?:\s+on)?\s+google\s+(?:for)?|google\s+search\s+(?:for)?|zoek\s+(?:op\s+)?google\s+(?:naar)?)\s+(.+)$",
         stap,
@@ -8350,14 +10702,39 @@ def maak_browser_actie(stap):
     return ""
 
 
+def maak_specifieke_help_actie(originele_stap):
+    patronen = [
+        r"^(?:what\s+can\s+you\s+do)\s+(?:with|in|for|about)\s+(?P<topic>.+)$",
+        r"^(?:wat\s+(?:kan|kun)\s+(?:je|jij))(?:\s+allemaal)?(?:\s+doen)?\s+(?:met|in|op|voor|over)\s+(?P<topic>.+?)(?:\s+doen)?$",
+        r"^(?:help|hulp)\s+(?:with|for|met|over)\s+(?P<topic>.+)$",
+        r"^(?:wat\s+zijn\s+de\s+mogelijkheden\s+van)\s+(?P<topic>.+)$",
+    ]
+
+    for patroon in patronen:
+        match = re.match(patroon, str(originele_stap or ""), re.IGNORECASE)
+        if not match:
+            continue
+
+        onderwerp = schoon_vraag_onderwerp(match.group("topic"))
+        if onderwerp:
+            return f"help topic::{onderwerp.replace('||', '|')}"
+
+    return ""
+
+
 def normaliseer_actie(stap):
+    # Centrale normalisatie: stuurt tekst door alle domeinparsers in vaste volgorde.
     originele_stap = re.sub(r"\s+", " ", str(stap or "")).strip()
     stap = originele_stap.lower()
     if not originele_stap:
         return ""
 
-    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::")) or stap == "app search help":
+    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "help topic::", "browser click link::", "security threat scan start", "security threat scan status", "security threat cleanup")) or stap == "app search help":
         return originele_stap
+
+    specifieke_help_actie = maak_specifieke_help_actie(originele_stap)
+    if specifieke_help_actie:
+        return specifieke_help_actie
 
     if is_explicit_help_request(stap):
         return "help"
@@ -8436,8 +10813,9 @@ def mapnaam_uit_actie(actie):
 
 
 def actie_prioriteit(stap):
+    # Lagere score betekent eerder uitvoeren binnen een samengesteld plan.
     stap = stap.lower()
-    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "apps scan"}:
+    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply"}:
         return 0
     if stap.startswith(("timer ", "reminder ", "task ", "agenda show")):
         return 1
@@ -8447,20 +10825,23 @@ def actie_prioriteit(stap):
         return 2
     if stap.startswith("calculate::"):
         return 2
-    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "apps scan", "battery status", "wifi quality", "disk space", "ip address", "current time")):
+    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "apps uninstall::", "battery status", "wifi quality", "disk space", "ip address", "current time")):
         return 2
-    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::")):
+    if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "app control::")):
         return 3
     if stap.startswith("create folder"):
         return 4
     if stap in DANGEROUS_SYSTEM_ACTIONS:
         return 7
+    if stap.startswith("help topic::"):
+        return 8
     if stap == "help":
         return 8
     return 9
 
 
 def verrijk_plan_met_context(originele_tekst, plan):
+    # Kleine context-verbeteringen zoals "doe dat opnieuw" oplossen naar eerdere acties.
     if not instellingen.get("geheugen_modus", True):
         return plan
 
@@ -8509,6 +10890,7 @@ def update_gesprek_context(plan, resultaten):
 
 def voer_enkele_actie_uit(actie):
     """Execute exactly one action."""
+    # Deze dispatcher voert exact één genormaliseerde actie uit.
     actie = normaliseer_actie(actie)
 
     if actie == "close echo":
@@ -8555,6 +10937,7 @@ def voer_enkele_actie_uit(actie):
         return automatisering_status_bericht()
 
     if actie == "confirm pending action":
+        # Bevestiging voert de eerder opgeslagen kritieke actie uit.
         wachtende_actie = GESPREK_CONTEXT.get("wacht_op_bevestiging", "")
         if not wachtende_actie:
             return tekst_voor_taal(
@@ -8566,6 +10949,7 @@ def voer_enkele_actie_uit(actie):
         return voer_bevestigde_actie_uit(wachtende_actie)
 
     if actie == "cancel pending action":
+        # Annuleren wist alleen de pending state en voert niets uit.
         if GESPREK_CONTEXT.get("wacht_op_bevestiging"):
             GESPREK_CONTEXT["wacht_op_bevestiging"] = ""
             return tekst_voor_taal(
@@ -8598,6 +10982,18 @@ def voer_enkele_actie_uit(actie):
         return tekst_voor_taal(
             f"Safety check: say confirm to delete {doel_pad}.",
             f"Veiligheidscontrole: zeg bevestig om {doel_pad} te verwijderen."
+        )
+
+    if actie.startswith("apps uninstall::"):
+        app_naam = actie.split("::", 1)[1]
+        match = vind_app_update_of_scan_match(app_naam)
+        naam_voor_weergave = match["name"] if match else schoon_computerdoel(app_naam)
+        if not naam_voor_weergave:
+            return tekst_voor_taal("Tell me which app to remove.", "Vertel welke app ik moet verwijderen.")
+        GESPREK_CONTEXT["wacht_op_bevestiging"] = f"apps uninstall::{app_naam}"
+        return tekst_voor_taal(
+            f"Safety check: say confirm to uninstall {naam_voor_weergave}.",
+            f"Veiligheidscontrole: zeg bevestig om {naam_voor_weergave} te verwijderen."
         )
 
     if actie.startswith("overwrite file::"):
@@ -8675,10 +11071,54 @@ def voer_enkele_actie_uit(actie):
     if actie == "system scan status":
         return system_scan_status_bericht()
 
+    if actie == "security threat scan start":
+        _gestart, bericht = start_security_threat_scan()
+        return bericht
+
+    if actie == "security threat scan status":
+        return security_scan_status_bericht()
+
+    if actie == "security threat cleanup":
+        if platform.system().lower() != "windows":
+            return tekst_voor_taal(
+                "Threat cleanup is only available on Windows.",
+                "Dreiging-opruimen is alleen beschikbaar op Windows."
+            )
+
+        if not heeft_windows_adminrechten():
+            return tekst_voor_taal(
+                "Threat cleanup needs administrator rights. Start Echo as administrator and try again.",
+                "Dreiging-opruimen heeft administratorrechten nodig. Start Echo als administrator en probeer opnieuw."
+            )
+
+        try:
+            overzicht = haal_defender_threat_overzicht()
+        except Exception as e:
+            return tekst_voor_taal(
+                f"Could not read Defender threats: {e}",
+                f"Kon Defender-dreigingen niet uitlezen: {e}"
+            )
+
+        update_security_scan_state_met_overzicht(overzicht)
+        threat_count = max(0, int(overzicht.get("threat_count", 0) or 0))
+        if threat_count <= 0:
+            return tekst_voor_taal(
+                "No active threats found to clean up.",
+                "Geen actieve dreigingen gevonden om op te ruimen."
+            )
+
+        GESPREK_CONTEXT["wacht_op_bevestiging"] = actie
+        threat_namen = formatteer_security_threat_namen(overzicht.get("threat_names", []))
+        detail = f" ({threat_namen})" if threat_namen else ""
+        return tekst_voor_taal(
+            f"Safety check: say confirm to clean up {threat_count} active threat(s){detail}.",
+            f"Veiligheidscontrole: zeg bevestig om {threat_count} actieve dreiging(en){detail} op te ruimen."
+        )
+
     if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "current time"}:
         return voer_systeeminfo_uit(actie)
 
-    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::")):
+    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "app control::")):
         blokkade = geavanceerde_besturing_geblokkeerd(actie)
         if blokkade:
             return blokkade
@@ -8702,6 +11142,46 @@ def voer_enkele_actie_uit(actie):
             )
         contact, bericht = payload.split("||", 1)
         return voer_whatsapp_bericht_actie_uit(contact, bericht)
+
+    if actie.startswith("whatsapp call::"):
+        payload = actie.split("::", 1)[1]
+        beltype, bestemming = parseer_bel_payload(payload, standaard_beltype="voice")
+        if not bestemming.strip():
+            return tekst_voor_taal(
+                "Tell me who to call on WhatsApp.",
+                "Zeg wie ik op WhatsApp moet bellen."
+            )
+        return voer_whatsapp_bel_actie_uit(bestemming, beltype)
+
+    if actie.startswith("discord send::"):
+        payload = actie.split("::", 1)[1]
+        bestemming, _sep, bericht = payload.partition("||")
+        if not bericht.strip():
+            return tekst_voor_taal(
+                "Provide a Discord message to send.",
+                "Geef een Discord-bericht op om te versturen."
+            )
+        return voer_discord_bericht_actie_uit(bestemming, bericht)
+
+    if actie.startswith("discord dm::"):
+        payload = actie.split("::", 1)[1]
+        bestemming, _sep, bericht = payload.partition("||")
+        if not bestemming.strip() or not bericht.strip():
+            return tekst_voor_taal(
+                "Provide both a Discord friend and a message for a 1-on-1 DM.",
+                "Geef zowel een Discord-vriend als een bericht op voor een 1-op-1 DM."
+            )
+        return voer_discord_bericht_actie_uit(bestemming, bericht, dm_mode=True)
+
+    if actie.startswith("discord call::"):
+        payload = actie.split("::", 1)[1]
+        beltype, bestemming = parseer_bel_payload(payload, standaard_beltype="voice")
+        if not bestemming.strip():
+            return tekst_voor_taal(
+                "Tell me who to call on Discord.",
+                "Zeg wie ik op Discord moet bellen."
+            )
+        return voer_discord_bel_actie_uit(bestemming, beltype)
 
     if actie.startswith("app search::"):
         payload = actie.split("::", 1)[1]
@@ -8989,6 +11469,14 @@ def voer_enkele_actie_uit(actie):
         except Exception as e:
             return tekst_voor_taal(f"Error changing Bluetooth: {e}", f"Fout bij aanpassen van bluetooth: {e}")
 
+    if actie.startswith("app control::"):
+        payload = actie.split("::", 1)[1]
+        app_naam, _sep, state = payload.rpartition("||")
+        try:
+            return voer_app_aan_uit_uit(app_naam, state)
+        except Exception as e:
+            return tekst_voor_taal(f"Error controlling app: {e}", f"Fout bij bedienen van app: {e}")
+
     if actie.startswith("open browser url::"):
         browser_sleutel, url = split_pad_payload(actie)
         try:
@@ -9142,6 +11630,17 @@ def voer_enkele_actie_uit(actie):
     if actie == "apps scan":
         return beschrijf_gescande_apps(force=True)
 
+    if actie == "apps updates list":
+        return beschrijf_app_updates_lijst(force=True)
+
+    if actie == "apps updates":
+        if not winget_beschikbaar():
+            return beschrijf_app_updates(force=True)
+        updates = scan_app_updates_winget(force=True)
+        if updates:
+            GESPREK_CONTEXT["wacht_op_bevestiging"] = "apps updates apply"
+        return beschrijf_app_updates(force=False)
+
     if actie.startswith("open app raw::"):
         app_doel = re.sub(r"^open app raw::", "", actie).strip()
         try:
@@ -9183,6 +11682,45 @@ def voer_enkele_actie_uit(actie):
             command = list(details["command"])
             if app_sleutel == "file explorer":
                 command = ["explorer", instellingen["verkenner_start_map"]]
+
+            if app_sleutel == "whatsapp":
+                gescande_app = vind_gescande_app_voor_sleutel(app_sleutel, details)
+                if gescande_app:
+                    try:
+                        open_windows_doel(gescande_app["target"])
+                        return tekst_voor_taal("Opened WhatsApp", "WhatsApp geopend")
+                    except Exception:
+                        pass
+
+                try:
+                    subprocess.Popen(command)
+                    if gw is None:
+                        return tekst_voor_taal("Opened WhatsApp", "WhatsApp geopend")
+
+                    # Bevestig zichtbare start wanneer vensterdetectie beschikbaar is.
+                    time.sleep(0.9)
+                    if activeer_venster("whatsapp", False):
+                        return tekst_voor_taal("Opened WhatsApp", "WhatsApp geopend")
+                except Exception:
+                    pass
+
+                for doel in ("whatsapp:", "whatsapp://send"):
+                    try:
+                        open_windows_doel(doel)
+                        return tekst_voor_taal("Opened WhatsApp", "WhatsApp geopend")
+                    except Exception:
+                        continue
+
+                if open_doel_url_of_protocol("https://web.whatsapp.com/"):
+                    return tekst_voor_taal(
+                        "Opened WhatsApp Web because the desktop app did not launch.",
+                        "WhatsApp Web geopend omdat de desktop-app niet startte."
+                    )
+
+                return tekst_voor_taal(
+                    "Error opening WhatsApp.",
+                    "Fout bij openen van WhatsApp."
+                )
 
             if gebruikt_shell_start_commando(command):
                 gescande_app = vind_gescande_app_voor_sleutel(app_sleutel, details)
@@ -9232,6 +11770,10 @@ def voer_enkele_actie_uit(actie):
             f"Verkenner geopend in: {verkenner_map}"
         )
 
+    if actie.startswith("help topic::"):
+        onderwerp = actie.split("::", 1)[1]
+        return maak_specifiek_help_bericht(onderwerp)
+
     if actie == "help":
         return maak_help_bericht()
 
@@ -9239,18 +11781,39 @@ def voer_enkele_actie_uit(actie):
 
 
 def spreek_uit_als_toegestaan(tekst, spreek_hardop=True):
-    if spreek_hardop:
-        spreek_uit(tekst)
+    if not spreek_hardop:
+        return
+
+    spreek_norm = normaliseer_vergelijktekst(tekst, max_lengte=220)
+    vorige_spreek_norm = str(GESPREK_CONTEXT.get("laatste_spreektekst_norm", "") or "").strip()
+    vorige_spreek_at = float(GESPREK_CONTEXT.get("laatste_spreektekst_at", 0.0) or 0.0)
+
+    if spreek_norm and spreek_norm == vorige_spreek_norm and (time.time() - vorige_spreek_at) <= SPEECH_DUPLICATE_WINDOW_SECONDS:
+        return
+
+    GESPREK_CONTEXT["laatste_spreektekst_norm"] = spreek_norm
+    GESPREK_CONTEXT["laatste_spreektekst_at"] = time.time()
+    spreek_uit(tekst)
+
+
+def finaliseer_commando_antwoord(vraag_tekst, antwoord_tekst, spreek_hardop=True):
+    antwoord = maak_eenduidig_antwoord(antwoord_tekst)
+    if not antwoord:
+        antwoord = tekst_voor_taal("Done.", "Klaar.")
+
+    markeer_laatste_assistent_antwoord(antwoord)
+    registreer_gesprek_uitwisseling(vraag_tekst, antwoord)
+    spreek_uit_als_toegestaan(antwoord, spreek_hardop)
+    return antwoord
 
 
 def voer_commando_uit(tekst, spreek_hardop=True):
     """Execute a command and return a response."""
+    # Top-level orkestratie: geheugen -> routering -> plan/antwoord -> context-update.
     geheugen_bericht = behandel_geheugen_commando(tekst)
     if geheugen_bericht:
         update_routering_context("memory", "memory", "memory", "completed")
-        registreer_gesprek_uitwisseling(tekst, geheugen_bericht)
-        spreek_uit_als_toegestaan(geheugen_bericht, spreek_hardop)
-        return geheugen_bericht
+        return finaliseer_commando_antwoord(tekst, geheugen_bericht, spreek_hardop)
 
     routering = analyseer_verzoek_routering(tekst)
     update_routering_context(routering["intent"], routering["tool"], routering["category"], "routing")
@@ -9264,9 +11827,7 @@ def voer_commando_uit(tekst, spreek_hardop=True):
             bericht = kan_niet_oproepen_bericht(tekst)
             update_routering_context(routering["intent"], "fallback", routering["category"], "fallback")
 
-        registreer_gesprek_uitwisseling(tekst, bericht)
-        spreek_uit_als_toegestaan(bericht, spreek_hardop)
-        return bericht
+        return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
 
     plan = list(routering.get("plan", []))
 
@@ -9288,9 +11849,7 @@ def voer_commando_uit(tekst, spreek_hardop=True):
             else:
                 update_routering_context(routering["intent"], "online_action_planner", routering["category"], "completed")
 
-            registreer_gesprek_uitwisseling(tekst, bericht)
-            spreek_uit_als_toegestaan(bericht, spreek_hardop)
-            return bericht
+            return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
 
     plan = orden_plan_op_prioriteit(plan)
     plan_resultaat = voer_plan_uit(plan)
@@ -9326,10 +11885,9 @@ def voer_commando_uit(tekst, spreek_hardop=True):
         update_gesprek_context(plan, plan_resultaat["resultaten"])
         update_routering_context(routering["intent"], "local_plan", routering["category"], "completed")
 
-    registreer_gesprek_uitwisseling(tekst, bericht)
-    spreek_uit_als_toegestaan(bericht, spreek_hardop)
-    return bericht
+    return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
 
+# Web-UI entrypoint.
 @app.route('/')
 def index():
     return render_template(
@@ -9340,6 +11898,7 @@ def index():
     )
 
 
+# Lichtgewicht endpoint voor frontend hot-reload/runtime detectie.
 @app.route('/api/runtime-version', methods=['GET'])
 def get_runtime_version():
     return jsonify({
@@ -9348,6 +11907,7 @@ def get_runtime_version():
     })
 
 
+# Service worker met no-cache om stale clients te voorkomen.
 @app.route('/service-worker.js', methods=['GET'])
 def service_worker():
     response = app.send_static_file('service-worker.js')
@@ -9355,6 +11915,7 @@ def service_worker():
     response.headers['Service-Worker-Allowed'] = '/'
     return response
 
+# Hoofd-API voor tekstcommando's vanuit de UI.
 @app.route('/api/commando', methods=['POST'])
 def execute_command():
     data = request.get_json(silent=True)
@@ -9366,32 +11927,45 @@ def execute_command():
 
     commando = str(data.get('commando', '')).strip()
     server_speech = bool(data.get('server_speech', False))
+    bron = str(data.get('source', 'text') or 'text').strip().lower()
+    if bron not in {'voice', 'text', 'quick', 'system'}:
+        bron = 'text'
     
     if not commando:
         return jsonify({
             'status': 'error',
             'message': tekst_voor_taal('No command provided', 'Geen opdracht opgegeven')
         }), 400
+
+    if bron == 'voice' and is_recente_dubbele_spraakopdracht(commando):
+        update_routering_context('action', 'duplicate_guard', 'general', 'ignored', 'duplicate voice command')
+        markeer_laatste_commando(commando)
+        return jsonify({
+            'status': 'success',
+            'message': tekst_voor_taal('Ignored duplicate voice command.', 'Dubbele spraakopdracht genegeerd.'),
+            'duration_ms': 0,
+            'duplicate_ignored': True,
+            'route': huidige_routering_context(),
+            'pending_confirmation': maak_pending_bevestiging_payload(),
+        })
     
     start_tijd = time.time()
+    markeer_laatste_commando(commando)
     try:
         bericht = voer_commando_uit(commando, spreek_hardop=server_speech)
         duur_ms = int(round((time.time() - start_tijd) * 1000))
-        GESPREK_CONTEXT['laatste_commando'] = str(commando or '').strip()
-        GESPREK_CONTEXT['laatste_commando_at'] = time.time()
         GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
         GESPREK_CONTEXT['laatste_commando_succes'] = True
         return jsonify({
             'status': 'success',
             'message': bericht,
             'duration_ms': duur_ms,
+            'duplicate_ignored': False,
             'route': huidige_routering_context(),
             'pending_confirmation': maak_pending_bevestiging_payload(),
         })
     except Exception as e:
         duur_ms = int(round((time.time() - start_tijd) * 1000))
-        GESPREK_CONTEXT['laatste_commando'] = str(commando or '').strip()
-        GESPREK_CONTEXT['laatste_commando_at'] = time.time()
         GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
         GESPREK_CONTEXT['laatste_commando_succes'] = False
         huidige_route = huidige_routering_context()
@@ -9406,10 +11980,12 @@ def execute_command():
             'status': 'error',
             'message': str(e),
             'duration_ms': duur_ms,
+            'duplicate_ignored': False,
             'route': huidige_routering_context(),
             'pending_confirmation': maak_pending_bevestiging_payload(),
         })
 
+# Spraak-API: herkent audio en stuurt door naar dezelfde commandorouter.
 @app.route('/api/spraak', methods=['POST'])
 def speech_command():
     if not SPRAAK_BESCHIKBAAR:
@@ -9425,14 +12001,17 @@ def speech_command():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
 
+# Ophalen van actuele instellingen voor de frontend.
 @app.route('/api/instellingen', methods=['GET'])
 def get_settings():
     return jsonify(instellingen)
 
+# Dashboard-telemetrie voor statuspanelen en polling.
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     return jsonify(maak_dashboard_payload())
 
+# Bijwerken en normaliseren van instellingen via de UI.
 @app.route('/api/instellingen', methods=['POST'])
 def update_settings():
     data = request.get_json(silent=True)
@@ -9455,6 +12034,7 @@ def update_settings():
 
 
 def poort_is_beschikbaar(poort):
+    # Controleer lokaal of de poort bindbaar is op 127.0.0.1.
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", int(poort)))
@@ -9464,6 +12044,7 @@ def poort_is_beschikbaar(poort):
 
 
 def vind_beschikbare_poort(start=5000, eind=5010, uitbreid_tot=5200):
+    # Zoek eerst in voorkeur-range, daarna in uitgebreid bereik.
     start = max(1024, int(start))
     eind = max(start, int(eind))
 
@@ -9502,6 +12083,7 @@ def markeer_auto_open_uitgevoerd():
 
 
 def browser_pad_kandidaten():
+    # Kandidatenlijst voor Edge/Chrome app-venster startmodus.
     programma_bestanden = Path(os.environ.get('ProgramFiles', ''))
     programma_bestanden_x86 = Path(os.environ.get('ProgramFiles(x86)', ''))
     lokale_appdata = Path(os.environ.get('LocalAppData', ''))
@@ -9554,6 +12136,7 @@ def open_url_in_app_venster(url):
 
 
 def open_echo_interface(url, window_mode='browser'):
+    # Opent Echo in app-window modus of standaard browser.
     mode = str(window_mode or 'browser').strip().lower()
     if mode == 'app' and open_url_in_app_venster(url):
         return True
@@ -9569,6 +12152,7 @@ def open_echo_interface(url, window_mode='browser'):
 
 
 def moet_auto_openen(auto_open, auto_reload, open_on_reload):
+    # Regelt of auto-open één keer of per reload gebeurt.
     if not auto_open:
         return False
 
@@ -9586,6 +12170,7 @@ def moet_auto_openen(auto_open, auto_reload, open_on_reload):
 
 
 def runtime_endpoint_bereikbaar(url, timeout=0.7):
+    # Probeert te detecteren of op URL al een Echo runtime draait.
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             payload_raw = response.read().decode("utf-8", errors="ignore")
@@ -9615,13 +12200,28 @@ def bepaal_runtime_poort(voorkeurs_poort, max_poort):
 
 
 def voer_opstart_app_scan_uit(force=True):
+    # Niet-blokkerende startupscan voor apps en update-informatie.
     try:
         gevonden_apps = scan_geinstalleerde_apps(force=force)
         print(f'Echo startup app scan complete: {len(gevonden_apps)} launchable apps indexed (no apps opened).')
     except Exception as scan_error:
         print(f'Echo startup app scan unavailable: {scan_error}')
 
+    try:
+        if winget_beschikbaar():
+            updates = scan_app_updates_winget(force=force)
+            if updates:
+                namen = ", ".join(item["name"] for item in updates[:10])
+                print(f'Echo startup update scan: {len(updates)} app(s) can be updated: {namen}. Zeg "app updates" om details te horen of "verwijder <app>" om er een te verwijderen.')
+            else:
+                print('Echo startup update scan: all apps are up to date.')
+        else:
+            print('Echo startup update scan skipped: winget is not available.')
+    except Exception as update_error:
+        print(f'Echo startup update scan unavailable: {update_error}')
+
 if __name__ == '__main__':
+    # Startup-orkestratie: poort kiezen, enkelvoudige instantie, monitors starten.
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
     poort_span = begrens_int_waarde(os.environ.get('ECHO_PORT_SPAN', '50'), 50, 0, 2000)
     max_poort = min(voorkeurs_poort + poort_span, 65535)
@@ -9658,6 +12258,9 @@ if __name__ == '__main__':
 
     if not auto_reload or is_reloader_child:
         start_planning_monitor()
+
+    if not auto_reload or is_reloader_child:
+        start_dagelijkse_security_scan_monitor()
 
     if moet_auto_openen(auto_open, auto_reload, open_on_reload):
         threading.Timer(1.0, lambda: open_echo_interface(url, window_mode)).start()

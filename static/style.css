@@ -425,6 +425,38 @@ body[data-threat='elevated'] .ring-lock {
     gap: 6px;
 }
 
+.daily-security-protocol {
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    background: rgba(0, 4, 10, 0.42);
+    padding: 8px;
+    display: grid;
+    gap: 5px;
+}
+
+.daily-security-protocol__kicker {
+    font-family: var(--font-data);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(224, 255, 255, 0.78);
+}
+
+.daily-security-protocol__line {
+    font-family: var(--font-data);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(224, 255, 255, 0.88);
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.daily-security-protocol__line--result {
+    text-transform: none;
+    letter-spacing: 0.01em;
+    color: rgba(190, 252, 255, 0.82);
+}
+
 .threat-protocol__kicker {
     font-family: var(--font-data);
     font-size: 0.62rem;
