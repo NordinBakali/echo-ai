@@ -17,6 +17,31 @@ python server.py
 
 De browser gaat automatisch openen op **http://localhost:5000**
 
+### Testen op je telefoon (zelfde wifi)
+Echo start nu standaard met LAN-toegang zodat je ook op je telefoon kunt testen.
+
+1. Start Echo normaal.
+2. Kijk in de terminal naar de regel **Phone test URL(s)**.
+3. Open die URL op je telefoon (telefoon en pc op hetzelfde netwerk).
+
+Snelle commando's:
+- `phone status` - toont of mobiele toegang actief is
+- `phone link` - geeft direct de testlink
+
+Screenshots op je telefoon opslaan:
+- Gebruik `take screenshot`.
+- In **Phone Lab** verschijnt automatisch de laatste screenshot.
+- Op je telefoon start Echo direct een download; handmatig kan ook via **Save Last Screenshot**.
+
+### Samsung voice fallback
+Als je Samsung-browser geen ingebouwde Web Speech API heeft, schakelt Echo automatisch naar **Quick voice capture**:
+
+1. Tik op `Quick voice capture`.
+2. Neem je stemopdracht op.
+3. Echo uploadt de opname en transcribeert die server-side.
+
+Tip: zeg direct `hey echo ...` in dezelfde opname voor wake-compatibiliteit.
+
 ## App-modus (zonder URL typen)
 
 ### One-click starten
@@ -111,7 +136,7 @@ Dit artifact bevat `Echo-App-Portable.zip` zodat clients direct kunnen reviewen.
 ## Hoe het werkt
 
 - ✍️ **Typ commando's** - Voer commando's in via het invoerveld
-- 🎤 **Spraak** - Klik op de knop en spreek je commando in
+- 🎤 **Spraak** - Klik op de knop en spreek je commando in (op Samsung kan dit `Quick voice capture` zijn)
 - ⚙️ **Instellingen** - Pas je voorkeuren aan via het instellingenmenu
 - 💬 **Live chat** - Zie alle communicatie in het chatvenster
 
@@ -148,6 +173,8 @@ Dit artifact bevat `Echo-App-Portable.zip` zodat clients direct kunnen reviewen.
 - `read this page`, `summarize this page`, `summarize https://example.com` - Leest of vat webpagina's samen
 - `fill form with Jan, jan@example.com, hallo`, `submit form` - Vult browserformulieren in via automation-modus
 - `switch window`, `next tab`, `copy`, `paste`, `save` - Extra computerbesturing
+- `denk mee over mijn planning`, `think with me about this` - Echo denkt actief met je mee in concrete stappen
+- `vraag door over mijn project`, `ask follow-up questions about my code` - Echo stelt eerst gerichte vervolgvragen (alleen als jij dat vraagt)
 
 ## Instellingen (in HTML)
 

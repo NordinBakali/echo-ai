@@ -98,6 +98,18 @@
                         <p class="daily-security-protocol__line daily-security-protocol__line--result" id="dailySecurityResult"></p>
                     </div>
                 </div>
+
+                <div class="panel-block">
+                    <p class="panel-kicker">Smart Routines</p>
+                    <div class="panel-grid panel-grid-routines">
+                        <button type="button" class="panel-action routine-action" data-command="system info and show agenda and show tasks">Daily Briefing</button>
+                        <button type="button" class="panel-action routine-action" data-command="set timer for 25 minutes">Focus Timer 25m</button>
+                        <button type="button" class="panel-action routine-action" data-command="show tasks">Task Radar</button>
+                        <button type="button" class="panel-action routine-action" data-fill-command="remind me in 30 minutes to ">Quick Reminder Draft</button>
+                        <button type="button" class="panel-action routine-action" data-fill-command="add task ">Quick Task Draft</button>
+                        <button type="button" class="panel-action routine-action" data-command="phone status">Phone Link Status</button>
+                    </div>
+                </div>
             </aside>
 
             <aside class="hud-panel hud-panel-right" aria-label="Text command panel">
@@ -125,10 +137,28 @@
                     </div>
                 </div>
 
+                <div class="panel-block mobile-lab" id="mobileLabPanel">
+                    <p class="panel-kicker">Phone Lab</p>
+                    <p class="panel-note" id="mobileAccessState">Checking phone access...</p>
+                    <p class="panel-note" id="mobileAccessHint">Waiting for runtime network data.</p>
+                    <div class="mobile-links" id="mobileAccessLinks" aria-live="polite"></div>
+                    <div class="pending-actions">
+                        <button id="mobileCopyLinkBtn" type="button">Copy Phone Link</button>
+                        <button id="mobileOpenLinkBtn" type="button">Open Link</button>
+                    </div>
+                </div>
+
+                <div class="panel-block">
+                    <p class="panel-kicker">Recent Commands</p>
+                    <div class="history-commands" id="historyCommands" aria-live="polite"></div>
+                </div>
+
                 <div class="panel-block aux-actions">
                     <button id="speechBtn" type="button">Start Voice Listening</button>
                     <button id="clearLogBtn" type="button">Clear Feed</button>
                 </div>
+
+                <input id="mobileVoiceFileInput" type="file" accept="audio/*" capture="microphone" hidden>
             </aside>
         </section>
     </main>

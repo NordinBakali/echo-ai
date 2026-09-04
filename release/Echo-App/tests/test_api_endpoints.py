@@ -1,5 +1,6 @@
 import pytest
 import datetime
+import io
 
 import server
 
@@ -197,6 +198,46 @@ def test_dashboard_exposes_daily_security_scan_structure(client):
     }.issubset(set(daily_scan.keys()))
 
 
+def test_mobile_access_endpoint_returns_expected_structure(client, monkeypatch):
+    monkeypatch.setattr(server, "ECHO_RUNTIME_HOST", "0.0.0.0")
+    monkeypatch.setattr(server, "ECHO_RUNTIME_PORT", 5090)
+    monkeypatch.setattr(server, "haal_lokale_ipv4_adressen", lambda max_items=8: ["192.168.1.77"])
+
+    response = client.get("/api/mobile-access")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert {
+        "enabled",
+        "host",
+        "port",
+        "local_url",
+        "network_urls",
+        "primary_network_url",
+        "same_network_required",
+    }.issubset(set(payload.keys()))
+    assert payload["enabled"] is True
+    assert payload["primary_network_url"].startswith("http://192.168.1.77:5090")
+
+
+def test_dashboard_exposes_mobile_access_structure(client):
+    response = client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    mobile_access = payload["mobile_access"]
+    assert isinstance(mobile_access, dict)
+    assert {
+        "enabled",
+        "host",
+        "port",
+        "local_url",
+        "network_urls",
+        "primary_network_url",
+        "same_network_required",
+    }.issubset(set(mobile_access.keys()))
+
+
 # Safety-confirmation flow voor destructieve/gevoelige acties.
 def test_dangerous_command_sets_pending_confirmation_state(client):
     response = client.post("/api/commando", json={"commando": "shutdown computer"})
@@ -283,6 +324,66 @@ def test_speech_route_uses_mocked_recognition_flow(client, monkeypatch):
     assert payload["message"] == "Result: 2"
 
 
+def test_speech_upload_route_rejects_missing_audio_file(client):
+    response = client.post("/api/spraak-upload", data={}, content_type="multipart/form-data")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload.get("message")
+
+
+def test_speech_upload_route_rejects_empty_audio_file(client):
+    response = client.post(
+        "/api/spraak-upload",
+        data={"audio": (io.BytesIO(b""), "voice.webm")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload.get("message")
+
+
+def test_speech_upload_route_rejects_oversized_audio_file(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_AUDIO_UPLOAD_BYTES", 10)
+
+    response = client.post(
+        "/api/spraak-upload",
+        data={"audio": (io.BytesIO(b"01234567890"), "voice.webm")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload.get("message")
+
+
+def test_speech_upload_route_transcribes_with_mocked_backend(client, monkeypatch):
+    waargenomen = {}
+
+    def fake_transcribe(audio_pad):
+        waargenomen["suffix"] = audio_pad.suffix
+        return "hey echo bereken 1 plus 1", "whisper"
+
+    monkeypatch.setattr(server, "herken_audio_upload_tekst", fake_transcribe)
+
+    response = client.post(
+        "/api/spraak-upload",
+        data={"audio": (io.BytesIO(b"webm-bytes"), "voice.webm")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["gesproken"] == "hey echo bereken 1 plus 1"
+    assert payload["provider"] == "whisper"
+    assert waargenomen["suffix"] == ".webm"
+
+
 # Parser-regressietests voor routing van natuurlijke taal naar acties.
 def test_normaliseer_actie_parses_battery_check_phrase():
     assert server.normaliseer_actie("hoeveel batterij heb ik nog") == "battery status"
@@ -309,9 +410,27 @@ def test_normaliseer_actie_parses_security_cleanup_and_not_delete_path():
     assert server.normaliseer_actie("remove malware") == "security threat cleanup"
 
 
+def test_normaliseer_actie_parses_phone_status_phrase():
+    assert server.normaliseer_actie("phone status") == "mobile access status"
+
+
+def test_normaliseer_actie_parses_phone_link_phrase():
+    assert server.normaliseer_actie("test via telefoon") == "mobile access link"
+
+
 def test_normaliseer_actie_parses_discord_send_phrase():
     actie = server.normaliseer_actie("stuur discord bericht naar general met Hallo team")
     assert actie == "discord send::general||Hallo team"
+
+
+def test_voer_systeeminfo_uit_mobile_access_link_uses_detected_lan_url(monkeypatch):
+    monkeypatch.setattr(server, "ECHO_RUNTIME_HOST", "0.0.0.0")
+    monkeypatch.setattr(server, "ECHO_RUNTIME_PORT", 5101)
+    monkeypatch.setattr(server, "haal_lokale_ipv4_adressen", lambda max_items=8: ["10.0.0.55"])
+
+    bericht = server.voer_systeeminfo_uit("mobile access link")
+
+    assert "10.0.0.55:5101" in bericht
 
 
 def test_normaliseer_actie_parses_discord_dm_phrase():

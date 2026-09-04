@@ -25,7 +25,15 @@ const sendBtn = document.getElementById('sendBtn');
 const messages = document.getElementById('messages');
 const visualizer = document.getElementById('voiceVisualizer');
 const visualizerBars = Array.from(visualizer ? visualizer.querySelectorAll('.bar') : []);
-const quickButtons = Array.from(document.querySelectorAll('.panel-action'));
+const quickButtons = Array.from(document.querySelectorAll('.panel-action:not(.routine-action)'));
+const routineButtons = Array.from(document.querySelectorAll('.routine-action'));
+const mobileAccessState = document.getElementById('mobileAccessState');
+const mobileAccessHint = document.getElementById('mobileAccessHint');
+const mobileAccessLinks = document.getElementById('mobileAccessLinks');
+const mobileCopyLinkBtn = document.getElementById('mobileCopyLinkBtn');
+const mobileOpenLinkBtn = document.getElementById('mobileOpenLinkBtn');
+const mobileVoiceFileInput = document.getElementById('mobileVoiceFileInput');
+const historyCommands = document.getElementById('historyCommands');
 const pendingConfirm = document.getElementById('pendingConfirm');
 const pendingConfirmText = document.getElementById('pendingConfirmText');
 const pendingConfirmKicker = document.getElementById('pendingConfirmKicker');
@@ -46,6 +54,9 @@ const appState = {
     speakingActive: false,
     speakingPulseTimer: null,
     visualizerTimer: null,
+    voiceInputMode: 'none',
+    isSamsungBrowser: false,
+    voiceUploadInFlight: false,
     recognition: null,
     language: 'nl-NL',
     wakeWord: 'hey echo',
@@ -82,6 +93,16 @@ const appState = {
         monitor_running: false,
         supported: true,
     },
+    mobileAccessSnapshot: {
+        enabled: false,
+        network_urls: [],
+        primary_network_url: '',
+        access_hint_en: '',
+        access_hint_nl: '',
+    },
+    mobilePrimaryUrl: '',
+    commandHistory: [],
+    commandHistoryCursor: -1,
     pendingCommands: {
         confirm: 'bevestig wachtende actie',
         cancel: 'annuleer wachtende actie',
@@ -95,6 +116,9 @@ const ASSISTANT_DUPLICATE_WINDOW_MS = 7000;
 const API_DISCOVERY_TIMEOUT_MS = 420;
 const ECHO_RUNTIME_PORT_START = 5000;
 const ECHO_RUNTIME_PORT_SPAN = 50;
+const COMMAND_HISTORY_STORAGE_KEY = 'echo_command_history_v1';
+const COMMAND_HISTORY_MAX_ITEMS = 16;
+const VOICE_UPLOAD_TIMEOUT_MS = 28000;
 
 // Threat-profielen sturen visuele state en contextlabels in de UI.
 const THREAT_LEVELS = {
@@ -160,6 +184,11 @@ const UI_STRINGS = {
         voice_recognition_unavailable: 'Spraakherkenning niet beschikbaar',
         voice_listening_disabled: 'Stemluisteren uitgeschakeld',
         voice_not_supported: 'Stem niet ondersteund',
+        voice_input_quick_capture: 'Snelle spraakopname',
+        voice_manual_mobile_hint: 'Samsung-compatibiliteit actief. Gebruik snelle spraakopname of typ je opdracht.',
+        voice_upload_processing: 'Spraakopname verwerken...',
+        voice_upload_failed: 'Spraakopname kon niet verwerkt worden.',
+        voice_upload_empty: 'Geen spraaktekst gevonden in opname.',
         voice_listening_active: 'Stemluisteren actief - activatiewoord vereist',
         voice_error_code: 'Spraakfout: {code}',
         microphone_permission_denied: 'Microfoonrechten geweigerd',
@@ -205,6 +234,17 @@ const UI_STRINGS = {
         daily_security_last_success: 'Laatste: gestart op {when}',
         daily_security_last_skipped: 'Laatste: overgeslagen op {when}',
         daily_security_result: 'Resultaat: {result}',
+        mobile_access_checking: 'Telefoontoegang controleren...',
+        mobile_access_ready: 'Telefoontoegang actief: {url}',
+        mobile_access_enabled_no_url: 'Telefoontoegang aan, maar nog geen URL gevonden',
+        mobile_access_disabled: 'Telefoontoegang uit (alleen lokaal)',
+        mobile_access_no_links: 'Nog geen telefoonlinks beschikbaar.',
+        mobile_access_copy_success: 'Telefoonlink gekopieerd naar klembord.',
+        mobile_access_copy_missing: 'Geen telefoonlink beschikbaar om te kopieren.',
+        mobile_access_copy_failed: 'Kopieren mislukt. Houd de link ingedrukt en kopieer handmatig.',
+        mobile_access_open_missing: 'Geen telefoonlink beschikbaar om te openen.',
+        routine_prefill_ready: 'Concept klaar. Voeg alleen nog je tekst toe.',
+        history_empty: 'Nog geen recente commando\'s.',
     },
     en: {
         mode_voice: 'VOICE MODE',
@@ -244,6 +284,11 @@ const UI_STRINGS = {
         voice_recognition_unavailable: 'Voice recognition unavailable',
         voice_listening_disabled: 'Voice listening disabled',
         voice_not_supported: 'Voice Not Supported',
+        voice_input_quick_capture: 'Quick voice capture',
+        voice_manual_mobile_hint: 'Samsung compatibility mode is active. Use quick voice capture or type your command.',
+        voice_upload_processing: 'Processing voice capture...',
+        voice_upload_failed: 'Could not process voice capture.',
+        voice_upload_empty: 'No speech detected in the recording.',
         voice_listening_active: 'Voice listening active - wake word required',
         voice_error_code: 'Voice error: {code}',
         microphone_permission_denied: 'Microphone permission denied',
@@ -289,6 +334,17 @@ const UI_STRINGS = {
         daily_security_last_success: 'Last: started at {when}',
         daily_security_last_skipped: 'Last: skipped at {when}',
         daily_security_result: 'Result: {result}',
+        mobile_access_checking: 'Checking phone access...',
+        mobile_access_ready: 'Phone access active: {url}',
+        mobile_access_enabled_no_url: 'Phone access enabled, but no URL detected yet',
+        mobile_access_disabled: 'Phone access disabled (local only)',
+        mobile_access_no_links: 'No phone links available yet.',
+        mobile_access_copy_success: 'Phone link copied to clipboard.',
+        mobile_access_copy_missing: 'No phone link available to copy.',
+        mobile_access_copy_failed: 'Copy failed. Long-press the link and copy it manually.',
+        mobile_access_open_missing: 'No phone link available to open.',
+        routine_prefill_ready: 'Draft ready. Add your text and send.',
+        history_empty: 'No recent commands yet.',
     },
 };
 
@@ -454,6 +510,15 @@ function isNederlandsActief() {
     return prefix === 'nl';
 }
 
+function detectSamsungBrowser() {
+    const userAgent = String(navigator.userAgent || '');
+    return /SamsungBrowser/i.test(userAgent);
+}
+
+function isVoiceUploadFallbackAvailable() {
+    return Boolean(mobileVoiceFileInput && typeof FormData !== 'undefined');
+}
+
 function tekstVoorTaal(engels, nederlands) {
     return isNederlandsActief() ? String(nederlands || '') : String(engels || '');
 }
@@ -569,6 +634,215 @@ function renderDailySecurityPanel(payload) {
         resultaatRegel += ' | ' + uiTekst('daily_security_result', { result: laatsteResultaat });
     }
     dailySecurityResult.textContent = resultaatRegel;
+}
+
+function mobileHintTekstUitPayload(payload = {}) {
+    const preferred = isNederlandsActief() ? payload.access_hint_nl : payload.access_hint_en;
+    const fallback = isNederlandsActief() ? payload.access_hint_en : payload.access_hint_nl;
+    return String(preferred || fallback || '').trim();
+}
+
+function normaliseerMobieleLinks(rawLinks) {
+    if (!Array.isArray(rawLinks)) {
+        return [];
+    }
+
+    const links = rawLinks
+        .map((item) => String(item || '').trim())
+        .filter((item) => item.startsWith('http://') || item.startsWith('https://'));
+
+    return Array.from(new Set(links));
+}
+
+function compacteLabelVoorMobieleUrl(url, index) {
+    try {
+        const parsed = new URL(url);
+        return `#${index + 1} ${parsed.hostname}:${parsed.port || '80'}`;
+    } catch (_error) {
+        return `#${index + 1} ${url}`;
+    }
+}
+
+function renderMobileAccessPanel(payload) {
+    if (!mobileAccessState || !mobileAccessHint || !mobileAccessLinks) {
+        return;
+    }
+
+    const update = payload && typeof payload === 'object' ? payload : {};
+    appState.mobileAccessSnapshot = {
+        ...appState.mobileAccessSnapshot,
+        ...update,
+    };
+
+    const enabled = parseerBoolWaarde(appState.mobileAccessSnapshot.enabled, false);
+    const links = normaliseerMobieleLinks(appState.mobileAccessSnapshot.network_urls);
+    const primary = String(appState.mobileAccessSnapshot.primary_network_url || links[0] || '').trim();
+    const hintTekst = mobileHintTekstUitPayload(appState.mobileAccessSnapshot);
+    appState.mobilePrimaryUrl = primary;
+
+    if (enabled && primary) {
+        mobileAccessState.textContent = uiTekst('mobile_access_ready', { url: primary });
+    } else if (enabled) {
+        mobileAccessState.textContent = uiTekst('mobile_access_enabled_no_url');
+    } else if (hintTekst) {
+        mobileAccessState.textContent = uiTekst('mobile_access_disabled');
+    } else {
+        mobileAccessState.textContent = uiTekst('mobile_access_checking');
+    }
+
+    mobileAccessHint.textContent = hintTekst || uiTekst('mobile_access_checking');
+
+    mobileAccessLinks.innerHTML = '';
+    if (!links.length) {
+        const empty = document.createElement('p');
+        empty.className = 'mobile-link-empty';
+        empty.textContent = uiTekst('mobile_access_no_links');
+        mobileAccessLinks.appendChild(empty);
+        return;
+    }
+
+    links.slice(0, 5).forEach((url, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'mobile-link-chip';
+        button.textContent = compacteLabelVoorMobieleUrl(url, index);
+        button.title = url;
+        button.addEventListener('click', () => {
+            window.open(url, '_blank', 'noopener');
+        });
+        mobileAccessLinks.appendChild(button);
+    });
+}
+
+function triggerHapticFeedback(pattern) {
+    if (!('vibrate' in navigator)) {
+        return;
+    }
+    try {
+        navigator.vibrate(pattern);
+    } catch (_error) {
+        // Ignore vibration errors.
+    }
+}
+
+function saveCommandHistory() {
+    try {
+        localStorage.setItem(COMMAND_HISTORY_STORAGE_KEY, JSON.stringify(appState.commandHistory));
+    } catch (_error) {
+        // Ignore storage write issues.
+    }
+}
+
+function loadCommandHistory() {
+    try {
+        const raw = localStorage.getItem(COMMAND_HISTORY_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) {
+            appState.commandHistory = parsed
+                .map((item) => String(item || '').trim())
+                .filter(Boolean)
+                .slice(0, COMMAND_HISTORY_MAX_ITEMS);
+        }
+    } catch (_error) {
+        appState.commandHistory = [];
+    }
+
+    appState.commandHistoryCursor = -1;
+    renderCommandHistory();
+}
+
+function rememberCommand(commandText) {
+    const value = String(commandText || '').trim();
+    if (!value) {
+        return;
+    }
+
+    const normalized = normalizeText(value);
+    const next = [value];
+    appState.commandHistory.forEach((existing) => {
+        if (normalizeText(existing) !== normalized) {
+            next.push(existing);
+        }
+    });
+
+    appState.commandHistory = next.slice(0, COMMAND_HISTORY_MAX_ITEMS);
+    appState.commandHistoryCursor = -1;
+    saveCommandHistory();
+    renderCommandHistory();
+}
+
+function setCommandDraft(value) {
+    if (!commandInput) {
+        return;
+    }
+
+    commandInput.value = String(value || '');
+    commandInput.focus();
+    const end = commandInput.value.length;
+    commandInput.setSelectionRange(end, end);
+}
+
+function navigateCommandHistory(direction) {
+    if (!commandInput || !appState.commandHistory.length) {
+        return;
+    }
+
+    if (direction < 0) {
+        if (appState.commandHistoryCursor < appState.commandHistory.length - 1) {
+            appState.commandHistoryCursor += 1;
+        }
+    } else if (direction > 0) {
+        if (appState.commandHistoryCursor > 0) {
+            appState.commandHistoryCursor -= 1;
+        } else {
+            appState.commandHistoryCursor = -1;
+            setCommandDraft('');
+            return;
+        }
+    }
+
+    if (appState.commandHistoryCursor >= 0) {
+        const draft = appState.commandHistory[appState.commandHistoryCursor] || '';
+        setCommandDraft(draft);
+    }
+}
+
+function renderCommandHistory() {
+    if (!historyCommands) {
+        return;
+    }
+
+    historyCommands.innerHTML = '';
+
+    if (!appState.commandHistory.length) {
+        const empty = document.createElement('p');
+        empty.className = 'history-empty';
+        empty.textContent = uiTekst('history_empty');
+        historyCommands.appendChild(empty);
+        return;
+    }
+
+    appState.commandHistory.slice(0, 8).forEach((command) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'history-command';
+        button.textContent = command;
+        button.title = command;
+        button.addEventListener('click', () => {
+            setCommandDraft(command);
+        });
+        historyCommands.appendChild(button);
+    });
+}
+
+function updateViewportModeClass() {
+    if (!body) {
+        return;
+    }
+
+    const touchPointer = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    const compactViewport = window.innerWidth <= 980;
+    body.classList.toggle('touch-optimized', touchPointer || compactViewport);
 }
 
 function normalizeAppLanguage(taalCode) {
@@ -935,11 +1209,28 @@ async function refreshDashboardTelemetry() {
         }
 
         renderDailySecurityPanel(payload.security_daily_scan);
+        if (payload.mobile_access) {
+            renderMobileAccessPanel(payload.mobile_access);
+        }
         if (payload.pending_confirmation) {
             renderPendingConfirmation(payload.pending_confirmation);
         }
     } catch (_error) {
         // Keep current panel values on transient network failures.
+        try {
+            const fallback = await fetchEchoApi('/api/mobile-access', {
+                method: 'GET',
+                cache: 'no-store',
+            }, 1400);
+            if (fallback.ok) {
+                const data = await fallback.json().catch(() => null);
+                if (data && typeof data === 'object') {
+                    renderMobileAccessPanel(data);
+                }
+            }
+        } catch (_innerError) {
+            // Ignore fallback errors.
+        }
     }
 }
 
@@ -1631,6 +1922,31 @@ function updateLanguageToggleControl() {
     languageToggleBtn.textContent = label;
 }
 
+function updateSpeechButtonLabel() {
+    if (!speechBtn) {
+        return;
+    }
+
+    if (appState.voiceInputMode === 'upload') {
+        speechBtn.disabled = appState.voiceUploadInFlight;
+        speechBtn.textContent = appState.voiceUploadInFlight
+            ? uiTekst('voice_upload_processing')
+            : uiTekst('voice_input_quick_capture');
+        return;
+    }
+
+    if (appState.voiceInputMode === 'browser') {
+        speechBtn.disabled = false;
+        speechBtn.textContent = appState.listeningActive
+            ? uiTekst('speech_listening_stop')
+            : uiTekst('speech_listening_start');
+        return;
+    }
+
+    speechBtn.disabled = true;
+    speechBtn.textContent = uiTekst('voice_not_supported');
+}
+
 function resetPendingCommandsDefaults() {
     appState.pendingCommands.confirm = uiTekst('pending_confirm_command');
     appState.pendingCommands.cancel = uiTekst('pending_cancel_command');
@@ -1648,12 +1964,7 @@ function updateLocalizedUiLabels() {
     if (clearLogBtn) {
         clearLogBtn.textContent = uiTekst('clear_feed_button');
     }
-
-    if (speechBtn) {
-        speechBtn.textContent = appState.listeningActive
-            ? uiTekst('speech_listening_stop')
-            : uiTekst('speech_listening_start');
-    }
+    updateSpeechButtonLabel();
 
     if (pendingConfirmYes) {
         pendingConfirmYes.textContent = uiTekst('confirm_button');
@@ -1692,6 +2003,8 @@ function updateLocalizedUiLabels() {
     }
 
     renderDailySecurityPanel(appState.dailySecuritySnapshot);
+    renderMobileAccessPanel(appState.mobileAccessSnapshot);
+    renderCommandHistory();
 
     setMode(appState.dashboardActive);
     updateWakeGateStatus();
@@ -1813,12 +2126,22 @@ function updateIdleVoiceStatus() {
         return;
     }
 
+    if (appState.voiceUploadInFlight) {
+        setVoiceStatus(uiTekst('voice_upload_processing'));
+        return;
+    }
+
     if (appState.listeningActive) {
         if (appState.wakeArmed) {
             setVoiceStatus(uiTekst('voice_wake_confirmed'));
         } else {
             setVoiceStatus(uiTekst('voice_listening_for_wake', { wakeWord: appState.wakeWord }));
         }
+        return;
+    }
+
+    if (appState.voiceInputMode === 'upload') {
+        setVoiceStatus(uiTekst('voice_manual_mobile_hint'));
         return;
     }
 
@@ -1853,12 +2176,7 @@ function setListening(active) {
 
     refreshCoreStateClasses();
     updateIdleVoiceStatus();
-
-    if (speechBtn) {
-        speechBtn.textContent = appState.listeningActive
-            ? uiTekst('speech_listening_stop')
-            : uiTekst('speech_listening_start');
-    }
+    updateSpeechButtonLabel();
 }
 
 async function speakText(text, options = {}) {
@@ -1968,6 +2286,10 @@ async function sendCommand(command, source = 'text') {
         return;
     }
 
+    if (source !== 'system') {
+        rememberCommand(commandText);
+    }
+
     const threatProfile = classifyCommandThreat(commandText);
     setThreatState(threatProfile.level, threatProfile.context, 7000);
 
@@ -2007,6 +2329,7 @@ async function sendCommand(command, source = 'text') {
                     addMessage('error', deviceMessage);
                     setCommandStatus(uiTekst('command_device_failed'));
                     setThreatState('critical', uiTekst('threat_context_device_failure'), 10000);
+                    triggerHapticFeedback([80, 30, 80]);
                 } else {
                     addMessage('ai', deviceMessage);
                     setCommandStatus(needsConfirmation ? uiTekst('command_device_confirmation') : uiTekst('command_device_completed'));
@@ -2015,6 +2338,7 @@ async function sendCommand(command, source = 'text') {
                         needsConfirmation ? uiTekst('threat_context_device_confirmation') : threatProfile.context,
                         needsConfirmation ? 12000 : 7000
                     );
+                    triggerHapticFeedback(needsConfirmation ? [70, 30, 70] : 50);
                 }
 
                 renderPendingConfirmation(null);
@@ -2076,6 +2400,7 @@ async function sendCommand(command, source = 'text') {
         if (ok && !isDuplicateReply) {
             addMessage('ai', message);
             setCommandStatus(uiTekst('command_completed_ms', { duration: String(data.duration_ms || 0) }));
+            triggerHapticFeedback(50);
 
             const preset = pendingPrompt
                 ? 'confirmation'
@@ -2091,6 +2416,7 @@ async function sendCommand(command, source = 'text') {
             addMessage('error', message);
             setCommandStatus(uiTekst('command_failed'));
             setThreatState('elevated', uiTekst('threat_context_command_failure'), 9000);
+            triggerHapticFeedback([80, 30, 80]);
 
             const spoken = await speakText(message, {
                 profile: profileForSpeechMessage(message, 'warning'),
@@ -2116,6 +2442,7 @@ async function sendCommand(command, source = 'text') {
         addMessage('error', message);
         setCommandStatus(uiTekst('command_connection_error'));
         setThreatState('critical', uiTekst('threat_context_transport_failure'), 10000);
+        triggerHapticFeedback([110, 45, 110]);
 
         const spoken = await speakText(message, { profile: 'warning' });
         if (!spoken) {
@@ -2219,7 +2546,7 @@ function handleRecognitionResult(event) {
 }
 
 function startRecognition() {
-    if (!appState.recognition || !appState.bootComplete) {
+    if (appState.voiceInputMode !== 'browser' || !appState.recognition || !appState.bootComplete) {
         return;
     }
 
@@ -2232,7 +2559,7 @@ function startRecognition() {
 }
 
 function stopRecognition() {
-    if (!appState.recognition) {
+    if (appState.voiceInputMode !== 'browser' || !appState.recognition) {
         return;
     }
 
@@ -2246,12 +2573,100 @@ function stopRecognition() {
     }
 }
 
+async function uploadVoiceCaptureFile(audioFile) {
+    if (!audioFile || appState.voiceUploadInFlight) {
+        return;
+    }
+
+    appState.voiceUploadInFlight = true;
+    appState.listeningWanted = false;
+    setWakeArmed(false);
+    updateSpeechButtonLabel();
+    updateIdleVoiceStatus();
+    setCommandStatus(uiTekst('voice_upload_processing'));
+
+    try {
+        const uploadName = String(audioFile.name || '').trim() || 'voice-capture.webm';
+        const formData = new FormData();
+        formData.append('audio', audioFile, uploadName);
+
+        const response = await fetchEchoApi('/api/spraak-upload', {
+            method: 'POST',
+            body: formData,
+        }, VOICE_UPLOAD_TIMEOUT_MS);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        const transcript = String(data.gesproken || '').trim();
+        if (!response.ok || data.status !== 'success') {
+            const foutmelding = String(data.message || '').trim() || uiTekst('voice_upload_failed');
+            addMessage('error', foutmelding);
+            setCommandStatus(foutmelding);
+            setVoiceStatus(uiTekst('voice_upload_failed'));
+            setThreatState('watch', uiTekst('threat_context_transport_failure'), 7000);
+            triggerHapticFeedback([80, 30, 80]);
+            return;
+        }
+
+        if (!transcript) {
+            setCommandStatus(uiTekst('voice_upload_empty'));
+            setVoiceStatus(uiTekst('voice_upload_empty'));
+            triggerHapticFeedback([80, 30, 80]);
+            return;
+        }
+
+        processVoiceTranscript(transcript);
+    } catch (error) {
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const isTransportError = /failed to fetch|networkerror|load failed|fetch/i.test(rawMessage);
+        const foutmelding = isTransportError
+            ? uiTekst('request_failed_runtime_hint')
+            : (rawMessage || uiTekst('voice_upload_failed'));
+        addMessage('error', foutmelding);
+        setCommandStatus(uiTekst('voice_upload_failed'));
+        setVoiceStatus(uiTekst('voice_upload_failed'));
+        setThreatState('critical', uiTekst('threat_context_transport_failure'), 9000);
+        triggerHapticFeedback([80, 30, 80]);
+    } finally {
+        appState.voiceUploadInFlight = false;
+        updateSpeechButtonLabel();
+        updateIdleVoiceStatus();
+    }
+}
+
+function openVoiceUploadCapturePicker() {
+    if (!isVoiceUploadFallbackAvailable()) {
+        appState.voiceInputMode = 'none';
+        setCommandStatus(uiTekst('voice_not_supported'));
+        updateSpeechButtonLabel();
+        return;
+    }
+
+    if (appState.voiceUploadInFlight) {
+        return;
+    }
+
+    if (mobileVoiceFileInput) {
+        mobileVoiceFileInput.value = '';
+        setCommandStatus(uiTekst('voice_input_quick_capture'));
+        mobileVoiceFileInput.click();
+    }
+}
+
 function toggleListening() {
     if (!appState.bootComplete) {
         return;
     }
 
-    if (!appState.recognition) {
+    if (appState.voiceInputMode === 'upload') {
+        openVoiceUploadCapturePicker();
+        return;
+    }
+
+    if (!appState.recognition || appState.voiceInputMode !== 'browser') {
         setVoiceStatus(uiTekst('voice_recognition_unavailable_browser'));
         setCommandStatus(uiTekst('voice_recognition_unavailable'));
         return;
@@ -2269,15 +2684,27 @@ function toggleListening() {
 }
 
 function initRecognition() {
+    appState.isSamsungBrowser = detectSamsungBrowser();
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-        setVoiceStatus(uiTekst('voice_recognition_unavailable'));
-        if (speechBtn) {
-            speechBtn.disabled = true;
-            speechBtn.textContent = uiTekst('voice_not_supported');
+        if (isVoiceUploadFallbackAvailable()) {
+            appState.voiceInputMode = 'upload';
+            appState.recognition = null;
+            setVoiceStatus(uiTekst('voice_manual_mobile_hint'));
+            setCommandStatus(uiTekst('voice_recognition_unavailable_browser'));
+            updateSpeechButtonLabel();
+            return;
         }
+
+        appState.voiceInputMode = 'none';
+        appState.recognition = null;
+        setVoiceStatus(uiTekst('voice_recognition_unavailable'));
+        updateSpeechButtonLabel();
         return;
     }
+
+    appState.voiceInputMode = 'browser';
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
@@ -2295,6 +2722,18 @@ function initRecognition() {
     recognition.onerror = (event) => {
         const code = event && event.error ? String(event.error) : 'unknown';
         setCommandStatus(uiTekst('voice_error_code', { code }));
+
+        if (code === 'service-not-allowed' && appState.isSamsungBrowser && isVoiceUploadFallbackAvailable()) {
+            appState.listeningWanted = false;
+            setListening(false);
+            setWakeArmed(false);
+            appState.voiceInputMode = 'upload';
+            appState.recognition = null;
+            setVoiceStatus(uiTekst('voice_manual_mobile_hint'));
+            setCommandStatus(uiTekst('voice_recognition_unavailable_browser'));
+            updateSpeechButtonLabel();
+            return;
+        }
 
         if (code === 'not-allowed' || code === 'service-not-allowed') {
             appState.listeningWanted = false;
@@ -2316,12 +2755,13 @@ function initRecognition() {
         clearVoiceTranscriptBuffer();
         setWakeArmed(false);
         setListening(false);
-        if (appState.listeningWanted) {
+        if (appState.listeningWanted && appState.voiceInputMode === 'browser') {
             window.setTimeout(startRecognition, 280);
         }
     };
 
     appState.recognition = recognition;
+    updateSpeechButtonLabel();
 }
 
 function updateVisualizerBars() {
@@ -2386,6 +2826,7 @@ async function loadSettings() {
             enabled: parseerBoolWaarde(settings.security_scan_daily_enabled, false),
             scheduled_time: String(settings.security_scan_daily_time || '03:00').trim() || '03:00',
         });
+        renderMobileAccessPanel(appState.mobileAccessSnapshot);
 
         document.title = appState.aiName;
 
@@ -2418,6 +2859,21 @@ function wireEvents() {
         });
     }
 
+    if (mobileVoiceFileInput) {
+        mobileVoiceFileInput.addEventListener('change', (event) => {
+            const target = event.target;
+            const files = target && target.files ? target.files : null;
+            const selectedFile = files && files.length ? files[0] : null;
+            if (target) {
+                target.value = '';
+            }
+            if (!selectedFile) {
+                return;
+            }
+            void uploadVoiceCaptureFile(selectedFile);
+        });
+    }
+
     if (clearLogBtn) {
         clearLogBtn.addEventListener('click', () => {
             clearFeed();
@@ -2445,6 +2901,18 @@ function wireEvents() {
         });
     }
 
+    if (commandInput) {
+        commandInput.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                navigateCommandHistory(-1);
+            } else if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                navigateCommandHistory(1);
+            }
+        });
+    }
+
     quickButtons.forEach((button) => {
         button.addEventListener('click', () => {
             const command = String(button.dataset.command || '').trim();
@@ -2454,6 +2922,62 @@ function wireEvents() {
             void sendCommand(command, 'quick');
         });
     });
+
+    routineButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+            const fillCommand = String(button.dataset.fillCommand || '').trim();
+            if (fillCommand) {
+                setCommandDraft(fillCommand);
+                setCommandStatus(uiTekst('routine_prefill_ready'));
+                triggerHapticFeedback(35);
+                return;
+            }
+
+            const command = String(button.dataset.command || '').trim();
+            if (!command) {
+                return;
+            }
+            void sendCommand(command, 'quick');
+        });
+    });
+
+    if (mobileCopyLinkBtn) {
+        mobileCopyLinkBtn.addEventListener('click', async () => {
+            const link = String(appState.mobilePrimaryUrl || '').trim();
+            if (!link) {
+                setCommandStatus(uiTekst('mobile_access_copy_missing'));
+                triggerHapticFeedback([90, 40, 90]);
+                return;
+            }
+
+            try {
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    await navigator.clipboard.writeText(link);
+                } else {
+                    throw new Error('clipboard unavailable');
+                }
+                setCommandStatus(uiTekst('mobile_access_copy_success'));
+                triggerHapticFeedback(55);
+            } catch (_error) {
+                setCommandStatus(uiTekst('mobile_access_copy_failed'));
+                triggerHapticFeedback([90, 35, 90]);
+            }
+        });
+    }
+
+    if (mobileOpenLinkBtn) {
+        mobileOpenLinkBtn.addEventListener('click', () => {
+            const link = String(appState.mobilePrimaryUrl || '').trim();
+            if (!link) {
+                setCommandStatus(uiTekst('mobile_access_open_missing'));
+                triggerHapticFeedback([90, 35, 90]);
+                return;
+            }
+
+            window.open(link, '_blank', 'noopener');
+            triggerHapticFeedback(45);
+        });
+    }
 
     if (pendingConfirmYes) {
         pendingConfirmYes.addEventListener('click', () => {
@@ -2487,6 +3011,10 @@ function wireEvents() {
                 commandInput.focus();
             }
         }
+    });
+
+    window.addEventListener('resize', () => {
+        updateViewportModeClass();
     });
 }
 
@@ -2546,6 +3074,9 @@ async function init() {
     setSpeaking(false);
     renderPendingConfirmation(null);
     updateLocalizedUiLabels();
+    renderMobileAccessPanel({});
+    loadCommandHistory();
+    updateViewportModeClass();
 
     await loadSettings();
     void ensureBrowserVoices();

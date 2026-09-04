@@ -1,5 +1,6 @@
 import pytest
 import datetime
+import io
 
 import server
 
@@ -83,6 +84,8 @@ def test_execute_command_accepts_valid_payload(client):
     payload = response.get_json()
     assert payload["status"] == "success"
     assert payload.get("message")
+    assert "artifacts" in payload
+    assert "screenshot" in payload["artifacts"]
 
 
 def test_api_commando_response_includes_cors_headers(client):
@@ -197,6 +200,102 @@ def test_dashboard_exposes_daily_security_scan_structure(client):
     }.issubset(set(daily_scan.keys()))
 
 
+def test_mobile_access_endpoint_returns_expected_structure(client, monkeypatch):
+    monkeypatch.setattr(server, "ECHO_RUNTIME_HOST", "0.0.0.0")
+    monkeypatch.setattr(server, "ECHO_RUNTIME_PORT", 5090)
+    monkeypatch.setattr(server, "haal_lokale_ipv4_adressen", lambda max_items=8: ["192.168.1.77"])
+
+    response = client.get("/api/mobile-access")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert {
+        "enabled",
+        "host",
+        "port",
+        "local_url",
+        "network_urls",
+        "primary_network_url",
+        "same_network_required",
+    }.issubset(set(payload.keys()))
+    assert payload["enabled"] is True
+    assert payload["primary_network_url"].startswith("http://192.168.1.77:5090")
+
+
+def test_dashboard_exposes_mobile_access_structure(client):
+    response = client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    mobile_access = payload["mobile_access"]
+    assert isinstance(mobile_access, dict)
+    assert {
+        "enabled",
+        "host",
+        "port",
+        "local_url",
+        "network_urls",
+        "primary_network_url",
+        "same_network_required",
+    }.issubset(set(mobile_access.keys()))
+
+
+def test_latest_screenshot_endpoint_returns_unavailable_without_files(client, monkeypatch, tmp_path):
+    screenshot_dir = tmp_path / "screenshots"
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(server, "screenshot_map_pad", lambda: screenshot_dir)
+
+    response = client.get("/api/screenshot/latest")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["available"] is False
+
+
+def test_latest_screenshot_and_download_routes_work(client, monkeypatch, tmp_path):
+    screenshot_dir = tmp_path / "screenshots"
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    screenshot_file = screenshot_dir / "echo-screenshot-20260904-153000.png"
+    screenshot_file.write_bytes(b"PNGDATA")
+
+    monkeypatch.setattr(server, "screenshot_map_pad", lambda: screenshot_dir)
+    monkeypatch.setattr(
+        server,
+        "maak_mobiele_toegang_payload",
+        lambda poort=None, host=None: {
+            "enabled": True,
+            "host": "0.0.0.0",
+            "port": 5000,
+            "local_url": "http://127.0.0.1:5000",
+            "network_urls": ["http://192.168.1.77:5000"],
+            "primary_network_url": "http://192.168.1.77:5000",
+            "same_network_required": True,
+            "access_hint_en": "",
+            "access_hint_nl": "",
+        },
+    )
+
+    latest_response = client.get("/api/screenshot/latest")
+    assert latest_response.status_code == 200
+    latest_payload = latest_response.get_json()
+    assert latest_payload["available"] is True
+    assert latest_payload["filename"] == "echo-screenshot-20260904-153000.png"
+    assert latest_payload["download_path"].endswith("echo-screenshot-20260904-153000.png")
+
+    download_response = client.get(latest_payload["download_path"])
+    assert download_response.status_code == 200
+    assert download_response.data == b"PNGDATA"
+    assert "attachment" in (download_response.headers.get("Content-Disposition") or "")
+
+
+def test_screenshot_download_route_rejects_invalid_filename(client):
+    response = client.get("/api/screenshots/not-valid-name.png")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
 # Safety-confirmation flow voor destructieve/gevoelige acties.
 def test_dangerous_command_sets_pending_confirmation_state(client):
     response = client.post("/api/commando", json={"commando": "shutdown computer"})
@@ -283,6 +382,66 @@ def test_speech_route_uses_mocked_recognition_flow(client, monkeypatch):
     assert payload["message"] == "Result: 2"
 
 
+def test_speech_upload_route_rejects_missing_audio_file(client):
+    response = client.post("/api/spraak-upload", data={}, content_type="multipart/form-data")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload.get("message")
+
+
+def test_speech_upload_route_rejects_empty_audio_file(client):
+    response = client.post(
+        "/api/spraak-upload",
+        data={"audio": (io.BytesIO(b""), "voice.webm")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload.get("message")
+
+
+def test_speech_upload_route_rejects_oversized_audio_file(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_AUDIO_UPLOAD_BYTES", 10)
+
+    response = client.post(
+        "/api/spraak-upload",
+        data={"audio": (io.BytesIO(b"01234567890"), "voice.webm")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload.get("message")
+
+
+def test_speech_upload_route_transcribes_with_mocked_backend(client, monkeypatch):
+    waargenomen = {}
+
+    def fake_transcribe(audio_pad):
+        waargenomen["suffix"] = audio_pad.suffix
+        return "hey echo bereken 1 plus 1", "whisper"
+
+    monkeypatch.setattr(server, "herken_audio_upload_tekst", fake_transcribe)
+
+    response = client.post(
+        "/api/spraak-upload",
+        data={"audio": (io.BytesIO(b"webm-bytes"), "voice.webm")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["gesproken"] == "hey echo bereken 1 plus 1"
+    assert payload["provider"] == "whisper"
+    assert waargenomen["suffix"] == ".webm"
+
+
 # Parser-regressietests voor routing van natuurlijke taal naar acties.
 def test_normaliseer_actie_parses_battery_check_phrase():
     assert server.normaliseer_actie("hoeveel batterij heb ik nog") == "battery status"
@@ -309,9 +468,27 @@ def test_normaliseer_actie_parses_security_cleanup_and_not_delete_path():
     assert server.normaliseer_actie("remove malware") == "security threat cleanup"
 
 
+def test_normaliseer_actie_parses_phone_status_phrase():
+    assert server.normaliseer_actie("phone status") == "mobile access status"
+
+
+def test_normaliseer_actie_parses_phone_link_phrase():
+    assert server.normaliseer_actie("test via telefoon") == "mobile access link"
+
+
 def test_normaliseer_actie_parses_discord_send_phrase():
     actie = server.normaliseer_actie("stuur discord bericht naar general met Hallo team")
     assert actie == "discord send::general||Hallo team"
+
+
+def test_voer_systeeminfo_uit_mobile_access_link_uses_detected_lan_url(monkeypatch):
+    monkeypatch.setattr(server, "ECHO_RUNTIME_HOST", "0.0.0.0")
+    monkeypatch.setattr(server, "ECHO_RUNTIME_PORT", 5101)
+    monkeypatch.setattr(server, "haal_lokale_ipv4_adressen", lambda max_items=8: ["10.0.0.55"])
+
+    bericht = server.voer_systeeminfo_uit("mobile access link")
+
+    assert "10.0.0.55:5101" in bericht
 
 
 def test_normaliseer_actie_parses_discord_dm_phrase():
@@ -762,3 +939,71 @@ def test_voer_browser_link_selectie_uit_opent_gekozen_index(monkeypatch):
 
     assert geopend["url"] == "https://example.com/b"
     assert "link 2" in bericht.lower()
+
+
+def test_is_meedenk_vraag_detecteert_expliciete_denkvraag():
+    assert server.is_meedenk_vraag("denk mee over mijn planning") is True
+    assert server.is_meedenk_vraag("hoe werkt wifi") is False
+
+
+def test_is_doorvraag_verzoek_detecteert_expliciete_triggers():
+    assert server.is_doorvraag_verzoek("vraag door over mijn project") is True
+    assert server.is_doorvraag_verzoek("ask follow-up questions about my code") is True
+    assert server.is_doorvraag_verzoek("wat is een api") is False
+
+
+def test_maak_best_mogelijke_antwoordtekst_kiest_doorvragen_voor_online(monkeypatch):
+    monkeypatch.setitem(server.instellingen, "agent_modus", True)
+    monkeypatch.setattr(server, "maak_inhoudelijk_antwoord", lambda tekst, uitgevoerde_resultaten=None: "")
+    monkeypatch.setattr(server, "maak_online_ai_antwoord", lambda tekst, uitgevoerde_resultaten=None: "online fallback")
+
+    tool, antwoord = server.maak_best_mogelijke_antwoordtekst("vraag door over mijn planning")
+
+    assert tool == "guided_followup"
+    assert antwoord
+    assert "1." in antwoord and "2." in antwoord and "3." in antwoord
+
+
+def test_maak_online_ai_antwoord_slaat_cache_hergebruik_op(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_online_chat(tekst, uitgevoerde_resultaten=None):
+        calls["count"] += 1
+        return "Cached answer"
+
+    monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
+    monkeypatch.setattr(server, "is_meedenk_vraag", lambda _tekst: False)
+    monkeypatch.setattr(server, "is_doorvraag_verzoek", lambda _tekst: False)
+    monkeypatch.setattr(server, "vraag_online_ai_chat", fake_online_chat)
+
+    with server.ONLINE_ANTWOORD_CACHE_LOCK:
+        server.ONLINE_ANTWOORD_CACHE.clear()
+
+    try:
+        eerste = server.maak_online_ai_antwoord("what is caching")
+        tweede = server.maak_online_ai_antwoord("what is caching")
+    finally:
+        with server.ONLINE_ANTWOORD_CACHE_LOCK:
+            server.ONLINE_ANTWOORD_CACHE.clear()
+
+    assert eerste == "Cached answer"
+    assert tweede == "Cached answer"
+    assert calls["count"] == 1
+
+
+def test_maak_online_ai_antwoord_slaat_over_bij_doorvraag(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_online_chat(tekst, uitgevoerde_resultaten=None):
+        calls["count"] += 1
+        return "Should not be used"
+
+    monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
+    monkeypatch.setattr(server, "is_meedenk_vraag", lambda _tekst: False)
+    monkeypatch.setattr(server, "is_doorvraag_verzoek", lambda _tekst: True)
+    monkeypatch.setattr(server, "vraag_online_ai_chat", fake_online_chat)
+
+    antwoord = server.maak_online_ai_antwoord("vraag door over dit onderwerp")
+
+    assert antwoord == ""
+    assert calls["count"] == 0

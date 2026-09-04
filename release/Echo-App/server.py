@@ -87,6 +87,7 @@ MAX_OPEN_TAKEN = 30
 MAX_NOTIFICATIES = 20
 MAX_DOCUMENT_SNIPPETS = 3
 MAX_DOCUMENT_BESTANDSGROOTTE = 200_000
+MAX_AUDIO_UPLOAD_BYTES = 12 * 1024 * 1024
 DOCUMENT_CONTEXT_EXTENSIES = {".md", ".txt", ".json", ".py", ".html", ".js", ".css"}
 DOCUMENT_CONTEXT_GENEGEERDE_MAPNAMEN = {".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
 WORKSPACE_SEARCH_GENEGEERDE_BESTANDEN = {".env", "echo_geheugen.json", "instellingen.json"}
@@ -190,6 +191,8 @@ WHATSAPP_CALL_BUTTON_OFFSETS = {
 }
 COMMAND_DUPLICATE_WINDOW_SECONDS = 6.0
 SPEECH_DUPLICATE_WINDOW_SECONDS = 6.0
+ECHO_RUNTIME_HOST = "127.0.0.1"
+ECHO_RUNTIME_PORT = 5000
 AUTO_AUTOMATISERING_ACTION_PREFIXEN = (
     "whatsapp send::",
     "whatsapp call::",
@@ -2687,6 +2690,7 @@ def maak_dashboard_payload():
             "recent_actions": recente_acties_voor_dashboard(),
             "suggested_files": dashboard_bestand_suggesties(),
         },
+        "mobile_access": maak_mobiele_toegang_payload(),
         "system_scan": huidige_system_scan_payload(),
         "security_scan": huidige_security_scan_payload(),
         "security_daily_scan": huidige_dagelijkse_security_scan_payload(),
@@ -3002,6 +3006,85 @@ def herken_spraak():
 
     except Exception:
         return None
+
+
+def herken_audio_pad_via_whisper(audio_pad):
+    model = laad_whisper_model()
+    beam_size = begrens_int_waarde(instellingen.get("whisper_beam_size", 5), standaard=5, minimum=1, maximum=10)
+    vad_filter = parseer_bool_waarde(instellingen.get("whisper_vad_filter", True), standaard=True)
+    taal = whisper_taalcode_voor_spraak()
+
+    segmenten, _ = model.transcribe(
+        str(audio_pad),
+        language=taal,
+        beam_size=beam_size,
+        vad_filter=vad_filter,
+    )
+
+    transcriptie = " ".join(
+        str(getattr(segment, "text", "") or "").strip()
+        for segment in segmenten
+        if str(getattr(segment, "text", "") or "").strip()
+    ).strip()
+    return transcriptie
+
+
+def herken_audio_pad_via_google(audio_pad):
+    if not SPRAAK_BESCHIKBAAR:
+        return ""
+
+    ondersteunde_suffixen = {".wav", ".wave", ".aif", ".aiff", ".flac"}
+    suffix = str(Path(audio_pad).suffix or "").strip().lower()
+    if suffix not in ondersteunde_suffixen:
+        return ""
+
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(str(audio_pad)) as source:
+        audio_data = recognizer.record(source)
+    return herken_spraak_via_google(recognizer, audio_data)
+
+
+def herken_audio_upload_tekst(audio_pad):
+    provider = normaliseer_spraak_input_provider(
+        instellingen.get("spraak_input_provider", DEFAULT_SETTINGS["spraak_input_provider"])
+    )
+
+    kandidaat_providers = ["whisper", "google"] if provider == "whisper" else ["google", "whisper"]
+    fouten = []
+
+    for kandidaat in kandidaat_providers:
+        if kandidaat == "whisper":
+            if not WHISPER_BESCHIKBAAR:
+                fouten.append("Whisper unavailable")
+                continue
+            try:
+                tekst = herken_audio_pad_via_whisper(audio_pad)
+            except Exception as whisper_fout:
+                fouten.append(f"Whisper error: {whisper_fout}")
+                continue
+
+            if tekst:
+                return tekst, "whisper"
+            fouten.append("Whisper produced no transcript")
+            continue
+
+        if kandidaat == "google":
+            try:
+                tekst = herken_audio_pad_via_google(audio_pad)
+            except Exception as google_fout:
+                fouten.append(f"Google speech error: {google_fout}")
+                continue
+
+            if tekst:
+                return tekst, "google"
+            fouten.append("Google speech produced no transcript")
+
+    if WHISPER_BESCHIKBAAR:
+        raise RuntimeError("Could not transcribe uploaded audio. Try speaking more clearly and keep recordings short.")
+
+    raise RuntimeError(
+        "Could not transcribe uploaded audio. Install faster-whisper for broad mobile audio format support, or upload WAV/FLAC audio."
+    )
 
 def maak_actie_plan(tekst):
     """Split a sentence into multiple steps so Echo can execute tasks in sequence."""
@@ -6195,8 +6278,8 @@ def maak_help_bericht():
     app_namen = ", ".join(item["name"] for item in apps[:30])
     app_regel = f" Gevonden apps: {app_namen}." if app_namen else ""
     return tekst_voor_taal(
-        "I can open apps and websites, search Google or YouTube, click a specific link from search results, send messages through WhatsApp, start WhatsApp voice or video calls with contacts, send Discord channel messages, send Discord 1-on-1 DMs to friends, start Discord voice or video calls with friends, work with files and folders, calculate, show system and battery information, run system diagnostics, run Windows Defender threat scans, clean detected threats after confirmation, manage tasks, timers and reminders, remember notes, control supported computer functions, scan your apps, and answer questions." + app_regel,
-        "Ik kan apps en websites openen, zoeken op Google of YouTube, een specifieke link uit zoekresultaten openen, berichten sturen via WhatsApp, WhatsApp voice- of videocalls met contacten proberen te starten, Discord-kanaalberichten sturen, Discord 1-op-1 DM-berichten naar vrienden sturen, Discord voice- of videocalls met vrienden starten, met bestanden en mappen werken, rekenen, systeem- en batterij-informatie geven, systeemdiagnose uitvoeren, Windows Defender dreigingsscans draaien, gevonden dreigingen na bevestiging opruimen, taken, timers en herinneringen beheren, notities onthouden, ondersteunde computerfuncties bedienen, je apps scannen en vragen beantwoorden." + app_regel
+        "I can open apps and websites, search Google or YouTube, click a specific link from search results, send messages through WhatsApp, start WhatsApp voice or video calls with contacts, send Discord channel messages, send Discord 1-on-1 DMs to friends, start Discord voice or video calls with friends, work with files and folders, calculate, show system and battery information, share phone test links for mobile access, run system diagnostics, run Windows Defender threat scans, clean detected threats after confirmation, manage tasks, timers and reminders, remember notes, control supported computer functions, scan your apps, and answer questions." + app_regel,
+        "Ik kan apps en websites openen, zoeken op Google of YouTube, een specifieke link uit zoekresultaten openen, berichten sturen via WhatsApp, WhatsApp voice- of videocalls met contacten proberen te starten, Discord-kanaalberichten sturen, Discord 1-op-1 DM-berichten naar vrienden sturen, Discord voice- of videocalls met vrienden starten, met bestanden en mappen werken, rekenen, systeem- en batterij-informatie geven, telefoon-testlinks delen voor mobiele toegang, systeemdiagnose uitvoeren, Windows Defender dreigingsscans draaien, gevonden dreigingen na bevestiging opruimen, taken, timers en herinneringen beheren, notities onthouden, ondersteunde computerfuncties bedienen, je apps scannen en vragen beantwoorden." + app_regel
     )
 
 
@@ -6242,6 +6325,12 @@ SPECIFIEKE_HELP_ONDERWERPEN = {
         "requires_automation": False,
         "response_en": "For system checks I can: show system info, battery status, Wi-Fi quality, disk space, IP address, and current time.",
         "response_nl": "Voor systeemchecks kan ik: systeeminfo, batterijstatus, wifi-kwaliteit, schijfruimte, IP-adres en huidige tijd tonen.",
+    },
+    "mobile": {
+        "aliases": {"mobile", "phone", "telefoon", "mobiel", "iphone", "android"},
+        "requires_automation": False,
+        "response_en": "For mobile testing I can: report phone access status, share a direct phone test URL, and expose live mobile-access details in the dashboard.",
+        "response_nl": "Voor mobiel testen kan ik: telefoon-toegangsstatus tonen, een directe telefoon-testlink delen, en live mobiele toegang in het dashboard tonen.",
     },
     "apps": {
         "aliases": {"apps", "app", "programma", "programmas", "programs", "software", "updates"},
@@ -6304,7 +6393,7 @@ def maak_specifiek_help_bericht(onderwerp):
             )
         return bericht
 
-    bekende_onderwerpen = "discord, whatsapp, browser, links, bestanden, security, systeem, apps, steam, taken"
+    bekende_onderwerpen = "discord, whatsapp, browser, links, bestanden, security, systeem, mobile, apps, steam, taken"
     onderwerp_label = onderwerp_tekst or tekst_voor_taal("that topic", "dat onderwerp")
     return tekst_voor_taal(
         f"I don't have a dedicated feature list for '{onderwerp_label}' yet. Try one of these topics: {bekende_onderwerpen}.",
@@ -7231,6 +7320,128 @@ def haal_lokaal_ip_adres():
             return ""
 
 
+def normaliseer_runtime_host_waarde(host_waarde):
+    host = str(host_waarde or "").strip().lower()
+    if not host or host in {"*", "+"}:
+        return "0.0.0.0"
+    if host == "localhost":
+        return "127.0.0.1"
+    return host
+
+
+def runtime_host_is_loopback_only(host_waarde):
+    host = normaliseer_runtime_host_waarde(host_waarde)
+    return host.startswith("127.") or host == "::1"
+
+
+def haal_lokale_ipv4_adressen(max_items=8):
+    adressen = []
+    gezien = set()
+
+    def voeg_adres_toe(ip_adres):
+        kandidaat = str(ip_adres or "").strip()
+        if not kandidaat or kandidaat.startswith("127.") or kandidaat in {"0.0.0.0", "::1"}:
+            return
+        try:
+            socket.inet_aton(kandidaat)
+        except OSError:
+            return
+        if kandidaat in gezien:
+            return
+
+        gezien.add(kandidaat)
+        adressen.append(kandidaat)
+
+    voeg_adres_toe(haal_lokaal_ip_adres())
+
+    try:
+        _host, _aliases, host_ips = socket.gethostbyname_ex(socket.gethostname())
+        for host_ip in host_ips:
+            voeg_adres_toe(host_ip)
+    except Exception:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET, type=socket.SOCK_STREAM):
+            sock_adres = info[4][0] if info and len(info) > 4 and info[4] else ""
+            voeg_adres_toe(sock_adres)
+    except Exception:
+        pass
+
+    return adressen[:max(1, int(max_items or 1))]
+
+
+def maak_mobiele_toegang_payload(poort=None, host=None):
+    runtime_poort = begrens_int_waarde(
+        poort if poort is not None else (ECHO_RUNTIME_PORT or os.environ.get("ECHO_SELECTED_PORT", "5000")),
+        standaard=5000,
+        minimum=1024,
+        maximum=65535,
+    )
+    runtime_host = normaliseer_runtime_host_waarde(host if host is not None else ECHO_RUNTIME_HOST)
+    loopback_only = runtime_host_is_loopback_only(runtime_host)
+    luister_op_alle_interfaces = runtime_host in {"0.0.0.0", "::"}
+
+    lokale_url = f"http://127.0.0.1:{runtime_poort}"
+    netwerk_urls = []
+
+    if not loopback_only:
+        if not luister_op_alle_interfaces:
+            netwerk_urls.append(f"http://{runtime_host}:{runtime_poort}")
+
+        for ip_adres in haal_lokale_ipv4_adressen(max_items=8):
+            kandidaat_url = f"http://{ip_adres}:{runtime_poort}"
+            if kandidaat_url not in netwerk_urls:
+                netwerk_urls.append(kandidaat_url)
+
+    primaire_url = netwerk_urls[0] if netwerk_urls else ""
+
+    if loopback_only:
+        hint_en = "Phone testing is disabled because Echo runs on loopback only. Set ECHO_HOST=0.0.0.0 and restart Echo."
+        hint_nl = "Telefoontest staat uit omdat Echo alleen lokaal draait. Zet ECHO_HOST=0.0.0.0 en start Echo opnieuw."
+    elif primaire_url:
+        hint_en = f"Open {primaire_url} on your phone while both devices are on the same Wi-Fi network."
+        hint_nl = f"Open {primaire_url} op je telefoon terwijl beide apparaten op hetzelfde wifi-netwerk zitten."
+    else:
+        hint_en = "Echo is reachable from this computer, but no LAN address was detected yet."
+        hint_nl = "Echo is bereikbaar op deze computer, maar er is nog geen LAN-adres gedetecteerd."
+
+    return {
+        "enabled": not loopback_only,
+        "host": runtime_host,
+        "port": runtime_poort,
+        "local_url": lokale_url,
+        "network_urls": netwerk_urls,
+        "primary_network_url": primaire_url,
+        "same_network_required": True,
+        "access_hint_en": hint_en,
+        "access_hint_nl": hint_nl,
+    }
+
+
+def maak_mobiele_toegang_tekst(alleen_link=False):
+    toegang = maak_mobiele_toegang_payload()
+    primaire_url = str(toegang.get("primary_network_url", "") or "").strip()
+
+    if primaire_url:
+        if alleen_link:
+            return tekst_voor_taal(
+                f"Phone test link: {primaire_url}",
+                f"Telefoon-testlink: {primaire_url}"
+            )
+
+        extra_links = ", ".join(toegang.get("network_urls", [])[:3])
+        return tekst_voor_taal(
+            f"Phone access is ready. Open {primaire_url} on your phone (same Wi-Fi). Available links: {extra_links}",
+            f"Telefoontoegang is klaar. Open {primaire_url} op je telefoon (zelfde wifi). Beschikbare links: {extra_links}"
+        )
+
+    return tekst_voor_taal(
+        "Phone testing is not active yet. Set ECHO_HOST=0.0.0.0, restart Echo, and ask me again for a phone link.",
+        "Telefoontest is nog niet actief. Zet ECHO_HOST=0.0.0.0, start Echo opnieuw en vraag me opnieuw om een telefoonlink."
+    )
+
+
 def maak_informatie_actie(stap):
     # Herkent status/check-opdrachten en mapt ze op informatieve systeemacties.
     if re.fullmatch(
@@ -7343,6 +7554,24 @@ def maak_informatie_actie(stap):
 
     if re.fullmatch(r"(?:ip address|local ip|my ip|ip-adres|mijn ip|wat is mijn ip)", stap):
         return "ip address"
+
+    if re.fullmatch(
+        r"(?:mobile status|phone status|mobile access status|mobile access|mobiele status|telefoon status|telefoon toegang status|status telefoon toegang)",
+        stap,
+    ):
+        return "mobile access status"
+
+    if re.fullmatch(
+        r"(?:mobile link|phone link|mobile test link|phone test link|share phone link|share mobile link|toon telefoon link|deel telefoon link|test via telefoon|testen via telefoon)",
+        stap,
+    ):
+        return "mobile access link"
+
+    if (
+        re.search(r"\b(?:phone|mobile|telefoon|mobiel)\b", stap)
+        and re.search(r"\b(?:link|url|adres|address|testen|test)\b", stap)
+    ):
+        return "mobile access link"
 
     if re.fullmatch(r"(?:time|current time|date|today|what time is it|what is the time|hoe laat is het|wat is de tijd|wat is de datum|datum)", stap):
         return "current time"
@@ -8196,6 +8425,12 @@ def voer_systeeminfo_uit(actie):
         if ip_adres:
             return tekst_voor_taal(f"Local IP address: {ip_adres}", f"Lokaal IP-adres: {ip_adres}")
         return tekst_voor_taal("I could not determine the local IP address.", "Ik kon het lokale IP-adres niet bepalen.")
+
+    if actie == "mobile access status":
+        return maak_mobiele_toegang_tekst(alleen_link=False)
+
+    if actie == "mobile access link":
+        return maak_mobiele_toegang_tekst(alleen_link=True)
 
     if actie == "current time":
         return tekst_voor_taal(
@@ -10729,7 +10964,7 @@ def normaliseer_actie(stap):
     if not originele_stap:
         return ""
 
-    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "help topic::", "browser click link::", "security threat scan start", "security threat scan status", "security threat cleanup")) or stap == "app search help":
+    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "help topic::", "browser click link::", "security threat scan start", "security threat scan status", "security threat cleanup", "mobile access status", "mobile access link")) or stap == "app search help":
         return originele_stap
 
     specifieke_help_actie = maak_specifieke_help_actie(originele_stap)
@@ -10815,7 +11050,7 @@ def mapnaam_uit_actie(actie):
 def actie_prioriteit(stap):
     # Lagere score betekent eerder uitvoeren binnen een samengesteld plan.
     stap = stap.lower()
-    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply"}:
+    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "mobile access status", "mobile access link"}:
         return 0
     if stap.startswith(("timer ", "reminder ", "task ", "agenda show")):
         return 1
@@ -10825,7 +11060,7 @@ def actie_prioriteit(stap):
         return 2
     if stap.startswith("calculate::"):
         return 2
-    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "apps uninstall::", "battery status", "wifi quality", "disk space", "ip address", "current time")):
+    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "apps uninstall::", "battery status", "wifi quality", "disk space", "ip address", "mobile access status", "mobile access link", "current time")):
         return 2
     if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "app control::")):
         return 3
@@ -11115,7 +11350,7 @@ def voer_enkele_actie_uit(actie):
             f"Veiligheidscontrole: zeg bevestig om {threat_count} actieve dreiging(en){detail} op te ruimen."
         )
 
-    if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "current time"}:
+    if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "mobile access status", "mobile access link", "current time"}:
         return voer_systeeminfo_uit(actie)
 
     if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "app control::")):
@@ -12001,6 +12236,65 @@ def speech_command():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
 
+
+@app.route('/api/spraak-upload', methods=['POST'])
+def speech_upload_command():
+    audio_bestand = request.files.get('audio')
+    if audio_bestand is None:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('No audio file uploaded', 'Geen audiobestand geupload')
+        }), 400
+
+    audio_bytes = audio_bestand.read(MAX_AUDIO_UPLOAD_BYTES + 1)
+    if not audio_bytes:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Uploaded audio is empty', 'Geuploade audio is leeg')
+        }), 400
+
+    if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
+        max_mb = round(MAX_AUDIO_UPLOAD_BYTES / (1024 * 1024), 1)
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                f'Audio upload too large (max {max_mb} MB)',
+                f'Audio-upload te groot (max {max_mb} MB)'
+            )
+        }), 413
+
+    suffix = str(Path(audio_bestand.filename or '').suffix or '').strip().lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", suffix):
+        suffix = '.wav'
+
+    tijdelijk_pad = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_bestand:
+            temp_bestand.write(audio_bytes)
+            tijdelijk_pad = Path(temp_bestand.name)
+
+        transcriptie, provider = herken_audio_upload_tekst(tijdelijk_pad)
+        transcriptie = str(transcriptie or '').strip()
+        if not transcriptie:
+            return jsonify({
+                'status': 'error',
+                'message': tekst_voor_taal('Could not understand uploaded audio', 'Ik kon de geuploade audio niet verstaan')
+            }), 400
+
+        return jsonify({
+            'status': 'success',
+            'gesproken': transcriptie,
+            'provider': provider,
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    finally:
+        if tijdelijk_pad:
+            try:
+                tijdelijk_pad.unlink(missing_ok=True)
+            except Exception:
+                pass
+
 # Ophalen van actuele instellingen voor de frontend.
 @app.route('/api/instellingen', methods=['GET'])
 def get_settings():
@@ -12010,6 +12304,11 @@ def get_settings():
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     return jsonify(maak_dashboard_payload())
+
+
+@app.route('/api/mobile-access', methods=['GET'])
+def get_mobile_access_status():
+    return jsonify(maak_mobiele_toegang_payload())
 
 # Bijwerken en normaliseren van instellingen via de UI.
 @app.route('/api/instellingen', methods=['POST'])
@@ -12033,28 +12332,30 @@ def update_settings():
     return jsonify({'status': 'success', 'message': tekst_voor_taal('Settings saved', 'Instellingen opgeslagen')})
 
 
-def poort_is_beschikbaar(poort):
-    # Controleer lokaal of de poort bindbaar is op 127.0.0.1.
+def poort_is_beschikbaar(poort, host="127.0.0.1"):
+    # Controleer lokaal of de poort bindbaar is op de gekozen host.
+    host = normaliseer_runtime_host_waarde(host)
+    bind_host = "0.0.0.0" if host in {"0.0.0.0", "::"} else host
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", int(poort)))
+            sock.bind((bind_host, int(poort)))
             return True
     except OSError:
         return False
 
 
-def vind_beschikbare_poort(start=5000, eind=5010, uitbreid_tot=5200):
+def vind_beschikbare_poort(start=5000, eind=5010, uitbreid_tot=5200, host="127.0.0.1"):
     # Zoek eerst in voorkeur-range, daarna in uitgebreid bereik.
     start = max(1024, int(start))
     eind = max(start, int(eind))
 
     for poort in range(start, eind + 1):
-        if poort_is_beschikbaar(poort):
+        if poort_is_beschikbaar(poort, host=host):
             return poort
 
     extra_eind = max(eind, int(uitbreid_tot))
     for poort in range(eind + 1, extra_eind + 1):
-        if poort_is_beschikbaar(poort):
+        if poort_is_beschikbaar(poort, host=host):
             return poort
 
     # Last resort: let Windows pick any free local port.
@@ -12181,20 +12482,28 @@ def runtime_endpoint_bereikbaar(url, timeout=0.7):
     return isinstance(payload, dict) and ("build_id" in payload or "started_at" in payload)
 
 
-def vind_draaiende_echo_poort(start=5000, eind=5010):
+def vind_draaiende_echo_poort(start=5000, eind=5010, hosts=None):
+    host_kandidaten = ["127.0.0.1", "localhost"]
+    for host in hosts or []:
+        host_norm = str(host or "").strip()
+        if not host_norm or host_norm in host_kandidaten:
+            continue
+        host_kandidaten.append(host_norm)
+
     for poort in range(start, eind + 1):
-        url = f"http://127.0.0.1:{poort}/api/runtime-version"
-        if runtime_endpoint_bereikbaar(url):
-            return poort
+        for host in host_kandidaten:
+            url = f"http://{host}:{poort}/api/runtime-version"
+            if runtime_endpoint_bereikbaar(url):
+                return poort
     return None
 
 
-def bepaal_runtime_poort(voorkeurs_poort, max_poort):
+def bepaal_runtime_poort(voorkeurs_poort, max_poort, host="127.0.0.1"):
     gekozen_poort = os.environ.get('ECHO_SELECTED_PORT')
     if gekozen_poort:
         return begrens_int_waarde(gekozen_poort, voorkeurs_poort, 1024, 65535)
 
-    poort = vind_beschikbare_poort(voorkeurs_poort, max_poort, min(max_poort + 200, 65535))
+    poort = vind_beschikbare_poort(voorkeurs_poort, max_poort, min(max_poort + 200, 65535), host=host)
     os.environ['ECHO_SELECTED_PORT'] = str(poort)
     return poort
 
@@ -12222,10 +12531,11 @@ def voer_opstart_app_scan_uit(force=True):
 
 if __name__ == '__main__':
     # Startup-orkestratie: poort kiezen, enkelvoudige instantie, monitors starten.
+    runtime_host = normaliseer_runtime_host_waarde(os.environ.get('ECHO_HOST', '0.0.0.0'))
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
     poort_span = begrens_int_waarde(os.environ.get('ECHO_PORT_SPAN', '50'), 50, 0, 2000)
     max_poort = min(voorkeurs_poort + poort_span, 65535)
-    poort = bepaal_runtime_poort(voorkeurs_poort, max_poort)
+    poort = bepaal_runtime_poort(voorkeurs_poort, max_poort, host=runtime_host)
     url = f'http://127.0.0.1:{poort}'
     auto_open = parseer_bool_waarde(os.environ.get('ECHO_AUTO_OPEN', 'true'), True)
     auto_reload = parseer_bool_waarde(os.environ.get('ECHO_AUTO_RELOAD', 'false'), False)
@@ -12233,9 +12543,12 @@ if __name__ == '__main__':
     reopen_when_running = parseer_bool_waarde(os.environ.get('ECHO_REOPEN_WHEN_RUNNING', 'false'), False)
     window_mode = str(os.environ.get('ECHO_WINDOW_MODE', 'browser') or 'browser').strip().lower()
     is_reloader_child = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+    ECHO_RUNTIME_HOST = runtime_host
+    ECHO_RUNTIME_PORT = poort
 
     if not (auto_reload and is_reloader_child):
-        bestaande_poort = vind_draaiende_echo_poort(voorkeurs_poort, max_poort)
+        host_kandidaten = [] if runtime_host in {'0.0.0.0', '::'} else [runtime_host]
+        bestaande_poort = vind_draaiende_echo_poort(voorkeurs_poort, max_poort, hosts=host_kandidaten)
         if bestaande_poort is not None:
             bestaand_url = f'http://127.0.0.1:{bestaande_poort}'
             print(f'Echo is already running on: {bestaand_url}')
@@ -12251,6 +12564,12 @@ if __name__ == '__main__':
     else:
         print(f'Echo preferred port {voorkeurs_poort} was unavailable, starting on: {url}')
 
+    mobiele_toegang = maak_mobiele_toegang_payload(poort=poort, host=runtime_host)
+    if mobiele_toegang.get('enabled') and mobiele_toegang.get('network_urls'):
+        print('Phone test URL(s): ' + ', '.join(mobiele_toegang['network_urls'][:3]))
+    else:
+        print('Phone test URL unavailable. Set ECHO_HOST=0.0.0.0 to allow LAN access.')
+
     print(f'Window mode: {window_mode} | Auto reload: {"on" if auto_reload else "off"}')
 
     if not auto_reload or is_reloader_child:
@@ -12265,4 +12584,4 @@ if __name__ == '__main__':
     if moet_auto_openen(auto_open, auto_reload, open_on_reload):
         threading.Timer(1.0, lambda: open_echo_interface(url, window_mode)).start()
 
-    app.run(debug=auto_reload, use_reloader=auto_reload, port=poort)
+    app.run(host=runtime_host, debug=auto_reload, use_reloader=auto_reload, port=poort)

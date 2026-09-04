@@ -28,9 +28,11 @@ html,
 body {
     width: 100%;
     height: 100%;
+    min-height: 100dvh;
 }
 
 body {
+    min-height: 100dvh;
     overflow: hidden;
     font-family: var(--font-display);
     color: var(--hud-white);
@@ -113,7 +115,9 @@ body::before {
     position: relative;
     z-index: 2;
     width: 100vw;
+    min-height: 100dvh;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
 }
 
@@ -497,6 +501,10 @@ body[data-threat='critical'] .threat-protocol__level {
 #clearLogBtn,
 #pendingConfirmYes,
 #pendingConfirmNo,
+#mobileCopyLinkBtn,
+#mobileOpenLinkBtn,
+.mobile-link-chip,
+.history-command,
 .mode-toggle,
 .language-toggle {
     border: 1px solid rgba(0, 240, 255, 0.36);
@@ -516,7 +524,11 @@ body[data-threat='critical'] .threat-protocol__level {
 #speechBtn:hover,
 #clearLogBtn:hover,
 #pendingConfirmYes:hover,
-#pendingConfirmNo:hover {
+#pendingConfirmNo:hover,
+#mobileCopyLinkBtn:hover,
+#mobileOpenLinkBtn:hover,
+.mobile-link-chip:hover,
+.history-command:hover {
     border-color: rgba(0, 240, 255, 0.84);
     background: rgba(0, 52, 70, 0.4);
     box-shadow: var(--hud-glow), inset 0 0 14px rgba(0, 240, 255, 0.2);
@@ -528,11 +540,53 @@ body[data-threat='critical'] .threat-protocol__level {
 #speechBtn:disabled,
 #clearLogBtn:disabled,
 #pendingConfirmYes:disabled,
-#pendingConfirmNo:disabled {
+#pendingConfirmNo:disabled,
+#mobileCopyLinkBtn:disabled,
+#mobileOpenLinkBtn:disabled,
+.mobile-link-chip:disabled,
+.history-command:disabled {
     opacity: 0.45;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+}
+
+.routine-action {
+    text-align: left;
+    font-size: 0.64rem;
+    letter-spacing: 0.12em;
+}
+
+.mobile-lab {
+    gap: 8px;
+}
+
+.mobile-links,
+.history-commands {
+    display: grid;
+    gap: 6px;
+}
+
+.mobile-link-chip,
+.history-command {
+    width: 100%;
+    text-align: left;
+    font-family: var(--font-data);
+    text-transform: none;
+    letter-spacing: 0.03em;
+    font-size: 0.67rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mobile-link-empty,
+.history-empty {
+    font-family: var(--font-data);
+    color: rgba(224, 255, 255, 0.66);
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 .command-form {
@@ -892,6 +946,19 @@ body.dashboard-active .hud-panel {
     }
 }
 
+body.touch-optimized .panel-action,
+body.touch-optimized #sendBtn,
+body.touch-optimized #speechBtn,
+body.touch-optimized #clearLogBtn,
+body.touch-optimized #pendingConfirmYes,
+body.touch-optimized #pendingConfirmNo,
+body.touch-optimized #mobileCopyLinkBtn,
+body.touch-optimized #mobileOpenLinkBtn,
+body.touch-optimized .mobile-link-chip,
+body.touch-optimized .history-command {
+    min-height: 42px;
+}
+
 @media (max-width: 1260px) {
     .hud-panels {
         grid-template-columns: minmax(240px, 28vw) minmax(0, 1fr) minmax(280px, 32vw);
@@ -909,18 +976,33 @@ body.dashboard-active .hud-panel {
 }
 
 @media (max-width: 980px) {
+    body {
+        overflow-x: hidden;
+        overflow-y: auto;
+    }
+
+    .echo-interface {
+        height: auto;
+        min-height: 100dvh;
+        overflow: visible;
+        padding-bottom: 84px;
+    }
+
     .arc-reactor {
         width: clamp(230px, 70vw, 460px);
     }
 
     .hud-panels {
+        position: relative;
+        inset: auto;
         grid-template-columns: 1fr;
-        grid-template-rows: 1fr 1fr;
+        grid-template-rows: auto auto;
         gap: 0;
     }
 
     .hud-panel {
         margin: 12px;
+        max-height: none;
     }
 
     .hud-panel-left {
@@ -937,6 +1019,10 @@ body.dashboard-active .hud-panel {
         transform: translate(-50%, -88%) scale(0.52);
     }
 
+    .messages {
+        max-height: 34vh;
+    }
+
     .mode-toggle {
         bottom: 14px;
         min-width: 200px;
@@ -949,5 +1035,20 @@ body.dashboard-active .hud-panel {
         min-width: 108px;
         font-size: 0.62rem;
         padding: 9px 10px;
+    }
+}
+
+@media (max-width: 680px) {
+    body.dashboard-active .core-stage {
+        transform: translate(-50%, -96%) scale(0.46);
+    }
+
+    .assistant-name {
+        letter-spacing: 0.28em;
+    }
+
+    .mode-toggle,
+    .language-toggle {
+        font-size: 0.58rem;
     }
 }
