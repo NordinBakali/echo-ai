@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 import ast
 import base64
 import ctypes
@@ -13,12 +13,14 @@ import platform
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import tempfile
 import urllib.error
 import urllib.request
 import webbrowser
 import wave
+import uuid
 from pathlib import Path
 import threading
 import time
@@ -61,6 +63,15 @@ except Exception:
     winsound = None
     WINSOUND_BESCHIKBAAR = False
 
+try:
+    import importlib
+    _fpdf_module = importlib.import_module("fpdf")
+    FPDF = getattr(_fpdf_module, "FPDF", None)
+    WEBSITE_AUDIT_PDF_BESCHIKBAAR = FPDF is not None
+except Exception:
+    FPDF = None
+    WEBSITE_AUDIT_PDF_BESCHIKBAAR = False
+
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
@@ -88,6 +99,7 @@ MAX_NOTIFICATIES = 20
 MAX_DOCUMENT_SNIPPETS = 3
 MAX_DOCUMENT_BESTANDSGROOTTE = 200_000
 MAX_AUDIO_UPLOAD_BYTES = 12 * 1024 * 1024
+SCREENSHOT_BESTANDSNAAM_REGEX = re.compile(r"^echo-screenshot-\d{8}-\d{6}\.png$")
 DOCUMENT_CONTEXT_EXTENSIES = {".md", ".txt", ".json", ".py", ".html", ".js", ".css"}
 DOCUMENT_CONTEXT_GENEGEERDE_MAPNAMEN = {".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
 WORKSPACE_SEARCH_GENEGEERDE_BESTANDEN = {".env", "echo_geheugen.json", "instellingen.json"}
@@ -171,7 +183,27 @@ DEFAULT_SETTINGS = {
     "ai_agent_primair": True,
     "security_scan_daily_enabled": False,
     "security_scan_daily_time": "03:00",
+    "website_audit_schedule_enabled": False,
+    "website_audit_schedule_frequency": "daily",
+    "website_audit_schedule_time": "04:30",
+    "website_audit_schedule_target_url": "",
+    "website_audit_schedule_profile": "standard",
+    "website_audit_alert_webhook": "",
+    "website_audit_alert_score_drop": 12,
+    "website_audit_alert_on_critical": True,
     "discord_dm_vriend_aliases": {},
+    "stream_auto_focus_obs": True,
+    "stream_hotkey_start_stream": "",
+    "stream_hotkey_stop_stream": "",
+    "stream_hotkey_toggle_stream": "ctrl+shift+f9",
+    "stream_hotkey_start_recording": "",
+    "stream_hotkey_stop_recording": "",
+    "stream_hotkey_toggle_recording": "ctrl+shift+f10",
+    "stream_hotkey_toggle_mic": "ctrl+shift+m",
+    "stream_hotkey_clip_marker": "ctrl+shift+f11",
+    "stream_hotkey_scene_live": "ctrl+shift+1",
+    "stream_hotkey_scene_brb": "ctrl+shift+2",
+    "stream_hotkey_scene_game": "ctrl+shift+3",
 }
 
 AUTOMATISERING_TIMEOUT_SECONDEN = 300
@@ -200,6 +232,7 @@ AUTO_AUTOMATISERING_ACTION_PREFIXEN = (
     "discord dm::",
     "discord call::",
     "app search::",
+    "stream ",
 )
 AUTO_AUTOMATISERING_ACTION_EXACT = {
     "run macro discord-call-button",
@@ -258,7 +291,7 @@ def parseer_bool_waarde(waarde, standaard=False):
 def normaliseer_dagelijkse_security_scan_tijd(waarde):
     # Hou het schema altijd op een voorspelbaar HH:MM-formaat.
     tekst = str(waarde or "").strip()
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", tekst)
+    match = re.fullmatch(r"(\d{1,2}):(\d{1,2})", tekst)
     if not match:
         return "03:00"
 
@@ -268,6 +301,20 @@ def normaliseer_dagelijkse_security_scan_tijd(waarde):
         return "03:00"
 
     return f"{uur:02d}:{minuut:02d}"
+
+
+def normaliseer_website_audit_schedule_frequency(waarde):
+    frequentie = str(waarde or "").strip().lower()
+    if frequentie not in {"daily", "weekly"}:
+        return "daily"
+    return frequentie
+
+
+def normaliseer_website_audit_alert_webhook(waarde):
+    webhook = str(waarde or "").strip()
+    if webhook.startswith("http://") or webhook.startswith("https://"):
+        return webhook
+    return ""
 
 
 def strip_discord_vriend_prefix(doel):
@@ -396,6 +443,55 @@ def synchroniseer_taalinstellingen(configuratie):
     configuratie["security_scan_daily_time"] = normaliseer_dagelijkse_security_scan_tijd(
         configuratie.get("security_scan_daily_time", DEFAULT_SETTINGS["security_scan_daily_time"])
     )
+    configuratie["website_audit_schedule_enabled"] = parseer_bool_waarde(
+        configuratie.get("website_audit_schedule_enabled", DEFAULT_SETTINGS["website_audit_schedule_enabled"]),
+        standaard=False,
+    )
+    configuratie["website_audit_schedule_frequency"] = normaliseer_website_audit_schedule_frequency(
+        configuratie.get("website_audit_schedule_frequency", DEFAULT_SETTINGS["website_audit_schedule_frequency"])
+    )
+    configuratie["website_audit_schedule_time"] = normaliseer_dagelijkse_security_scan_tijd(
+        configuratie.get("website_audit_schedule_time", DEFAULT_SETTINGS["website_audit_schedule_time"])
+    )
+    doel_url_raw = str(
+        configuratie.get("website_audit_schedule_target_url", DEFAULT_SETTINGS["website_audit_schedule_target_url"])
+        or ""
+    ).strip()
+    url_normalizer = globals().get("normaliseer_url_voor_browser_taak")
+    if callable(url_normalizer):
+        configuratie["website_audit_schedule_target_url"] = url_normalizer(doel_url_raw)
+    else:
+        # Import-volgorde fallback: houd early settings-normalisatie veilig vóór alle helper-definities.
+        if doel_url_raw and "://" not in doel_url_raw:
+            doel_url_raw = "https://" + doel_url_raw.lstrip("/")
+        try:
+            parsed = urlparse(doel_url_raw)
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                configuratie["website_audit_schedule_target_url"] = parsed.geturl()
+            else:
+                configuratie["website_audit_schedule_target_url"] = ""
+        except Exception:
+            configuratie["website_audit_schedule_target_url"] = ""
+    profiel = str(
+        configuratie.get("website_audit_schedule_profile", DEFAULT_SETTINGS["website_audit_schedule_profile"])
+        or "standard"
+    ).strip().lower()
+    if profiel not in {"quick", "standard", "security", "full"}:
+        profiel = "standard"
+    configuratie["website_audit_schedule_profile"] = profiel
+    configuratie["website_audit_alert_webhook"] = normaliseer_website_audit_alert_webhook(
+        configuratie.get("website_audit_alert_webhook", DEFAULT_SETTINGS["website_audit_alert_webhook"])
+    )
+    configuratie["website_audit_alert_score_drop"] = begrens_int_waarde(
+        configuratie.get("website_audit_alert_score_drop", DEFAULT_SETTINGS["website_audit_alert_score_drop"]),
+        standaard=12,
+        minimum=0,
+        maximum=60,
+    )
+    configuratie["website_audit_alert_on_critical"] = parseer_bool_waarde(
+        configuratie.get("website_audit_alert_on_critical", DEFAULT_SETTINGS["website_audit_alert_on_critical"]),
+        standaard=True,
+    )
     configuratie["discord_dm_vriend_aliases"] = normaliseer_discord_dm_aliases(
         configuratie.get("discord_dm_vriend_aliases", DEFAULT_SETTINGS["discord_dm_vriend_aliases"])
     )
@@ -453,6 +549,111 @@ WHISPER_MODEL_CACHE = {
     "cache_key": "",
     "loaded_at": 0.0,
 }
+ONLINE_ANTWOORD_CACHE_LOCK = threading.Lock()
+ONLINE_ANTWOORD_CACHE = {}
+ONLINE_ANTWOORD_CACHE_MAX_ITEMS = 80
+ONLINE_ANTWOORD_CACHE_TTL_SECONDS = 240
+COMMANDO_ANTWOORD_CACHE_LOCK = threading.Lock()
+COMMANDO_ANTWOORD_CACHE = {}
+COMMANDO_ANTWOORD_CACHE_MAX_ITEMS = 120
+COMMANDO_ANTWOORD_CACHE_TTL_SECONDS = 15
+COMMANDO_CACHE_LEESMODUS_ACTIES = {
+    "help",
+    "stream help",
+    "system info",
+    "battery status",
+    "wifi quality",
+    "disk space",
+    "ip address",
+    "current time",
+    "mobile access status",
+    "mobile access link",
+    "automation status",
+}
+COMMANDO_CACHE_LEESMODUS_PREFIXEN = (
+    "help topic::",
+    "calculate::",
+    "list folder::",
+    "read file::",
+    "summarize file::",
+    "search files::",
+)
+SNELLE_ROUTE_ACTIES = {
+    "help",
+    "app search help",
+    "system info",
+    "battery status",
+    "wifi quality",
+    "disk space",
+    "ip address",
+    "current time",
+    "mobile access status",
+    "mobile access link",
+    "website audit status",
+    "website audit report latest",
+    "automation status",
+    "open google",
+    "open youtube",
+    "open notepad",
+    "open calculator",
+    "open paint",
+    "open command prompt",
+    "open file explorer",
+    "take screenshot",
+}
+SNELLE_ROUTE_PREFIXEN = (
+    "calculate::",
+    "stream ",
+    "website audit start::",
+    "website audit report::",
+    "search google ",
+    "search youtube ",
+    "open website ",
+    "open websites ",
+    "open new tab ",
+    "open new tabs ",
+    "open browser url::",
+    "open app ",
+    "open app raw::",
+    "open folder ",
+    "open file ",
+    "open setting ",
+)
+SNELLE_ROUTE_GEBLOKKEERDE_PREFIXEN = (
+    "delete path::",
+    "overwrite file::",
+    "rewrite file::",
+    "apps uninstall::",
+    "security threat cleanup",
+)
+SNELLE_ROUTE_SAMENGESTELD_REGEX = re.compile(r"\b(?:and|then|en|daarna|vervolgens)\b", re.IGNORECASE)
+ACHTERGROND_TAAK_LOCK = threading.Lock()
+ACHTERGROND_TAKEN = {}
+ACHTERGROND_TAAK_VOLGORDE = []
+ACHTERGROND_TAAK_MAX_ITEMS = 60
+ACHTERGROND_TAAK_ZWARE_ACTIES = {
+    "apps scan",
+    "apps updates",
+    "apps updates list",
+    "apps updates apply",
+    "system scan start",
+    "security threat scan start",
+}
+ACHTERGROND_TAAK_ZWARE_PREFIXEN = (
+    "search files::",
+    "summarize file::",
+    "read file::",
+    "browser read ",
+    "browser summarize ",
+)
+ACHTERGROND_PREFIXEN = (
+    "background ",
+    "run in background ",
+    "start in background ",
+    "op achtergrond ",
+    "draai op achtergrond ",
+    "voer uit op achtergrond ",
+)
 
 
 def gebruik_nederlands():
@@ -1061,6 +1262,195 @@ def standaard_security_scan_data():
 
 # Security-scanstatus voor Defender-scan en threat-cleanup feedback.
 SECURITY_SCAN_STATE = standaard_security_scan_data()
+
+WEBSITE_AUDIT_LOCK = threading.Lock()
+MAX_WEBSITE_AUDIT_LOGS = 80
+WEBSITE_AUDIT_REPORT_DIR = Path("reports") / "website-audits"
+WEBSITE_AUDIT_PROFILE_CONFIG = {
+    "quick": {
+        "label_en": "Quick audit",
+        "label_nl": "Snelle audit",
+        "max_pages": 2,
+        "max_links_per_page": 6,
+        "max_total_links": 12,
+        "max_form_checks": 4,
+        "max_button_checks": 4,
+        "sensitive_path_limit": 4,
+        "max_bytes_per_page": 260_000,
+    },
+    "standard": {
+        "label_en": "Standard audit",
+        "label_nl": "Standaard audit",
+        "max_pages": 5,
+        "max_links_per_page": 10,
+        "max_total_links": 26,
+        "max_form_checks": 14,
+        "max_button_checks": 12,
+        "sensitive_path_limit": 6,
+        "max_bytes_per_page": 320_000,
+    },
+    "security": {
+        "label_en": "Security baseline",
+        "label_nl": "Security baseline",
+        "max_pages": 3,
+        "max_links_per_page": 6,
+        "max_total_links": 12,
+        "max_form_checks": 10,
+        "max_button_checks": 8,
+        "sensitive_path_limit": 9,
+        "max_bytes_per_page": 280_000,
+    },
+    "full": {
+        "label_en": "Full audit",
+        "label_nl": "Volledige audit",
+        "max_pages": 16,
+        "max_links_per_page": 20,
+        "max_total_links": 140,
+        "max_form_checks": 40,
+        "max_button_checks": 34,
+        "sensitive_path_limit": 10,
+        "max_bytes_per_page": 420_000,
+    },
+}
+WEBSITE_AUDIT_SEVERITY_WEIGHTS_FAIL = {
+    "critical": 30,
+    "high": 18,
+    "medium": 10,
+    "low": 4,
+}
+WEBSITE_AUDIT_SEVERITY_WEIGHTS_WARN = {
+    "critical": 16,
+    "high": 10,
+    "medium": 6,
+    "low": 2,
+}
+WEBSITE_AUDIT_SEVERITY_RANK = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+}
+WEBSITE_AUDIT_SENSITIVE_PATHS = [
+    {
+        "path": "/.env",
+        "severity": "critical",
+        "title_en": "Potential .env exposure",
+        "title_nl": "Mogelijke .env-lek",
+        "recommendation_en": "Block direct access to .env files at the web server or reverse proxy.",
+        "recommendation_nl": "Blokkeer directe toegang tot .env-bestanden op webserver- of reverse-proxy-niveau.",
+    },
+    {
+        "path": "/.git/HEAD",
+        "severity": "critical",
+        "title_en": "Potential .git exposure",
+        "title_nl": "Mogelijke .git-lek",
+        "recommendation_en": "Deny all .git paths and remove git metadata from public deployments.",
+        "recommendation_nl": "Blokkeer alle .git-paden en verwijder git-metadata uit publieke deployments.",
+    },
+    {
+        "path": "/phpinfo.php",
+        "severity": "high",
+        "title_en": "Potential diagnostics endpoint exposure",
+        "title_nl": "Mogelijke blootstelling van diagnostiek-endpoint",
+        "recommendation_en": "Remove phpinfo and debug diagnostic pages from production.",
+        "recommendation_nl": "Verwijder phpinfo- en debugdiagnostiekpagina's uit productie.",
+    },
+    {
+        "path": "/server-status",
+        "severity": "high",
+        "title_en": "Potential server-status exposure",
+        "title_nl": "Mogelijke server-status blootstelling",
+        "recommendation_en": "Restrict server-status endpoints to internal or authenticated access only.",
+        "recommendation_nl": "Beperk server-status-endpoints tot intern of geauthenticeerd gebruik.",
+    },
+    {
+        "path": "/actuator/env",
+        "severity": "high",
+        "title_en": "Potential actuator environment exposure",
+        "title_nl": "Mogelijke blootstelling van actuator-omgeving",
+        "recommendation_en": "Disable sensitive actuator endpoints or protect them with authentication and IP controls.",
+        "recommendation_nl": "Schakel gevoelige actuator-endpoints uit of bescherm ze met authenticatie en IP-controles.",
+    },
+    {
+        "path": "/debug",
+        "severity": "medium",
+        "title_en": "Potential debug endpoint exposure",
+        "title_nl": "Mogelijke blootstelling van debug-endpoint",
+        "recommendation_en": "Disable debug routes in production builds.",
+        "recommendation_nl": "Schakel debugroutes uit in productiebuilds.",
+    },
+]
+
+
+def standaard_website_audit_data():
+    return {
+        "running": False,
+        "state": "idle",
+        "started_at": 0.0,
+        "updated_at": 0.0,
+        "finished_at": 0.0,
+        "stage": "",
+        "progress_percent": 0,
+        "target_url": "",
+        "target_host": "",
+        "profile": "standard",
+        "trigger_source": "manual",
+        "scan_id": "",
+        "score": 0,
+        "grade": "",
+        "exposure_level": "",
+        "checks_total": 0,
+        "checks_passed": 0,
+        "checks_warn": 0,
+        "checks_failed": 0,
+        "pages_scanned": 0,
+        "links_checked": 0,
+        "forms_seen": 0,
+        "buttons_seen": 0,
+        "forms_checked": 0,
+        "buttons_checked": 0,
+        "form_probe_failures": 0,
+        "button_probe_failures": 0,
+        "findings_total": 0,
+        "findings_top": [],
+        "remediation_top": [],
+        "severity_totals": {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+        },
+        "last_result": "",
+        "last_error": "",
+        "last_report_json": "",
+        "last_report_markdown": "",
+        "last_report_pdf": "",
+        "recent_logs": [],
+    }
+
+
+WEBSITE_AUDIT_STATE = standaard_website_audit_data()
+
+
+WEBSITE_AUDIT_SCHEDULE_LOCK = threading.Lock()
+WEBSITE_AUDIT_SCHEDULE_MONITOR_GESTART = False
+
+
+def standaard_website_audit_scheduler_data():
+    return {
+        "last_run_slot": "",
+        "last_triggered_at": 0.0,
+        "last_trigger_success": False,
+        "last_trigger_result": "",
+        "last_completed_scan_id": "",
+        "last_completed_score": 0,
+        "last_alert_at": 0.0,
+        "last_alert_result": "",
+        "updated_at": 0.0,
+    }
+
+
+WEBSITE_AUDIT_SCHEDULE_STATE = standaard_website_audit_scheduler_data()
 
 
 # Dagelijkse scheduler-state voor één-run-per-dag gedrag.
@@ -1993,6 +2383,2466 @@ def start_security_threat_scan():
     )
 
 
+def normaliseer_website_audit_profiel(waarde):
+    profiel = re.sub(r"\s+", " ", str(waarde or "").strip().lower())
+    if not profiel:
+        return "standard"
+
+    alias_map = {
+        "quick": "quick",
+        "fast": "quick",
+        "light": "quick",
+        "snel": "quick",
+        "snel": "quick",
+        "snelle": "quick",
+        "rapid": "quick",
+        "standard": "standard",
+        "default": "standard",
+        "normal": "standard",
+        "standaard": "standard",
+        "basis": "standard",
+        "security": "security",
+        "veiligheid": "security",
+        "beveiliging": "security",
+        "secure": "security",
+        "baseline": "security",
+        "headers": "security",
+        "full": "full",
+        "deep": "full",
+        "complete": "full",
+        "comprehensive": "full",
+        "volledig": "full",
+        "uitgebreid": "full",
+        "enterprise": "full",
+    }
+
+    if profiel in alias_map:
+        return alias_map[profiel]
+
+    tokens = [token for token in re.split(r"[^a-z0-9]+", profiel) if token]
+    for token in tokens:
+        if token in alias_map:
+            return alias_map[token]
+
+    return "standard"
+
+
+def website_audit_profiel_label(profiel):
+    profiel_norm = normaliseer_website_audit_profiel(profiel)
+    configuratie = WEBSITE_AUDIT_PROFILE_CONFIG.get(profiel_norm, WEBSITE_AUDIT_PROFILE_CONFIG["standard"])
+    return tekst_voor_taal(configuratie.get("label_en", "Standard audit"), configuratie.get("label_nl", "Standaard audit"))
+
+
+def website_audit_log_toevoegen(bericht):
+    opgeschoond = opschonen_korte_tekst(bericht, max_lengte=320)
+    if not opgeschoond:
+        return
+
+    logs = WEBSITE_AUDIT_STATE.setdefault("recent_logs", [])
+    logs.append({
+        "message": opgeschoond,
+        "at": time.time(),
+    })
+    if len(logs) > MAX_WEBSITE_AUDIT_LOGS:
+        del logs[:-MAX_WEBSITE_AUDIT_LOGS]
+
+
+def update_website_audit_state(**velden):
+    with WEBSITE_AUDIT_LOCK:
+        WEBSITE_AUDIT_STATE.update(velden)
+        WEBSITE_AUDIT_STATE["updated_at"] = time.time()
+
+
+def huidige_website_audit_payload():
+    with WEBSITE_AUDIT_LOCK:
+        payload = dict(WEBSITE_AUDIT_STATE)
+        payload["recent_logs"] = list(WEBSITE_AUDIT_STATE.get("recent_logs", []))
+        payload["findings_top"] = [dict(item) for item in WEBSITE_AUDIT_STATE.get("findings_top", []) if isinstance(item, dict)]
+        payload["remediation_top"] = [dict(item) for item in WEBSITE_AUDIT_STATE.get("remediation_top", []) if isinstance(item, dict)]
+        payload["severity_totals"] = dict(WEBSITE_AUDIT_STATE.get("severity_totals", {}))
+
+    updated_at = float(payload.get("updated_at", 0.0) or 0.0)
+    payload["updated_at_label"] = time.strftime("%H:%M:%S", time.localtime(updated_at)) if updated_at else ""
+    payload["pdf_available"] = bool(WEBSITE_AUDIT_PDF_BESCHIKBAAR)
+    return payload
+
+
+def website_audit_status_bericht():
+    audit = huidige_website_audit_payload()
+    if audit.get("running"):
+        stage = str(audit.get("stage", "") or "").strip() or tekst_voor_taal("working", "bezig")
+        progress = max(0, int(audit.get("progress_percent", 0) or 0))
+        return tekst_voor_taal(
+            f"Website audit in progress: {stage} ({progress}%).",
+            f"Website-audit bezig: {stage} ({progress}%)."
+        )
+
+    status = str(audit.get("state", "idle") or "idle")
+    resultaat = str(audit.get("last_result", "") or "").strip()
+    if status == "completed":
+        return resultaat or tekst_voor_taal("Website audit completed.", "Website-audit afgerond.")
+
+    if status == "error":
+        return resultaat or tekst_voor_taal(
+            "Website audit stopped with an error.",
+            "Website-audit is gestopt met een fout."
+        )
+
+    return tekst_voor_taal(
+        "Website audit is idle. Ask me to scan a URL to start.",
+        "Website-audit staat stand-by. Vraag me om een URL te scannen om te starten."
+    )
+
+
+def extraheer_url_kandidaat_uit_tekst(tekst):
+    patroon = re.compile(
+        r"(?P<url>https?://[^\s<>'\"]+|(?:[a-z0-9](?:[a-z0-9-]{0,62}\.)+[a-z]{2,}(?:/[^\s<>'\"]*)?))",
+        re.IGNORECASE,
+    )
+    for match in patroon.finditer(str(tekst or "")):
+        kandidaat = str(match.group("url") or "").strip()
+        kandidaat = kandidaat.rstrip(").,;:!?")
+        url = normaliseer_url_voor_browser_taak(kandidaat)
+        if url:
+            return url
+    return ""
+
+
+def bepaal_website_audit_profiel_uit_tekst(tekst):
+    stap = str(tekst or "").lower()
+
+    if re.search(r"\b(?:full|deep|complete|comprehensive|volledig|uitgebreid|enterprise)\b", stap):
+        return "full"
+
+    if re.search(r"\b(?:security|beveiliging|veiligheid|baseline|header|headers|hardening)\b", stap):
+        return "security"
+
+    if re.search(r"\b(?:quick|fast|light|snel|snelle|rapid)\b", stap):
+        return "quick"
+
+    return "standard"
+
+
+def parseer_website_audit_start_payload(payload):
+    payload_tekst = str(payload or "").strip()
+    if not payload_tekst:
+        return "standard", ""
+
+    profiel = "standard"
+    url_doel = ""
+
+    if "||" in payload_tekst:
+        profiel_raw, url_raw = payload_tekst.split("||", 1)
+        profiel = normaliseer_website_audit_profiel(profiel_raw)
+        url_doel = normaliseer_url_voor_browser_taak(strip_omringende_quotes(url_raw.strip()))
+        if not url_doel:
+            url_doel = extraheer_url_kandidaat_uit_tekst(url_raw)
+        return profiel, url_doel
+
+    tokens = [token for token in re.split(r"\s+", payload_tekst.lower()) if token]
+    if tokens and tokens[0] in WEBSITE_AUDIT_PROFILE_CONFIG:
+        profiel = tokens[0]
+        payload_tekst = payload_tekst[len(tokens[0]):].strip()
+    else:
+        profiel = bepaal_website_audit_profiel_uit_tekst(payload_tekst)
+
+    url_doel = extraheer_url_kandidaat_uit_tekst(payload_tekst)
+    if not url_doel:
+        url_doel = normaliseer_url_voor_browser_taak(strip_omringende_quotes(payload_tekst))
+
+    return profiel, url_doel
+
+
+def audit_http_headers_naar_dict(header_items):
+    headers = {}
+    for sleutel, waarde in header_items or []:
+        key = str(sleutel or "").strip().lower()
+        if not key:
+            continue
+
+        value = str(waarde or "").strip()
+        if key in headers and value:
+            if headers[key]:
+                headers[key] = headers[key] + ", " + value
+            else:
+                headers[key] = value
+        else:
+            headers[key] = value
+    return headers
+
+
+def haal_http_response_voor_audit(url, method="GET", timeout=12, max_bytes=320_000):
+    method_norm = str(method or "GET").upper()
+    start = time.time()
+
+    request_obj = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "EchoAudit/1.0",
+            "Accept": "text/html, text/plain;q=0.9, */*;q=0.1",
+        },
+        method=method_norm,
+    )
+
+    try:
+        with urllib.request.urlopen(request_obj, timeout=timeout) as response:
+            body = b""
+            if method_norm != "HEAD" and max_bytes > 0:
+                body = response.read(int(max_bytes))
+            header_items = list(response.headers.items())
+            headers = audit_http_headers_naar_dict(header_items)
+            set_cookie = list(response.headers.get_all("Set-Cookie") or [])
+            duur_ms = int(round((time.time() - start) * 1000))
+            return {
+                "ok": True,
+                "url": str(response.geturl() or url),
+                "status": int(response.getcode() or 0),
+                "headers": headers,
+                "header_items": header_items,
+                "set_cookie": set_cookie,
+                "body": body,
+                "duration_ms": duur_ms,
+                "error": "",
+            }
+    except urllib.error.HTTPError as e:
+        body = b""
+        if method_norm != "HEAD" and max_bytes > 0:
+            try:
+                body = e.read(int(max_bytes))
+            except Exception:
+                body = b""
+
+        header_items = list(e.headers.items()) if e.headers else []
+        headers = audit_http_headers_naar_dict(header_items)
+        set_cookie = list(e.headers.get_all("Set-Cookie") or []) if e.headers else []
+        duur_ms = int(round((time.time() - start) * 1000))
+        return {
+            "ok": False,
+            "url": str(getattr(e, "url", "") or url),
+            "status": int(getattr(e, "code", 0) or 0),
+            "headers": headers,
+            "header_items": header_items,
+            "set_cookie": set_cookie,
+            "body": body,
+            "duration_ms": duur_ms,
+            "error": str(e),
+        }
+    except Exception as e:
+        duur_ms = int(round((time.time() - start) * 1000))
+        return {
+            "ok": False,
+            "url": str(url),
+            "status": 0,
+            "headers": {},
+            "header_items": [],
+            "set_cookie": [],
+            "body": b"",
+            "duration_ms": duur_ms,
+            "error": str(e),
+        }
+
+
+def decode_audit_response_body(raw_bytes, content_type=""):
+    content_type = str(content_type or "")
+    charset = "utf-8"
+    charset_match = re.search(r"charset\s*=\s*([a-z0-9._-]+)", content_type, flags=re.IGNORECASE)
+    if charset_match:
+        charset = charset_match.group(1).strip().lower() or "utf-8"
+
+    try:
+        return bytes(raw_bytes or b"").decode(charset, errors="ignore")
+    except Exception:
+        return bytes(raw_bytes or b"").decode("utf-8", errors="ignore")
+
+
+def extraheer_audit_attribuut(attrs_tekst, attribuut):
+    match = re.search(
+        rf"\b{re.escape(str(attribuut or '').strip())}\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+        str(attrs_tekst or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+
+    for group in match.groups():
+        if group is not None:
+            return strip_omringende_quotes(group.strip())
+    return ""
+
+
+def extraheer_audit_url_kandidaten_uit_tekst(attrs_tekst, basis_url):
+    basis_url = str(basis_url or "").strip()
+    attrs_tekst = str(attrs_tekst or "")
+    kandidaten = []
+
+    for attribuut in ["href", "formaction", "data-href", "data-url", "data-target-url", "data-endpoint"]:
+        waarde = extraheer_audit_attribuut(attrs_tekst, attribuut)
+        if not waarde:
+            continue
+
+        volledig = normaliseer_url_voor_browser_taak(urljoin(basis_url, waarde))
+        if volledig:
+            kandidaten.append(volledig)
+
+    onclick = extraheer_audit_attribuut(attrs_tekst, "onclick")
+    if onclick:
+        for match in re.finditer(r"(?P<url>https?://[^\s'\"]+|/[a-z0-9._~%+\-/]*(?:\?[a-z0-9=&_%+\-./]*)?)", onclick, re.IGNORECASE):
+            kandidaat = str(match.group("url") or "").strip()
+            kandidaat = kandidaat.rstrip(")].,;:!?\"'")
+            volledig = normaliseer_url_voor_browser_taak(urljoin(basis_url, kandidaat))
+            if volledig:
+                kandidaten.append(volledig)
+
+    uniek = []
+    gezien = set()
+    for kandidaat in kandidaten:
+        if kandidaat in gezien:
+            continue
+        gezien.add(kandidaat)
+        uniek.append(kandidaat)
+    return uniek
+
+
+def extraheer_audit_formulieren_uit_html(html_tekst, basis_url):
+    formulieren = []
+    for match in re.finditer(r"(?is)<form\b([^>]*)>", str(html_tekst or "")):
+        attrs = str(match.group(1) or "")
+        method_raw = extraheer_audit_attribuut(attrs, "method")
+        action_raw = extraheer_audit_attribuut(attrs, "action")
+
+        method = (method_raw or "get").strip().lower()
+        action = strip_omringende_quotes(action_raw.strip())
+        actie_url = ""
+        if action:
+            actie_url = normaliseer_url_voor_browser_taak(urljoin(basis_url, action)) or ""
+        else:
+            actie_url = basis_url
+
+        formulieren.append({
+            "method": method,
+            "action": action,
+            "action_url": actie_url,
+            "has_action": bool(action),
+            "page_url": str(basis_url or "").strip(),
+        })
+
+    return formulieren
+
+
+def extraheer_audit_knoppen_uit_html(html_tekst, basis_url=""):
+    knoppen = []
+
+    for match in re.finditer(r"(?is)<button\b([^>]*)>(.*?)</button>", str(html_tekst or "")):
+        attrs = str(match.group(1) or "")
+        tekst = extraheer_ankertekst_uit_html(match.group(2) or "")
+        type_raw = extraheer_audit_attribuut(attrs, "type").lower() or "button"
+        target_urls = extraheer_audit_url_kandidaten_uit_tekst(attrs, basis_url)
+        heeft_handler = bool(
+            re.search(r"\bonclick\s*=", attrs, flags=re.IGNORECASE)
+            or re.search(r"\bdata-(?:action|handler|command)\s*=", attrs, flags=re.IGNORECASE)
+            or bool(target_urls)
+        )
+        knoppen.append({
+            "type": type_raw,
+            "text": tekst,
+            "has_handler": heeft_handler,
+            "target_urls": target_urls,
+            "page_url": str(basis_url or "").strip(),
+        })
+
+    for match in re.finditer(r"(?is)<input\b([^>]*)>", str(html_tekst or "")):
+        attrs = str(match.group(1) or "")
+        type_raw = extraheer_audit_attribuut(attrs, "type").lower()
+        if type_raw not in {"button", "submit", "image", "reset"}:
+            continue
+
+        value_tekst = extraheer_audit_attribuut(attrs, "value")
+        target_urls = extraheer_audit_url_kandidaten_uit_tekst(attrs, basis_url)
+        heeft_handler = bool(
+            re.search(r"\bonclick\s*=", attrs, flags=re.IGNORECASE)
+            or re.search(r"\bdata-(?:action|handler|command)\s*=", attrs, flags=re.IGNORECASE)
+            or bool(target_urls)
+        )
+        knoppen.append({
+            "type": type_raw,
+            "text": value_tekst,
+            "has_handler": heeft_handler,
+            "target_urls": target_urls,
+            "page_url": str(basis_url or "").strip(),
+        })
+
+    return knoppen
+
+
+def extraheer_audit_links_uit_html(html_tekst, basis_url, max_items=150):
+    links = []
+    gezien = set()
+
+    for match in re.finditer(r"(?is)<a\b[^>]*href\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</a>", str(html_tekst or "")):
+        href_raw = str(match.group(2) or "")
+        url = normaliseer_link_href(href_raw, basis_url)
+        if not url or url in gezien:
+            continue
+
+        link_tekst = extraheer_ankertekst_uit_html(match.group(3) or "")
+        links.append({
+            "url": url,
+            "text": link_tekst,
+        })
+        gezien.add(url)
+
+        if len(links) >= max(1, int(max_items or 1)):
+            break
+
+    return links
+
+
+def canonieke_audit_url_voor_bezoek(url):
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    path = parsed.path or "/"
+    canonical = f"{parsed.scheme}://{parsed.netloc}{path}"
+    query = str(parsed.query or "").strip()
+    if query and len(query) <= 80 and query.count("&") <= 3:
+        canonical += "?" + query
+    return canonical
+
+
+def is_interne_audit_link(url, doel_host):
+    parsed = urlparse(str(url or "").strip())
+    host = str(parsed.netloc or "").strip().lower()
+    if not host:
+        return False
+    return host == str(doel_host or "").strip().lower()
+
+
+def probeer_audit_link(url, timeout=9):
+    resultaat = haal_http_response_voor_audit(url, method="HEAD", timeout=timeout, max_bytes=0)
+    status = int(resultaat.get("status", 0) or 0)
+
+    if status in {0, 405, 501}:
+        return haal_http_response_voor_audit(url, method="GET", timeout=timeout, max_bytes=12_000)
+
+    if status >= 500:
+        return haal_http_response_voor_audit(url, method="GET", timeout=timeout, max_bytes=12_000)
+
+    return resultaat
+
+
+def controleer_tls_certificaat(url):
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
+        return {
+            "checked": False,
+            "error": "",
+            "days_left": None,
+            "tls_version": "",
+            "issuer": "",
+            "subject": "",
+        }
+
+    host = str(parsed.hostname)
+    port = int(parsed.port or 443)
+
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=6) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as tls_sock:
+                cert = tls_sock.getpeercert() or {}
+                tls_version = str(tls_sock.version() or "")
+
+        subject = ""
+        issuer = ""
+        for rdn in cert.get("subject", []) or []:
+            if not isinstance(rdn, tuple):
+                continue
+            for key, value in rdn:
+                if str(key).lower() == "commonname":
+                    subject = str(value or "")
+                    break
+            if subject:
+                break
+
+        for rdn in cert.get("issuer", []) or []:
+            if not isinstance(rdn, tuple):
+                continue
+            for key, value in rdn:
+                if str(key).lower() == "commonname":
+                    issuer = str(value or "")
+                    break
+            if issuer:
+                break
+
+        not_after = str(cert.get("notAfter", "") or "").strip()
+        days_left = None
+        if not_after:
+            expires_at = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+            now_utc = datetime.datetime.utcnow()
+            days_left = int((expires_at - now_utc).total_seconds() // 86400)
+
+        return {
+            "checked": True,
+            "error": "",
+            "days_left": days_left,
+            "tls_version": tls_version,
+            "issuer": issuer,
+            "subject": subject,
+        }
+    except Exception as e:
+        return {
+            "checked": True,
+            "error": str(e),
+            "days_left": None,
+            "tls_version": "",
+            "issuer": "",
+            "subject": "",
+        }
+
+
+def voeg_audit_check_toe(checks, findings, check_id, status, severity, category, title, detail="", recommendation="", page_url=""):
+    status_norm = str(status or "warn").strip().lower()
+    if status_norm not in {"pass", "warn", "fail"}:
+        status_norm = "warn"
+
+    severity_norm = str(severity or "low").strip().lower()
+    if severity_norm not in {"critical", "high", "medium", "low"}:
+        severity_norm = "low"
+
+    item = {
+        "id": str(check_id or "").strip() or f"check-{len(checks) + 1}",
+        "status": status_norm,
+        "severity": severity_norm,
+        "category": str(category or "general").strip().lower() or "general",
+        "title": opschonen_korte_tekst(title, max_lengte=180),
+        "detail": opschonen_korte_tekst(detail, max_lengte=360),
+        "recommendation": opschonen_korte_tekst(recommendation, max_lengte=320),
+        "page_url": str(page_url or "").strip(),
+    }
+    checks.append(item)
+
+    if status_norm in {"warn", "fail"}:
+        findings.append(item)
+
+
+def bereken_website_audit_score(findings):
+    score = 100
+    for finding in findings:
+        severity = str(finding.get("severity", "low") or "low").strip().lower()
+        status = str(finding.get("status", "warn") or "warn").strip().lower()
+        if status == "fail":
+            score -= WEBSITE_AUDIT_SEVERITY_WEIGHTS_FAIL.get(severity, 4)
+        elif status == "warn":
+            score -= WEBSITE_AUDIT_SEVERITY_WEIGHTS_WARN.get(severity, 2)
+
+    return max(0, min(100, int(score)))
+
+
+def grade_voor_website_audit_score(score):
+    waarde = max(0, min(100, int(score or 0)))
+    if waarde >= 90:
+        return "A"
+    if waarde >= 80:
+        return "B"
+    if waarde >= 70:
+        return "C"
+    if waarde >= 55:
+        return "D"
+    return "E"
+
+
+def exposure_niveau_voor_website_audit(score, severity_totals):
+    critical = int(severity_totals.get("critical", 0) or 0)
+    high = int(severity_totals.get("high", 0) or 0)
+
+    if critical > 0:
+        return tekst_voor_taal("Critical", "Kritiek")
+    if high >= 3 or int(score or 0) < 55:
+        return tekst_voor_taal("High", "Hoog")
+    if high > 0 or int(score or 0) < 75:
+        return tekst_voor_taal("Moderate", "Gemiddeld")
+    return tekst_voor_taal("Low", "Laag")
+
+
+def impact_score_voor_audit_finding(finding):
+    severity = str(finding.get("severity", "low") or "low").lower()
+    status = str(finding.get("status", "warn") or "warn").lower()
+    category = str(finding.get("category", "general") or "general").lower()
+
+    basis = {
+        "critical": 100,
+        "high": 70,
+        "medium": 40,
+        "low": 20,
+    }.get(severity, 20)
+
+    status_factor = 1.0 if status == "fail" else 0.6
+    categorie_factor = {
+        "security": 1.2,
+        "availability": 1.0,
+        "functional": 0.95,
+        "performance": 0.85,
+        "general": 0.75,
+    }.get(category, 0.75)
+    return int(round(basis * status_factor * categorie_factor))
+
+
+def maak_website_audit_actieplan(findings, max_items=8):
+    ruwe_findings = findings if isinstance(findings, list) else []
+    kandidaten = []
+    for finding in ruwe_findings:
+        if not isinstance(finding, dict):
+            continue
+
+        aanbeveling = opschonen_korte_tekst(finding.get("recommendation", ""), max_lengte=320)
+        titel = opschonen_korte_tekst(finding.get("title", ""), max_lengte=180)
+        if not aanbeveling and not titel:
+            continue
+
+        impact = impact_score_voor_audit_finding(finding)
+        kandidaten.append({
+            "source_check_id": str(finding.get("id", "") or "").strip(),
+            "severity": str(finding.get("severity", "low") or "low").lower(),
+            "status": str(finding.get("status", "warn") or "warn").lower(),
+            "category": str(finding.get("category", "general") or "general").lower(),
+            "title": titel,
+            "detail": opschonen_korte_tekst(finding.get("detail", ""), max_lengte=260),
+            "recommendation": aanbeveling or titel,
+            "page_url": str(finding.get("page_url", "") or "").strip(),
+            "expected_impact": impact,
+        })
+
+    kandidaten.sort(
+        key=lambda item: (
+            -int(item.get("expected_impact", 0) or 0),
+            WEBSITE_AUDIT_SEVERITY_RANK.get(str(item.get("severity", "low")), 99),
+            str(item.get("title", "")),
+        )
+    )
+
+    actieplan = []
+    gezien = set()
+    for kandidaat in kandidaten:
+        sleutel = (
+            kandidaat.get("category", ""),
+            kandidaat.get("title", ""),
+            kandidaat.get("recommendation", ""),
+        )
+        if sleutel in gezien:
+            continue
+        gezien.add(sleutel)
+
+        actieplan.append({
+            "priority": len(actieplan) + 1,
+            "category": kandidaat.get("category", "general"),
+            "severity": kandidaat.get("severity", "low"),
+            "status": kandidaat.get("status", "warn"),
+            "title": kandidaat.get("title", ""),
+            "recommendation": kandidaat.get("recommendation", ""),
+            "detail": kandidaat.get("detail", ""),
+            "page_url": kandidaat.get("page_url", ""),
+            "expected_impact": int(kandidaat.get("expected_impact", 0) or 0),
+            "source_check_id": kandidaat.get("source_check_id", ""),
+        })
+
+        if len(actieplan) >= max(1, int(max_items or 1)):
+            break
+
+    return actieplan
+
+
+def maak_website_audit_markdown_rapport(report):
+    report = report if isinstance(report, dict) else {}
+    summary = report.get("summary", {}) if isinstance(report.get("summary", {}), dict) else {}
+    findings = report.get("findings", []) if isinstance(report.get("findings", []), list) else []
+    pages = report.get("pages", []) if isinstance(report.get("pages", []), list) else []
+    checks = report.get("checks", []) if isinstance(report.get("checks", []), list) else []
+    actieplan = report.get("remediation_plan", []) if isinstance(report.get("remediation_plan", []), list) else []
+
+    lines = [
+        f"# Website Audit Report - {report.get('scan_id', '')}",
+        "",
+        f"- Target URL: {report.get('target_url', '')}",
+        f"- Profile: {report.get('profile', 'standard')}",
+        f"- Generated At: {report.get('created_at_label', '')}",
+        f"- Score: {summary.get('score', 0)}/100 ({summary.get('grade', '')})",
+        f"- Exposure: {summary.get('exposure_level', '')}",
+        f"- Checks: {summary.get('checks_total', 0)} | Pass: {summary.get('checks_passed', 0)} | Warn: {summary.get('checks_warn', 0)} | Fail: {summary.get('checks_failed', 0)}",
+        f"- Pages: {summary.get('pages_scanned', 0)} | Links Checked: {summary.get('links_checked', 0)}",
+        "",
+        "## Top Findings",
+        "",
+    ]
+
+    if findings:
+        lines.extend([
+            "| Severity | Status | Category | Title | Recommendation |",
+            "|---|---|---|---|---|",
+        ])
+        for finding in findings[:20]:
+            severity = str(finding.get("severity", "")).upper()
+            status = str(finding.get("status", "")).upper()
+            category = str(finding.get("category", ""))
+            title = str(finding.get("title", "")).replace("|", "\\|")
+            recommendation = str(finding.get("recommendation", "")).replace("|", "\\|")
+            lines.append(f"| {severity} | {status} | {category} | {title} | {recommendation} |")
+    else:
+        lines.append("No warnings or failures detected in this scan profile.")
+
+    lines.extend([
+        "",
+        "## Page Snapshot",
+        "",
+    ])
+
+    if pages:
+        lines.extend([
+            "| URL | Status | Load (ms) | Links | Forms | Buttons |",
+            "|---|---:|---:|---:|---:|---:|",
+        ])
+        for page in pages[:30]:
+            page_url = str(page.get("url", "")).replace("|", "\\|")
+            status = int(page.get("status", 0) or 0)
+            load_ms = int(page.get("load_ms", 0) or 0)
+            links_count = int(page.get("links", 0) or 0)
+            forms_count = int(page.get("forms", 0) or 0)
+            buttons_count = int(page.get("buttons", 0) or 0)
+            lines.append(f"| {page_url} | {status} | {load_ms} | {links_count} | {forms_count} | {buttons_count} |")
+    else:
+        lines.append("No pages were scanned.")
+
+    lines.extend([
+        "",
+        "## Priority Action Plan",
+        "",
+    ])
+
+    if actieplan:
+        lines.extend([
+            "| Priority | Impact | Category | Severity | Action |",
+            "|---:|---:|---|---|---|",
+        ])
+        for item in actieplan[:15]:
+            regel = str(item.get("recommendation", "") or "").replace("|", "\\|")
+            lines.append(
+                f"| {int(item.get('priority', 0) or 0)} | {int(item.get('expected_impact', 0) or 0)} | {item.get('category', '')} | {str(item.get('severity', '')).upper()} | {regel} |"
+            )
+    else:
+        lines.append("No remediation actions generated.")
+
+    lines.extend([
+        "",
+        "## Scan Limits",
+        "",
+        "- This is a passive baseline scan (HTTP checks + structure heuristics).",
+        "- It does not perform exploit attempts or intrusive penetration techniques.",
+        "- Client-side JavaScript behavior is partially inferred from markup and may need browser E2E validation.",
+        "",
+        f"## Raw Checks ({len(checks)})",
+        "",
+    ])
+
+    for check in checks[:200]:
+        lines.append(
+            f"- [{str(check.get('status', '')).upper()}] {str(check.get('severity', '')).upper()} {check.get('title', '')}"
+        )
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def maak_pdf_veilige_tekst(tekst):
+    # Core PDF fonts ondersteunen latin-1; onbekende tekens worden vervangen.
+    return str(tekst or "").replace("\r", " ").replace("\n", " ").encode("latin-1", errors="replace").decode("latin-1")
+
+
+def schrijf_website_audit_pdf_rapport(report, pdf_pad):
+    if not WEBSITE_AUDIT_PDF_BESCHIKBAAR or FPDF is None:
+        return False
+
+    try:
+        summary = report.get("summary", {}) if isinstance(report.get("summary", {}), dict) else {}
+        findings = report.get("findings", []) if isinstance(report.get("findings", []), list) else []
+        actieplan = report.get("remediation_plan", []) if isinstance(report.get("remediation_plan", []), list) else []
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=14)
+        pdf.add_page()
+        pdf.set_title(maak_pdf_veilige_tekst(f"Website Audit Report - {report.get('scan_id', '')}"))
+
+        pdf.set_font("Helvetica", "B", 15)
+        pdf.cell(0, 10, maak_pdf_veilige_tekst(f"Website Audit Report - {report.get('scan_id', '')}"), new_x="LMARGIN", new_y="NEXT")
+
+        pdf.set_font("Helvetica", size=10)
+        regels = [
+            f"Target URL: {report.get('target_url', '')}",
+            f"Profile: {report.get('profile', 'standard')}",
+            f"Generated At: {report.get('created_at_label', '')}",
+            f"Score: {summary.get('score', 0)}/100 ({summary.get('grade', '')})",
+            f"Exposure: {summary.get('exposure_level', '')}",
+            f"Checks: {summary.get('checks_total', 0)} | Pass: {summary.get('checks_passed', 0)} | Warn: {summary.get('checks_warn', 0)} | Fail: {summary.get('checks_failed', 0)}",
+            f"Pages: {summary.get('pages_scanned', 0)} | Links Checked: {summary.get('links_checked', 0)} | Forms Checked: {summary.get('forms_checked', 0)} | Buttons Checked: {summary.get('buttons_checked', 0)}",
+        ]
+        for regel in regels:
+            pdf.multi_cell(0, 6, maak_pdf_veilige_tekst(regel), new_x="LMARGIN", new_y="NEXT")
+
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Priority Actions", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", size=9)
+        if actieplan:
+            for actie in actieplan[:12]:
+                regel = f"P{actie.get('priority', 0)} | impact {actie.get('expected_impact', 0)} | {actie.get('category', '')} | {actie.get('severity', '')}: {actie.get('recommendation', '')}"
+                pdf.multi_cell(0, 5, maak_pdf_veilige_tekst(regel), new_x="LMARGIN", new_y="NEXT")
+        else:
+            pdf.multi_cell(0, 5, "No priority actions generated.", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Top Findings", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", size=9)
+        if findings:
+            for finding in findings[:18]:
+                regel = f"[{str(finding.get('status', '')).upper()}|{str(finding.get('severity', '')).upper()}|{finding.get('category', '')}] {finding.get('title', '')}"
+                detail = str(finding.get("detail", "") or "")
+                pdf.multi_cell(0, 5, maak_pdf_veilige_tekst(regel), new_x="LMARGIN", new_y="NEXT")
+                if detail:
+                    pdf.multi_cell(0, 5, maak_pdf_veilige_tekst("  - " + detail), new_x="LMARGIN", new_y="NEXT")
+        else:
+            pdf.multi_cell(0, 5, "No findings recorded.", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.output(str(pdf_pad))
+        return True
+    except Exception:
+        return False
+
+
+def schrijf_website_audit_rapport(report):
+    WEBSITE_AUDIT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    scan_id = str(report.get("scan_id", "") or "").strip()
+    if not scan_id:
+        scan_id = datetime.datetime.now().strftime("audit-%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        report["scan_id"] = scan_id
+
+    json_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.json"
+    md_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.md"
+    pdf_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.pdf"
+
+    json_pad.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_pad.write_text(maak_website_audit_markdown_rapport(report), encoding="utf-8")
+    pdf_ok = schrijf_website_audit_pdf_rapport(report, pdf_pad)
+    if not pdf_ok and pdf_pad.exists():
+        try:
+            pdf_pad.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return json_pad, md_pad, (pdf_pad if pdf_ok else None)
+
+
+def laad_website_audit_rapport(scan_id=""):
+    scan_id = str(scan_id or "").strip().lower()
+    if not scan_id or not re.fullmatch(r"[a-z0-9][a-z0-9-]{4,80}", scan_id):
+        return None
+
+    json_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.json"
+    if not json_pad.exists() or not json_pad.is_file():
+        return None
+
+    try:
+        inhoud = json.loads(json_pad.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    if isinstance(inhoud, dict):
+        inhoud.setdefault("scan_id", scan_id)
+        inhoud.setdefault("report_files", {})
+        inhoud["report_files"]["json"] = str(json_pad)
+        md_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.md"
+        if md_pad.exists() and md_pad.is_file():
+            inhoud["report_files"]["markdown"] = str(md_pad)
+        pdf_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.pdf"
+        if pdf_pad.exists() and pdf_pad.is_file():
+            inhoud["report_files"]["pdf"] = str(pdf_pad)
+        return inhoud
+    return None
+
+
+def laad_laatste_website_audit_rapport():
+    with WEBSITE_AUDIT_LOCK:
+        huidig_pad = str(WEBSITE_AUDIT_STATE.get("last_report_json", "") or "").strip()
+
+    if huidig_pad:
+        pad = Path(huidig_pad)
+        if pad.exists() and pad.is_file():
+            try:
+                inhoud = json.loads(pad.read_text(encoding="utf-8"))
+                if isinstance(inhoud, dict):
+                    inhoud.setdefault("scan_id", pad.stem)
+                    inhoud.setdefault("report_files", {})
+                    inhoud["report_files"]["json"] = str(pad)
+                    md_pad = pad.with_suffix(".md")
+                    if md_pad.exists() and md_pad.is_file():
+                        inhoud["report_files"]["markdown"] = str(md_pad)
+                    pdf_pad = pad.with_suffix(".pdf")
+                    if pdf_pad.exists() and pdf_pad.is_file():
+                        inhoud["report_files"]["pdf"] = str(pdf_pad)
+                    return inhoud
+            except Exception:
+                pass
+
+    if not WEBSITE_AUDIT_REPORT_DIR.exists() or not WEBSITE_AUDIT_REPORT_DIR.is_dir():
+        return None
+
+    kandidaten = sorted(
+        WEBSITE_AUDIT_REPORT_DIR.glob("*.json"),
+        key=lambda kandidaat: kandidaat.stat().st_mtime,
+        reverse=True,
+    )
+    for kandidaat in kandidaten:
+        try:
+            inhoud = json.loads(kandidaat.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if not isinstance(inhoud, dict):
+            continue
+
+        inhoud.setdefault("scan_id", kandidaat.stem)
+        inhoud.setdefault("report_files", {})
+        inhoud["report_files"]["json"] = str(kandidaat)
+        md_pad = kandidaat.with_suffix(".md")
+        if md_pad.exists() and md_pad.is_file():
+            inhoud["report_files"]["markdown"] = str(md_pad)
+        pdf_pad = kandidaat.with_suffix(".pdf")
+        if pdf_pad.exists() and pdf_pad.is_file():
+            inhoud["report_files"]["pdf"] = str(pdf_pad)
+        return inhoud
+
+    return None
+
+
+def website_audit_rapport_bericht(scan_id="latest"):
+    scan_id = str(scan_id or "latest").strip().lower()
+    rapport = laad_laatste_website_audit_rapport() if scan_id in {"latest", "laatste", "nieuwste"} else laad_website_audit_rapport(scan_id)
+    if not rapport:
+        return tekst_voor_taal(
+            "No website audit report found yet.",
+            "Er is nog geen website-auditrapport gevonden."
+        )
+
+    summary = rapport.get("summary", {}) if isinstance(rapport.get("summary", {}), dict) else {}
+    report_files = rapport.get("report_files", {}) if isinstance(rapport.get("report_files", {}), dict) else {}
+    json_pad = str(report_files.get("json", "") or "").strip()
+    md_pad = str(report_files.get("markdown", "") or "").strip()
+    locatie = md_pad or json_pad
+
+    return tekst_voor_taal(
+        f"Website audit report {rapport.get('scan_id', '')}: score {summary.get('score', 0)}/100 ({summary.get('grade', '')}), fail {summary.get('checks_failed', 0)}, warn {summary.get('checks_warn', 0)}. Report file: {locatie}",
+        f"Website-auditrapport {rapport.get('scan_id', '')}: score {summary.get('score', 0)}/100 ({summary.get('grade', '')}), fail {summary.get('checks_failed', 0)}, waarschuwingen {summary.get('checks_warn', 0)}. Rapportbestand: {locatie}"
+    )
+
+
+def veilige_website_audit_report_pad(pad_tekst):
+    pad_tekst = str(pad_tekst or "").strip()
+    if not pad_tekst:
+        return None
+
+    try:
+        basis_pad = WEBSITE_AUDIT_REPORT_DIR.resolve()
+        kandidaat = Path(pad_tekst).resolve()
+    except Exception:
+        return None
+
+    if kandidaat != basis_pad and basis_pad not in kandidaat.parents:
+        return None
+    if not kandidaat.exists() or not kandidaat.is_file():
+        return None
+    return kandidaat
+
+
+def website_audit_report_pad_voor_formaat(rapport, formaat):
+    rapport = rapport if isinstance(rapport, dict) else {}
+    formaat = str(formaat or "").strip().lower()
+    scan_id = str(rapport.get("scan_id", "") or "").strip().lower()
+    if formaat not in {"json", "md", "markdown", "pdf"}:
+        return None
+
+    key = "markdown" if formaat in {"md", "markdown"} else formaat
+    report_files = rapport.get("report_files", {}) if isinstance(rapport.get("report_files", {}), dict) else {}
+    pad = veilige_website_audit_report_pad(report_files.get(key, ""))
+    if pad:
+        return pad
+
+    if not scan_id:
+        return None
+
+    if key == "json":
+        return veilige_website_audit_report_pad(WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.json")
+    if key == "markdown":
+        return veilige_website_audit_report_pad(WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.md")
+    if key == "pdf":
+        pdf_pad = WEBSITE_AUDIT_REPORT_DIR / f"{scan_id}.pdf"
+        veilig = veilige_website_audit_report_pad(pdf_pad)
+        if veilig:
+            return veilig
+        if schrijf_website_audit_pdf_rapport(rapport, pdf_pad):
+            return veilige_website_audit_report_pad(pdf_pad)
+    return None
+
+
+def verrijk_website_audit_report_api_links(rapport):
+    rapport = dict(rapport) if isinstance(rapport, dict) else {}
+    scan_id = str(rapport.get("scan_id", "") or "").strip().lower()
+    if not scan_id:
+        return rapport
+
+    rapport.setdefault("download_paths", {})
+    rapport["download_paths"]["json"] = f"/api/website-audit/report/{scan_id}/download/json"
+    rapport["download_paths"]["markdown"] = f"/api/website-audit/report/{scan_id}/download/markdown"
+    rapport["download_paths"]["pdf"] = f"/api/website-audit/report/{scan_id}/download/pdf"
+    return rapport
+
+
+def voer_website_audit_scan_uit(scan_id, target_url, profiel="standard"):
+    profiel = normaliseer_website_audit_profiel(profiel)
+    config = WEBSITE_AUDIT_PROFILE_CONFIG.get(profiel, WEBSITE_AUDIT_PROFILE_CONFIG["standard"])
+    max_pages = max(1, int(config.get("max_pages", 3) or 3))
+    max_links_per_page = max(1, int(config.get("max_links_per_page", 8) or 8))
+    max_total_links = max(1, int(config.get("max_total_links", 20) or 20))
+    max_form_checks = max(1, int(config.get("max_form_checks", max_pages * 2) or (max_pages * 2)))
+    max_button_checks = max(1, int(config.get("max_button_checks", max_pages * 2) or (max_pages * 2)))
+    sensitive_path_limit = max(1, int(config.get("sensitive_path_limit", 6) or 6))
+    max_bytes_per_page = max(80_000, int(config.get("max_bytes_per_page", 260_000) or 260_000))
+
+    doel_url = normaliseer_url_voor_browser_taak(target_url)
+    if not doel_url:
+        raise ValueError(tekst_voor_taal("Invalid website URL.", "Ongeldige website-URL."))
+
+    doel_parsed = urlparse(doel_url)
+    doel_host = str(doel_parsed.netloc or "").strip().lower()
+    doel_origin = f"{doel_parsed.scheme}://{doel_parsed.netloc}"
+    gebruikt_https = doel_parsed.scheme.lower() == "https"
+
+    checks = []
+    findings = []
+    pagina_resultaten = []
+    links_resultaten = []
+    bezocht = set()
+    gezien_link_checks = set()
+    gezien_form_target_checks = set()
+    gezien_button_target_checks = set()
+    queue = [doel_url]
+
+    links_checked_totaal = 0
+    formulieren_totaal = 0
+    knoppen_totaal = 0
+    knoppen_mogelijk_ongekoppeld = 0
+    formulieren_zonder_action = 0
+    formulieren_onveilige_action = 0
+    formulieren_onbekende_method = 0
+    mixed_content_hits = 0
+    gebroken_links = []
+    trage_links = []
+    form_target_fouten = []
+    button_target_fouten = []
+    forms_checked_totaal = 0
+    buttons_checked_totaal = 0
+    form_probe_failures = 0
+    button_probe_failures = 0
+
+    root_headers = {}
+    root_set_cookie = []
+
+    if gebruikt_https:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "transport-https",
+            "pass",
+            "high",
+            "security",
+            tekst_voor_taal("HTTPS is enabled.", "HTTPS is actief."),
+            recommendation=tekst_voor_taal("Keep HTTPS enforced on all public routes.", "Houd HTTPS afgedwongen op alle publieke routes."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "transport-https",
+            "fail",
+            "critical",
+            "security",
+            tekst_voor_taal("Website is not using HTTPS.", "Website gebruikt geen HTTPS."),
+            detail=tekst_voor_taal("Main scan URL resolved to HTTP.", "De hoofd-URL van de scan gebruikt HTTP."),
+            recommendation=tekst_voor_taal(
+                "Move the public site to HTTPS and redirect all HTTP traffic to HTTPS.",
+                "Zet de publieke site op HTTPS en leid al het HTTP-verkeer om naar HTTPS."
+            ),
+        )
+
+    update_website_audit_state(
+        stage=tekst_voor_taal("Crawling pages", "Pagina's crawlen"),
+        progress_percent=8,
+    )
+
+    while queue and len(pagina_resultaten) < max_pages:
+        huidige_url = queue.pop(0)
+        canonieke_url = canonieke_audit_url_voor_bezoek(huidige_url)
+        if not canonieke_url or canonieke_url in bezocht:
+            continue
+        bezocht.add(canonieke_url)
+
+        response = haal_http_response_voor_audit(huidige_url, method="GET", timeout=12, max_bytes=max_bytes_per_page)
+        status = int(response.get("status", 0) or 0)
+        page_url = str(response.get("url", huidige_url) or huidige_url)
+        headers = response.get("headers", {}) if isinstance(response.get("headers", {}), dict) else {}
+        content_type = str(headers.get("content-type", "") or "")
+        html_tekst = decode_audit_response_body(response.get("body", b""), content_type)
+
+        if not root_headers:
+            root_headers = dict(headers)
+            root_set_cookie = list(response.get("set_cookie", []) or [])
+
+        titel_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html_tekst)
+        pagina_titel = html.unescape(titel_match.group(1)).strip() if titel_match else page_url
+        pagina_titel = opschonen_korte_tekst(pagina_titel, max_lengte=140)
+
+        links = []
+        formulieren = []
+        knoppen = []
+
+        if "html" in content_type.lower() or "text/" in content_type.lower():
+            links = extraheer_audit_links_uit_html(html_tekst, page_url, max_items=180)
+            formulieren = extraheer_audit_formulieren_uit_html(html_tekst, page_url)
+            knoppen = extraheer_audit_knoppen_uit_html(html_tekst, page_url)
+
+        pagina_resultaten.append({
+            "url": page_url,
+            "status": status,
+            "load_ms": int(response.get("duration_ms", 0) or 0),
+            "title": pagina_titel,
+            "links": len(links),
+            "forms": len(formulieren),
+            "buttons": len(knoppen),
+            "content_type": content_type,
+        })
+
+        pagina_index = len(pagina_resultaten)
+        progress_basis = min(72, 8 + int((pagina_index / max_pages) * 64))
+        update_website_audit_state(
+            stage=tekst_voor_taal(f"Scanning page {pagina_index}/{max_pages}", f"Scannen pagina {pagina_index}/{max_pages}"),
+            progress_percent=progress_basis,
+            pages_scanned=pagina_index,
+        )
+
+        if status >= 400 or status == 0:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                f"page-status-{pagina_index}",
+                "fail",
+                "high",
+                "availability",
+                tekst_voor_taal("Page returned an error status.", "Pagina gaf een foutstatus terug."),
+                detail=tekst_voor_taal(f"{page_url} responded with {status or 'no response' }.", f"{page_url} gaf status {status or 'geen respons'} terug."),
+                recommendation=tekst_voor_taal("Fix routing/server errors on this URL.", "Los routing/serverfouten op voor deze URL."),
+                page_url=page_url,
+            )
+        else:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                f"page-status-{pagina_index}",
+                "pass",
+                "low",
+                "availability",
+                tekst_voor_taal("Page responded successfully.", "Pagina reageerde succesvol."),
+                detail=tekst_voor_taal(f"{page_url} responded with {status}.", f"{page_url} gaf status {status} terug."),
+                page_url=page_url,
+            )
+
+        if int(response.get("duration_ms", 0) or 0) > 4500:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                f"page-speed-{pagina_index}",
+                "warn",
+                "medium",
+                "performance",
+                tekst_voor_taal("Page response time is high.", "Reactietijd van de pagina is hoog."),
+                detail=tekst_voor_taal(
+                    f"{page_url} loaded in {int(response.get('duration_ms', 0) or 0)} ms.",
+                    f"{page_url} laadde in {int(response.get('duration_ms', 0) or 0)} ms."
+                ),
+                recommendation=tekst_voor_taal("Optimize backend latency and payload size for this page.", "Optimaliseer backend-latency en payloadgrootte voor deze pagina."),
+                page_url=page_url,
+            )
+
+        formulieren_totaal += len(formulieren)
+        knoppen_totaal += len(knoppen)
+
+        for form in formulieren:
+            method = str(form.get("method", "get") or "get").lower()
+            action_url = str(form.get("action_url", "") or "")
+            has_action = bool(form.get("has_action", False))
+            form_page_url = str(form.get("page_url", page_url) or page_url)
+
+            if not has_action:
+                formulieren_zonder_action += 1
+
+            if gebruikt_https and action_url.startswith("http://"):
+                formulieren_onveilige_action += 1
+
+            if method not in {"get", "post"}:
+                formulieren_onbekende_method += 1
+
+            canon_action = canonieke_audit_url_voor_bezoek(action_url)
+            if canon_action and is_interne_audit_link(action_url, doel_host) and forms_checked_totaal < max_form_checks:
+                check_key = f"{method}:{canon_action}"
+                if check_key not in gezien_form_target_checks:
+                    gezien_form_target_checks.add(check_key)
+                    forms_checked_totaal += 1
+
+                    result = probeer_audit_link(action_url, timeout=8)
+                    status_form = int(result.get("status", 0) or 0)
+                    load_form_ms = int(result.get("duration_ms", 0) or 0)
+
+                    if status_form == 0 or status_form >= 500 or status_form == 404:
+                        form_probe_failures += 1
+                        if len(form_target_fouten) < 8:
+                            form_target_fouten.append(f"{action_url} ({status_form or 'no response'})")
+                        voeg_audit_check_toe(
+                            checks,
+                            findings,
+                            f"form-endpoint-{forms_checked_totaal}",
+                            "fail",
+                            "high" if status_form in {0, 404} else "medium",
+                            "functional",
+                            tekst_voor_taal("Form endpoint probe failed.", "Form-endpointprobe mislukt."),
+                            detail=tekst_voor_taal(
+                                f"{method.upper()} form target {action_url} returned {status_form or 'no response'} from page {form_page_url}.",
+                                f"{method.upper()} form-doel {action_url} gaf {status_form or 'geen respons'} vanaf pagina {form_page_url}."
+                            ),
+                            recommendation=tekst_voor_taal("Fix the target route or update the form action URL.", "Herstel de doelroute of update de form-action-URL."),
+                            page_url=form_page_url,
+                        )
+                    elif status_form == 405 and method == "post":
+                        voeg_audit_check_toe(
+                            checks,
+                            findings,
+                            f"form-endpoint-{forms_checked_totaal}",
+                            "warn",
+                            "low",
+                            "functional",
+                            tekst_voor_taal("Form endpoint blocks GET checks for a POST route.", "Form-endpoint blokkeert GET-checks voor een POST-route."),
+                            detail=tekst_voor_taal(
+                                f"Target {action_url} returned 405 on probe ({load_form_ms} ms).",
+                                f"Doel {action_url} gaf 405 op probe ({load_form_ms} ms)."
+                            ),
+                            page_url=form_page_url,
+                        )
+                    else:
+                        voeg_audit_check_toe(
+                            checks,
+                            findings,
+                            f"form-endpoint-{forms_checked_totaal}",
+                            "pass",
+                            "low",
+                            "functional",
+                            tekst_voor_taal("Form endpoint probe responded.", "Form-endpointprobe reageerde."),
+                            detail=tekst_voor_taal(
+                                f"{method.upper()} form target {action_url} returned {status_form} ({load_form_ms} ms).",
+                                f"{method.upper()} form-doel {action_url} gaf {status_form} ({load_form_ms} ms)."
+                            ),
+                            page_url=form_page_url,
+                        )
+
+        for knop in knoppen:
+            knop_type = str(knop.get("type", "button") or "button").lower()
+            has_handler = bool(knop.get("has_handler", False))
+            knop_tekst = opschonen_korte_tekst(str(knop.get("text", "") or ""), max_lengte=80)
+            knop_page_url = str(knop.get("page_url", page_url) or page_url)
+            if knop_type == "button" and not has_handler:
+                knoppen_mogelijk_ongekoppeld += 1
+
+            for target_url in list(knop.get("target_urls", []) or []):
+                target_url = str(target_url or "").strip()
+                if not target_url or not is_interne_audit_link(target_url, doel_host):
+                    continue
+                canon_target = canonieke_audit_url_voor_bezoek(target_url)
+                if not canon_target or canon_target in gezien_button_target_checks:
+                    continue
+                if buttons_checked_totaal >= max_button_checks:
+                    break
+
+                gezien_button_target_checks.add(canon_target)
+                buttons_checked_totaal += 1
+                result = probeer_audit_link(target_url, timeout=8)
+                status_knop = int(result.get("status", 0) or 0)
+                load_knop_ms = int(result.get("duration_ms", 0) or 0)
+
+                if status_knop == 0 or status_knop >= 400:
+                    button_probe_failures += 1
+                    if len(button_target_fouten) < 8:
+                        button_target_fouten.append(f"{target_url} ({status_knop or 'no response'})")
+                    voeg_audit_check_toe(
+                        checks,
+                        findings,
+                        f"button-endpoint-{buttons_checked_totaal}",
+                        "fail" if status_knop in {0, 404} or status_knop >= 500 else "warn",
+                        "high" if status_knop in {0, 404} or status_knop >= 500 else "medium",
+                        "functional",
+                        tekst_voor_taal("Button target probe failed.", "Knopdoelprobe mislukt."),
+                        detail=tekst_voor_taal(
+                            f"Button {knop_tekst or '[unnamed]'} target {target_url} returned {status_knop or 'no response'} from page {knop_page_url}.",
+                            f"Knop {knop_tekst or '[zonder naam]'} doel {target_url} gaf {status_knop or 'geen respons'} vanaf pagina {knop_page_url}."
+                        ),
+                        recommendation=tekst_voor_taal("Fix the button navigation target or related route handler.", "Herstel het navigatiedoel van de knop of de bijbehorende route-handler."),
+                        page_url=knop_page_url,
+                    )
+                else:
+                    voeg_audit_check_toe(
+                        checks,
+                        findings,
+                        f"button-endpoint-{buttons_checked_totaal}",
+                        "pass",
+                        "low",
+                        "functional",
+                        tekst_voor_taal("Button target probe responded.", "Knopdoelprobe reageerde."),
+                        detail=tekst_voor_taal(
+                            f"Button {knop_tekst or '[unnamed]'} target {target_url} returned {status_knop} ({load_knop_ms} ms).",
+                            f"Knop {knop_tekst or '[zonder naam]'} doel {target_url} gaf {status_knop} ({load_knop_ms} ms)."
+                        ),
+                        page_url=knop_page_url,
+                    )
+
+        if gebruikt_https and re.search(r"(?is)(?:src|href)\s*=\s*(['\"])http://", html_tekst):
+            mixed_content_hits += 1
+
+        for link in links:
+            link_url = str(link.get("url", "") or "").strip()
+            if not link_url or not is_interne_audit_link(link_url, doel_host):
+                continue
+
+            canon_link = canonieke_audit_url_voor_bezoek(link_url)
+            if not canon_link or canon_link in bezocht or canon_link in queue:
+                continue
+            if len(queue) + len(pagina_resultaten) < (max_pages * 2):
+                queue.append(canon_link)
+
+        for link in links:
+            if links_checked_totaal >= max_total_links:
+                break
+
+            link_url = str(link.get("url", "") or "").strip()
+            if not link_url or not is_interne_audit_link(link_url, doel_host):
+                continue
+            if link_url in gezien_link_checks:
+                continue
+
+            gezien_link_checks.add(link_url)
+            link_result = probeer_audit_link(link_url, timeout=9)
+            links_checked_totaal += 1
+
+            link_status = int(link_result.get("status", 0) or 0)
+            link_ms = int(link_result.get("duration_ms", 0) or 0)
+            links_resultaten.append({
+                "url": link_url,
+                "status": link_status,
+                "duration_ms": link_ms,
+            })
+
+            if link_status >= 400 or link_status == 0:
+                if len(gebroken_links) < 12:
+                    gebroken_links.append(f"{link_url} ({link_status or 'no response'})")
+            elif link_ms > 3500:
+                if len(trage_links) < 12:
+                    trage_links.append(f"{link_url} ({link_ms} ms)")
+
+            if links_checked_totaal >= max_links_per_page * pagina_index:
+                break
+
+    update_website_audit_state(
+        stage=tekst_voor_taal("Running security baseline checks", "Security-baseline checks uitvoeren"),
+        progress_percent=78,
+        links_checked=links_checked_totaal,
+        forms_seen=formulieren_totaal,
+        buttons_seen=knoppen_totaal,
+    )
+
+    if formulieren_totaal == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-presence",
+            "warn",
+            "low",
+            "functional",
+            tekst_voor_taal("No forms detected in scanned pages.", "Geen formulieren gevonden in gescande pagina's."),
+            recommendation=tekst_voor_taal("If forms are expected, verify routes and rendered HTML for form elements.", "Als formulieren verwacht zijn, controleer routes en gerenderde HTML op form-elementen."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-presence",
+            "pass",
+            "low",
+            "functional",
+            tekst_voor_taal("Forms detected.", "Formulieren gevonden."),
+            detail=tekst_voor_taal(f"Detected {formulieren_totaal} form element(s).", f"{formulieren_totaal} form-element(en) gedetecteerd."),
+        )
+
+    if formulieren_zonder_action > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-missing-action",
+            "warn",
+            "medium",
+            "functional",
+            tekst_voor_taal("Some forms have no explicit action attribute.", "Sommige formulieren hebben geen expliciet action-attribuut."),
+            detail=tekst_voor_taal(
+                f"Detected {formulieren_zonder_action} form(s) without action.",
+                f"{formulieren_zonder_action} formulier(en) zonder action gedetecteerd."
+            ),
+            recommendation=tekst_voor_taal("Set explicit form action targets to reduce routing ambiguity.", "Stel expliciete form-action-doelen in om routingambiguiteit te verminderen."),
+        )
+
+    if formulieren_onveilige_action > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-insecure-action",
+            "fail",
+            "high",
+            "security",
+            tekst_voor_taal("One or more forms submit over HTTP from an HTTPS site.", "Een of meer formulieren posten via HTTP vanaf een HTTPS-site."),
+            detail=tekst_voor_taal(
+                f"Detected {formulieren_onveilige_action} insecure form action target(s).",
+                f"{formulieren_onveilige_action} onveilige form-action-doel(en) gedetecteerd."
+            ),
+            recommendation=tekst_voor_taal("Ensure all form action URLs use HTTPS.", "Zorg dat alle form-action-URL's HTTPS gebruiken."),
+        )
+
+    if formulieren_onbekende_method > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-method",
+            "warn",
+            "low",
+            "functional",
+            tekst_voor_taal("Some forms use uncommon HTTP methods.", "Sommige formulieren gebruiken ongebruikelijke HTTP-methodes."),
+            detail=tekst_voor_taal(
+                f"Detected {formulieren_onbekende_method} form(s) with a non-standard method.",
+                f"{formulieren_onbekende_method} formulier(en) met niet-standaard methode gedetecteerd."
+            ),
+        )
+
+    if knoppen_totaal == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "buttons-presence",
+            "warn",
+            "low",
+            "functional",
+            tekst_voor_taal("No button controls detected in scanned pages.", "Geen knopbediening gevonden in gescande pagina's."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "buttons-presence",
+            "pass",
+            "low",
+            "functional",
+            tekst_voor_taal("Interactive button controls were detected.", "Interactieve knoppen zijn gedetecteerd."),
+            detail=tekst_voor_taal(f"Detected {knoppen_totaal} button control(s).", f"{knoppen_totaal} knop(pen) gedetecteerd."),
+        )
+
+    if knoppen_mogelijk_ongekoppeld > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "buttons-unbound",
+            "warn",
+            "medium",
+            "functional",
+            tekst_voor_taal("Some buttons may not be bound to a visible handler.", "Sommige knoppen lijken niet aan een zichtbare handler gekoppeld."),
+            detail=tekst_voor_taal(
+                f"Detected {knoppen_mogelijk_ongekoppeld} button(s) with type=button and no inline/data handler hint.",
+                f"{knoppen_mogelijk_ongekoppeld} knop(pen) met type=button zonder inline/data-handler-hint gedetecteerd."
+            ),
+            recommendation=tekst_voor_taal("Validate these controls with browser E2E tests to confirm behavior.", "Valideer deze controls met browser-E2E-tests om gedrag te bevestigen."),
+        )
+
+    if links_checked_totaal == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "links-checked",
+            "warn",
+            "low",
+            "functional",
+            tekst_voor_taal("No internal links were checked.", "Er zijn geen interne links gecontroleerd."),
+            recommendation=tekst_voor_taal("Ensure at least one crawlable internal link exists for baseline checks.", "Zorg dat er minstens één crawlbare interne link is voor baselinechecks."),
+        )
+    elif gebroken_links:
+        voorbeelden = "; ".join(gebroken_links[:4])
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "links-broken",
+            "fail",
+            "high",
+            "availability",
+            tekst_voor_taal("Broken internal links detected.", "Kapotte interne links gedetecteerd."),
+            detail=tekst_voor_taal(f"Examples: {voorbeelden}", f"Voorbeelden: {voorbeelden}"),
+            recommendation=tekst_voor_taal("Fix routes or link targets returning 4xx/5xx errors.", "Los routes of linkdoelen op die 4xx/5xx-fouten geven."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "links-broken",
+            "pass",
+            "low",
+            "availability",
+            tekst_voor_taal("Checked internal links responded without 4xx/5xx errors.", "Gecontroleerde interne links reageerden zonder 4xx/5xx-fouten."),
+            detail=tekst_voor_taal(f"Checked {links_checked_totaal} link(s).", f"{links_checked_totaal} link(s) gecontroleerd."),
+        )
+
+    if trage_links:
+        voorbeelden = "; ".join(trage_links[:4])
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "links-slow",
+            "warn",
+            "medium",
+            "performance",
+            tekst_voor_taal("Some internal links respond slowly.", "Sommige interne links reageren traag."),
+            detail=tekst_voor_taal(f"Examples: {voorbeelden}", f"Voorbeelden: {voorbeelden}"),
+            recommendation=tekst_voor_taal("Profile backend/database latency on slow routes.", "Profile backend/database-latency op trage routes."),
+        )
+
+    if formulieren_totaal > 0 and forms_checked_totaal == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-endpoint-coverage",
+            "warn",
+            "low",
+            "functional",
+            tekst_voor_taal("No form endpoints were probe-checked within scan limits.", "Binnen de scanlimieten zijn geen form-endpoints geprobe-checkt."),
+            recommendation=tekst_voor_taal("Use a deeper profile or add explicit form action URLs.", "Gebruik een dieper profiel of voeg expliciete form-action-URL's toe."),
+        )
+    elif forms_checked_totaal > 0 and form_probe_failures == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-endpoint-coverage",
+            "pass",
+            "low",
+            "functional",
+            tekst_voor_taal("Form endpoint probes did not detect blocking errors.", "Form-endpointprobes detecteerden geen blokkerende fouten."),
+            detail=tekst_voor_taal(f"Checked {forms_checked_totaal} form target(s).", f"{forms_checked_totaal} form-doel(en) gecontroleerd."),
+        )
+
+    if form_probe_failures > 0:
+        voorbeelden = "; ".join(form_target_fouten[:4])
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "forms-endpoint-failures",
+            "fail",
+            "high",
+            "functional",
+            tekst_voor_taal("One or more form endpoints failed functional probes.", "Een of meer form-endpoints faalden op functionele probes."),
+            detail=tekst_voor_taal(f"Examples: {voorbeelden}", f"Voorbeelden: {voorbeelden}"),
+            recommendation=tekst_voor_taal("Repair these endpoints first; they can block core user flows.", "Herstel deze endpoints als eerste; ze kunnen kernflows blokkeren."),
+        )
+
+    if buttons_checked_totaal > 0 and button_probe_failures == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "buttons-target-probes",
+            "pass",
+            "low",
+            "functional",
+            tekst_voor_taal("Button target probes did not detect blocking errors.", "Knopdoelprobes detecteerden geen blokkerende fouten."),
+            detail=tekst_voor_taal(f"Checked {buttons_checked_totaal} button target(s).", f"{buttons_checked_totaal} knopdoel(en) gecontroleerd."),
+        )
+    elif knoppen_totaal > 0 and buttons_checked_totaal == 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "buttons-target-probes",
+            "warn",
+            "low",
+            "functional",
+            tekst_voor_taal("No button targets were probe-checked.", "Er zijn geen knopdoelen probe-checkt."),
+            recommendation=tekst_voor_taal("Expose explicit button target URLs or add browser E2E tests.", "Exporteer expliciete knopdoel-URL's of voeg browser-E2E-tests toe."),
+        )
+
+    if button_probe_failures > 0:
+        voorbeelden = "; ".join(button_target_fouten[:4])
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "buttons-target-failures",
+            "fail",
+            "high",
+            "functional",
+            tekst_voor_taal("One or more button targets failed probes.", "Een of meer knopdoelen faalden op probes."),
+            detail=tekst_voor_taal(f"Examples: {voorbeelden}", f"Voorbeelden: {voorbeelden}"),
+            recommendation=tekst_voor_taal("Fix these button routes to restore click flows.", "Herstel deze knoproutes om klikflows te herstellen."),
+        )
+
+    if mixed_content_hits > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "mixed-content",
+            "fail",
+            "high",
+            "security",
+            tekst_voor_taal("Mixed content detected on HTTPS pages.", "Mixed content gedetecteerd op HTTPS-pagina's."),
+            detail=tekst_voor_taal(
+                f"Detected HTTP resource references on {mixed_content_hits} page(s).",
+                f"HTTP-resourceverwijzingen gevonden op {mixed_content_hits} pagina('s)."
+            ),
+            recommendation=tekst_voor_taal("Serve all assets over HTTPS.", "Serveer alle assets via HTTPS."),
+        )
+    elif gebruikt_https:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "mixed-content",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("No mixed content detected in scanned pages.", "Geen mixed content gedetecteerd in gescande pagina's."),
+        )
+
+    if gebruikt_https:
+        http_probe_url = f"http://{doel_parsed.netloc}{doel_parsed.path or '/'}"
+        if doel_parsed.query:
+            http_probe_url += "?" + str(doel_parsed.query)
+
+        http_redirect_probe = haal_http_response_voor_audit(http_probe_url, method="GET", timeout=8, max_bytes=12_000)
+        status_http = int(http_redirect_probe.get("status", 0) or 0)
+        final_http_url = str(http_redirect_probe.get("url", "") or "")
+        redirected_to_https = final_http_url.startswith("https://")
+        if status_http in {301, 302, 307, 308} and redirected_to_https:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "transport-http-redirect",
+                "pass",
+                "medium",
+                "security",
+                tekst_voor_taal("HTTP traffic redirects to HTTPS.", "HTTP-verkeer wordt doorgestuurd naar HTTPS."),
+            )
+        elif status_http in {0, 400, 404, 405} and redirected_to_https:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "transport-http-redirect",
+                "warn",
+                "low",
+                "security",
+                tekst_voor_taal("HTTP redirect behavior could not be fully verified.", "HTTP-redirectgedrag kon niet volledig geverifieerd worden."),
+                detail=tekst_voor_taal(
+                    f"HTTP probe ended at {final_http_url or 'unknown target'} with status {status_http or 'no response'}.",
+                    f"HTTP-probe eindigde op {final_http_url or 'onbekend doel'} met status {status_http or 'geen respons'}."
+                ),
+            )
+        else:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "transport-http-redirect",
+                "warn",
+                "high",
+                "security",
+                tekst_voor_taal("HTTP to HTTPS redirect is missing or inconsistent.", "HTTP-naar-HTTPS-redirect ontbreekt of is inconsistent."),
+                detail=tekst_voor_taal(
+                    f"HTTP probe status {status_http or 'no response'} final URL {final_http_url or '-'}.",
+                    f"HTTP-probestatus {status_http or 'geen respons'} eind-URL {final_http_url or '-'}."
+                ),
+                recommendation=tekst_voor_taal("Force HTTP 301/308 redirects to HTTPS on all public routes.", "Dwing HTTP 301/308-redirects naar HTTPS af op alle publieke routes."),
+            )
+
+    headers = {str(k).lower(): str(v) for k, v in root_headers.items()} if isinstance(root_headers, dict) else {}
+    csp = str(headers.get("content-security-policy", "") or "").strip()
+    hsts = str(headers.get("strict-transport-security", "") or "").strip()
+    xfo = str(headers.get("x-frame-options", "") or "").strip()
+    xcto = str(headers.get("x-content-type-options", "") or "").strip().lower()
+    referrer = str(headers.get("referrer-policy", "") or "").strip()
+    permissions = str(headers.get("permissions-policy", "") or "").strip()
+    cors_origin = str(headers.get("access-control-allow-origin", "") or "").strip()
+    server_header = str(headers.get("server", "") or "").strip()
+    powered_by = str(headers.get("x-powered-by", "") or "").strip()
+
+    if cors_origin == "*" and root_set_cookie:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-cors-wildcard",
+            "warn",
+            "high",
+            "security",
+            tekst_voor_taal("CORS wildcard is enabled while cookies are set.", "CORS-wildcard staat aan terwijl cookies worden gezet."),
+            recommendation=tekst_voor_taal("Use an allowlist for Access-Control-Allow-Origin when credentials/cookies are used.", "Gebruik een allowlist voor Access-Control-Allow-Origin als credentials/cookies worden gebruikt."),
+        )
+    elif cors_origin == "*":
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-cors-wildcard",
+            "warn",
+            "low",
+            "security",
+            tekst_voor_taal("CORS wildcard is enabled.", "CORS-wildcard staat aan."),
+            recommendation=tekst_voor_taal("Restrict Access-Control-Allow-Origin to trusted origins where possible.", "Beperk Access-Control-Allow-Origin tot vertrouwde origins waar mogelijk."),
+        )
+    elif cors_origin:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-cors-wildcard",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("CORS origin policy is explicitly configured.", "CORS-originbeleid is expliciet geconfigureerd."),
+        )
+
+    options_probe = haal_http_response_voor_audit(doel_url, method="OPTIONS", timeout=7, max_bytes=2000)
+    options_status = int(options_probe.get("status", 0) or 0)
+    options_headers = options_probe.get("headers", {}) if isinstance(options_probe.get("headers", {}), dict) else {}
+    allowed_methods = str(options_headers.get("allow", "") or "").upper()
+    if allowed_methods:
+        if "TRACE" in allowed_methods:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "http-options-methods",
+                "fail",
+                "high",
+                "security",
+                tekst_voor_taal("TRACE method is exposed.", "TRACE-methode is beschikbaar."),
+                detail=tekst_voor_taal(f"Allow header: {allowed_methods}", f"Allow-header: {allowed_methods}"),
+                recommendation=tekst_voor_taal("Disable TRACE in reverse proxy or web server configuration.", "Schakel TRACE uit in reverse-proxy- of webserverconfiguratie."),
+            )
+        elif any(m in allowed_methods for m in [" PUT", " DELETE", " PATCH"]) or allowed_methods.startswith("PUT") or allowed_methods.startswith("DELETE") or allowed_methods.startswith("PATCH"):
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "http-options-methods",
+                "warn",
+                "medium",
+                "security",
+                tekst_voor_taal("Potentially risky HTTP methods are enabled.", "Mogelijk risicovolle HTTP-methodes staan aan."),
+                detail=tekst_voor_taal(f"Allow header: {allowed_methods}", f"Allow-header: {allowed_methods}"),
+                recommendation=tekst_voor_taal("Limit enabled methods to only what is required.", "Beperk toegestane methodes tot wat strikt nodig is."),
+            )
+        else:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "http-options-methods",
+                "pass",
+                "low",
+                "security",
+                tekst_voor_taal("No risky HTTP methods advertised in Allow header.", "Geen risicovolle HTTP-methodes geadverteerd in Allow-header."),
+            )
+    elif options_status > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "http-options-methods",
+            "warn",
+            "low",
+            "security",
+            tekst_voor_taal("Could not determine allowed HTTP methods from OPTIONS response.", "Kon toegestane HTTP-methodes niet bepalen uit OPTIONS-respons."),
+            detail=tekst_voor_taal(f"OPTIONS status: {options_status}", f"OPTIONS-status: {options_status}"),
+        )
+
+    security_txt_url = urljoin(doel_origin + "/", ".well-known/security.txt")
+    security_txt_probe = probeer_audit_link(security_txt_url, timeout=6)
+    security_txt_status = int(security_txt_probe.get("status", 0) or 0)
+    if security_txt_status == 200:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "security-txt",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("security.txt is present.", "security.txt is aanwezig."),
+            page_url=security_txt_url,
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "security-txt",
+            "warn",
+            "low",
+            "security",
+            tekst_voor_taal("security.txt was not found.", "security.txt is niet gevonden."),
+            detail=tekst_voor_taal(f"Endpoint returned {security_txt_status or 'no response'}.", f"Endpoint gaf {security_txt_status or 'geen respons'} terug."),
+            recommendation=tekst_voor_taal("Add a /.well-known/security.txt disclosure file for responsible reporting.", "Voeg een /.well-known/security.txt disclosure-bestand toe voor responsible reporting."),
+            page_url=security_txt_url,
+        )
+
+    if gebruikt_https:
+        if hsts:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "header-hsts",
+                "pass",
+                "high",
+                "security",
+                tekst_voor_taal("HSTS header present.", "HSTS-header aanwezig."),
+            )
+        else:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "header-hsts",
+                "fail",
+                "high",
+                "security",
+                tekst_voor_taal("HSTS header is missing.", "HSTS-header ontbreekt."),
+                recommendation=tekst_voor_taal("Add Strict-Transport-Security with a safe max-age and includeSubDomains.", "Voeg Strict-Transport-Security toe met veilige max-age en includeSubDomains."),
+            )
+
+    if csp:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-csp",
+            "pass",
+            "medium",
+            "security",
+            tekst_voor_taal("Content-Security-Policy header present.", "Content-Security-Policy-header aanwezig."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-csp",
+            "warn",
+            "medium",
+            "security",
+            tekst_voor_taal("Content-Security-Policy header missing.", "Content-Security-Policy-header ontbreekt."),
+            recommendation=tekst_voor_taal("Add a CSP to reduce script injection risk.", "Voeg een CSP toe om script-injectierisico te verkleinen."),
+        )
+
+    if xfo or "frame-ancestors" in csp.lower():
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-framing",
+            "pass",
+            "medium",
+            "security",
+            tekst_voor_taal("Framing protections detected.", "Framing-bescherming gedetecteerd."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-framing",
+            "warn",
+            "medium",
+            "security",
+            tekst_voor_taal("Framing protections are missing.", "Framing-bescherming ontbreekt."),
+            recommendation=tekst_voor_taal("Set X-Frame-Options or frame-ancestors in CSP.", "Stel X-Frame-Options of frame-ancestors in CSP in."),
+        )
+
+    if xcto == "nosniff":
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-nosniff",
+            "pass",
+            "medium",
+            "security",
+            tekst_voor_taal("X-Content-Type-Options is set to nosniff.", "X-Content-Type-Options staat op nosniff."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-nosniff",
+            "warn",
+            "medium",
+            "security",
+            tekst_voor_taal("X-Content-Type-Options nosniff is missing.", "X-Content-Type-Options nosniff ontbreekt."),
+            recommendation=tekst_voor_taal("Set X-Content-Type-Options: nosniff.", "Stel X-Content-Type-Options: nosniff in."),
+        )
+
+    if referrer:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-referrer-policy",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("Referrer-Policy header present.", "Referrer-Policy-header aanwezig."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-referrer-policy",
+            "warn",
+            "low",
+            "security",
+            tekst_voor_taal("Referrer-Policy header missing.", "Referrer-Policy-header ontbreekt."),
+            recommendation=tekst_voor_taal("Set Referrer-Policy to a privacy-preserving value.", "Stel Referrer-Policy in op een privacyvriendelijke waarde."),
+        )
+
+    if permissions:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-permissions-policy",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("Permissions-Policy header present.", "Permissions-Policy-header aanwezig."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-permissions-policy",
+            "warn",
+            "low",
+            "security",
+            tekst_voor_taal("Permissions-Policy header missing.", "Permissions-Policy-header ontbreekt."),
+            recommendation=tekst_voor_taal("Set a restrictive Permissions-Policy for unused browser features.", "Stel een restrictieve Permissions-Policy in voor ongebruikte browserfeatures."),
+        )
+
+    if server_header or powered_by:
+        detail = ", ".join([item for item in [server_header, powered_by] if item])
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-server-disclosure",
+            "warn",
+            "low",
+            "security",
+            tekst_voor_taal("Server technology headers disclose stack details.", "Servertechnologie-headers geven stackdetails prijs."),
+            detail=detail,
+            recommendation=tekst_voor_taal("Minimize or mask Server/X-Powered-By headers.", "Minimaliseer of maskeer Server/X-Powered-By-headers."),
+        )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "header-server-disclosure",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("No server disclosure headers detected.", "Geen server-disclosure-headers gedetecteerd."),
+        )
+
+    cookie_headers = [str(item or "").strip() for item in root_set_cookie if str(item or "").strip()]
+    if cookie_headers:
+        missing_secure = 0
+        missing_httponly = 0
+        missing_samesite = 0
+
+        for cookie in cookie_headers:
+            cookie_lower = cookie.lower()
+            if gebruikt_https and "secure" not in cookie_lower:
+                missing_secure += 1
+            if "httponly" not in cookie_lower:
+                missing_httponly += 1
+            if "samesite=" not in cookie_lower:
+                missing_samesite += 1
+
+        if gebruikt_https and missing_secure > 0:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "cookies-secure",
+                "fail",
+                "high",
+                "security",
+                tekst_voor_taal("Some cookies are missing the Secure flag.", "Sommige cookies missen de Secure-flag."),
+                detail=tekst_voor_taal(f"{missing_secure} cookie(s) without Secure.", f"{missing_secure} cookie(s) zonder Secure."),
+                recommendation=tekst_voor_taal("Set Secure on all cookies served over HTTPS.", "Zet Secure op alle cookies die via HTTPS worden geserveerd."),
+            )
+
+        if missing_httponly > 0:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "cookies-httponly",
+                "warn",
+                "medium",
+                "security",
+                tekst_voor_taal("Some cookies are missing the HttpOnly flag.", "Sommige cookies missen de HttpOnly-flag."),
+                detail=tekst_voor_taal(f"{missing_httponly} cookie(s) without HttpOnly.", f"{missing_httponly} cookie(s) zonder HttpOnly."),
+                recommendation=tekst_voor_taal("Set HttpOnly on cookies that do not need JavaScript access.", "Zet HttpOnly op cookies die geen JavaScript-toegang nodig hebben."),
+            )
+
+        if missing_samesite > 0:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "cookies-samesite",
+                "warn",
+                "low",
+                "security",
+                tekst_voor_taal("Some cookies are missing the SameSite flag.", "Sommige cookies missen de SameSite-flag."),
+                detail=tekst_voor_taal(f"{missing_samesite} cookie(s) without SameSite.", f"{missing_samesite} cookie(s) zonder SameSite."),
+                recommendation=tekst_voor_taal("Use SameSite=Lax or SameSite=Strict where possible.", "Gebruik waar mogelijk SameSite=Lax of SameSite=Strict."),
+            )
+
+        if (not gebruikt_https or missing_secure == 0) and missing_httponly == 0 and missing_samesite == 0:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "cookies-flags",
+                "pass",
+                "low",
+                "security",
+                tekst_voor_taal("Cookie security flags look good for scanned cookies.", "Cookie-securityflags zien er goed uit voor gescande cookies."),
+            )
+    else:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "cookies-flags",
+            "pass",
+            "low",
+            "security",
+            tekst_voor_taal("No Set-Cookie headers detected on the root response.", "Geen Set-Cookie-headers gedetecteerd op de root-respons."),
+        )
+
+    tls_info = controleer_tls_certificaat(doel_url)
+    if bool(tls_info.get("checked", False)) and gebruikt_https:
+        tls_error = str(tls_info.get("error", "") or "").strip()
+        days_left = tls_info.get("days_left")
+        tls_version = str(tls_info.get("tls_version", "") or "")
+        tls_version_lower = tls_version.lower()
+        cert_issuer = str(tls_info.get("issuer", "") or "").strip()
+        cert_subject = str(tls_info.get("subject", "") or "").strip()
+
+        if tls_version_lower in {"tlsv1", "tlsv1.0", "tlsv1.1"}:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "tls-version",
+                "fail",
+                "high",
+                "security",
+                tekst_voor_taal("Outdated TLS protocol version detected.", "Verouderde TLS-protocolversie gedetecteerd."),
+                detail=tekst_voor_taal(f"Negotiated version: {tls_version}", f"Onderhandelde versie: {tls_version}"),
+                recommendation=tekst_voor_taal("Enforce TLS 1.2+ (preferably TLS 1.3) on the public endpoint.", "Forceer TLS 1.2+ (liefst TLS 1.3) op het publieke endpoint."),
+            )
+        elif tls_version_lower == "tlsv1.2":
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "tls-version",
+                "warn",
+                "low",
+                "security",
+                tekst_voor_taal("TLS 1.2 is active; TLS 1.3 is recommended when possible.", "TLS 1.2 is actief; TLS 1.3 wordt aanbevolen waar mogelijk."),
+                detail=tekst_voor_taal(f"Negotiated version: {tls_version}", f"Onderhandelde versie: {tls_version}"),
+            )
+        elif tls_version:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "tls-version",
+                "pass",
+                "low",
+                "security",
+                tekst_voor_taal("Modern TLS protocol version detected.", "Moderne TLS-protocolversie gedetecteerd."),
+                detail=tekst_voor_taal(f"Negotiated version: {tls_version}", f"Onderhandelde versie: {tls_version}"),
+            )
+
+        if tls_error:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                "tls-certificate",
+                "warn",
+                "medium",
+                "security",
+                tekst_voor_taal("TLS certificate check failed.", "TLS-certificaatcheck mislukt."),
+                detail=tekst_voor_taal(
+                    f"{tls_error} | Subject: {cert_subject or '-'} | Issuer: {cert_issuer or '-'}",
+                    f"{tls_error} | Subject: {cert_subject or '-'} | Issuer: {cert_issuer or '-'}"
+                ),
+                recommendation=tekst_voor_taal("Verify certificate chain, host binding, and TLS configuration.", "Controleer certificaatketen, hostbinding en TLS-configuratie."),
+            )
+        elif isinstance(days_left, int):
+            if days_left < 14:
+                voeg_audit_check_toe(
+                    checks,
+                    findings,
+                    "tls-certificate",
+                    "fail",
+                    "high",
+                    "security",
+                    tekst_voor_taal("TLS certificate expires very soon.", "TLS-certificaat verloopt zeer binnenkort."),
+                    detail=tekst_voor_taal(
+                        f"Certificate validity remaining: {days_left} day(s). Subject: {cert_subject or '-'} | Issuer: {cert_issuer or '-'}.",
+                        f"Resterende certificaatgeldigheid: {days_left} dag(en). Subject: {cert_subject or '-'} | Issuer: {cert_issuer or '-'} ."
+                    ),
+                    recommendation=tekst_voor_taal("Renew the certificate immediately.", "Vernieuw het certificaat direct."),
+                )
+            elif days_left < 30:
+                voeg_audit_check_toe(
+                    checks,
+                    findings,
+                    "tls-certificate",
+                    "warn",
+                    "medium",
+                    "security",
+                    tekst_voor_taal("TLS certificate should be renewed soon.", "TLS-certificaat moet binnenkort vernieuwd worden."),
+                    detail=tekst_voor_taal(
+                        f"Certificate validity remaining: {days_left} day(s). Subject: {cert_subject or '-'} | Issuer: {cert_issuer or '-'}.",
+                        f"Resterende certificaatgeldigheid: {days_left} dag(en). Subject: {cert_subject or '-'} | Issuer: {cert_issuer or '-'} ."
+                    ),
+                )
+            else:
+                detail = tekst_voor_taal(
+                    f"TLS version: {tls_version or 'unknown'}, certificate validity remaining: {days_left} day(s), subject: {cert_subject or '-'}, issuer: {cert_issuer or '-'}.",
+                    f"TLS-versie: {tls_version or 'onbekend'}, resterende certificaatgeldigheid: {days_left} dag(en), subject: {cert_subject or '-'}, issuer: {cert_issuer or '-'} ."
+                )
+                voeg_audit_check_toe(
+                    checks,
+                    findings,
+                    "tls-certificate",
+                    "pass",
+                    "low",
+                    "security",
+                    tekst_voor_taal("TLS certificate validity looks healthy.", "TLS-certificaatgeldigheid ziet er gezond uit."),
+                    detail=detail,
+                )
+
+    update_website_audit_state(
+        stage=tekst_voor_taal("Checking sensitive endpoints", "Controleren gevoelige endpoints"),
+        progress_percent=88,
+    )
+
+    for item in WEBSITE_AUDIT_SENSITIVE_PATHS[:sensitive_path_limit]:
+        path = str(item.get("path", "") or "").strip()
+        if not path:
+            continue
+
+        check_url = urljoin(doel_origin + "/", path.lstrip("/"))
+        result = probeer_audit_link(check_url, timeout=7)
+        status = int(result.get("status", 0) or 0)
+
+        if status == 200:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                f"sensitive-path-{path}",
+                "fail",
+                str(item.get("severity", "high") or "high"),
+                "security",
+                tekst_voor_taal(str(item.get("title_en", "Sensitive endpoint exposed") or "Sensitive endpoint exposed"), str(item.get("title_nl", "Gevoelig endpoint blootgesteld") or "Gevoelig endpoint blootgesteld")),
+                detail=tekst_voor_taal(
+                    f"Endpoint responded with HTTP 200: {check_url}",
+                    f"Endpoint reageerde met HTTP 200: {check_url}"
+                ),
+                recommendation=tekst_voor_taal(
+                    str(item.get("recommendation_en", "Restrict this endpoint in production.") or "Restrict this endpoint in production."),
+                    str(item.get("recommendation_nl", "Beperk dit endpoint in productie.") or "Beperk dit endpoint in productie.")
+                ),
+                page_url=check_url,
+            )
+        elif status in {401, 403}:
+            voeg_audit_check_toe(
+                checks,
+                findings,
+                f"sensitive-path-{path}",
+                "pass",
+                "low",
+                "security",
+                tekst_voor_taal("Sensitive endpoint appears access-protected.", "Gevoelig endpoint lijkt afgeschermd."),
+                detail=tekst_voor_taal(f"{check_url} returned {status}.", f"{check_url} gaf {status} terug."),
+                page_url=check_url,
+            )
+
+    gemiddelde_pagina_ms = 0
+    if pagina_resultaten:
+        totale_ms = sum(int(item.get("load_ms", 0) or 0) for item in pagina_resultaten)
+        gemiddelde_pagina_ms = int(round(totale_ms / len(pagina_resultaten)))
+
+    if gemiddelde_pagina_ms > 3200:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "performance-average",
+            "warn",
+            "medium",
+            "performance",
+            tekst_voor_taal("Average page load is high in the scanned sample.", "Gemiddelde paginalaadtijd is hoog in de gescande steekproef."),
+            detail=tekst_voor_taal(f"Average page load: {gemiddelde_pagina_ms} ms.", f"Gemiddelde paginalaadtijd: {gemiddelde_pagina_ms} ms."),
+            recommendation=tekst_voor_taal("Review backend response times, caching and bundle size.", "Controleer backend-responstijden, caching en bundlegrootte."),
+        )
+    elif gemiddelde_pagina_ms > 0:
+        voeg_audit_check_toe(
+            checks,
+            findings,
+            "performance-average",
+            "pass",
+            "low",
+            "performance",
+            tekst_voor_taal("Average page load is within baseline threshold.", "Gemiddelde paginalaadtijd valt binnen baseline-drempel."),
+            detail=tekst_voor_taal(f"Average page load: {gemiddelde_pagina_ms} ms.", f"Gemiddelde paginalaadtijd: {gemiddelde_pagina_ms} ms."),
+        )
+
+    findings.sort(
+        key=lambda item: (
+            0 if str(item.get("status", "")).lower() == "fail" else 1,
+            WEBSITE_AUDIT_SEVERITY_RANK.get(str(item.get("severity", "low")).lower(), 99),
+            str(item.get("title", "")),
+        )
+    )
+
+    checks_total = len(checks)
+    checks_passed = sum(1 for item in checks if str(item.get("status", "")).lower() == "pass")
+    checks_warn = sum(1 for item in checks if str(item.get("status", "")).lower() == "warn")
+    checks_failed = sum(1 for item in checks if str(item.get("status", "")).lower() == "fail")
+
+    severity_totals = {
+        "critical": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+    }
+    for finding in findings:
+        severity = str(finding.get("severity", "low") or "low").lower()
+        if severity in severity_totals:
+            severity_totals[severity] += 1
+
+    score = bereken_website_audit_score(findings)
+    grade = grade_voor_website_audit_score(score)
+    exposure = exposure_niveau_voor_website_audit(score, severity_totals)
+    remediation_plan = maak_website_audit_actieplan(findings, max_items=10)
+    top_actions = [item.get("recommendation", "") for item in remediation_plan[:3] if str(item.get("recommendation", "")).strip()]
+
+    result_message = tekst_voor_taal(
+        f"Website audit completed for {doel_url}. Score {score}/100 ({grade}, exposure {exposure}). Fail: {checks_failed}, warn: {checks_warn}, pass: {checks_passed}.",
+        f"Website-audit afgerond voor {doel_url}. Score {score}/100 ({grade}, risiconiveau {exposure}). Fail: {checks_failed}, waarschuwingen: {checks_warn}, pass: {checks_passed}."
+    )
+
+    report = {
+        "scan_id": str(scan_id),
+        "created_at": time.time(),
+        "created_at_label": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        "target_url": doel_url,
+        "target_host": doel_host,
+        "profile": profiel,
+        "profile_label": website_audit_profiel_label(profiel),
+        "summary": {
+            "score": score,
+            "grade": grade,
+            "exposure_level": exposure,
+            "checks_total": checks_total,
+            "checks_passed": checks_passed,
+            "checks_warn": checks_warn,
+            "checks_failed": checks_failed,
+            "findings_total": len(findings),
+            "pages_scanned": len(pagina_resultaten),
+            "links_checked": links_checked_totaal,
+            "forms_seen": formulieren_totaal,
+            "buttons_seen": knoppen_totaal,
+            "forms_checked": forms_checked_totaal,
+            "buttons_checked": buttons_checked_totaal,
+            "form_probe_failures": form_probe_failures,
+            "button_probe_failures": button_probe_failures,
+            "severity_totals": severity_totals,
+            "average_page_load_ms": gemiddelde_pagina_ms,
+            "next_actions": top_actions,
+        },
+        "checks": checks,
+        "findings": findings,
+        "remediation_plan": remediation_plan,
+        "pages": pagina_resultaten,
+        "links": links_resultaten,
+        "limits": {
+            "max_pages": max_pages,
+            "max_links_per_page": max_links_per_page,
+            "max_total_links": max_total_links,
+            "max_form_checks": max_form_checks,
+            "max_button_checks": max_button_checks,
+            "sensitive_path_limit": sensitive_path_limit,
+        },
+        "notes": [
+            tekst_voor_taal(
+                "This is a passive baseline scan and does not run exploit attempts.",
+                "Dit is een passieve baseline-scan en voert geen exploitpogingen uit."
+            ),
+            tekst_voor_taal(
+                "For full button-flow validation, combine with browser E2E tests.",
+                "Combineer dit met browser-E2E-tests voor volledige validatie van knopflows."
+            ),
+        ],
+        "result_message": result_message,
+    }
+
+    json_pad, md_pad, pdf_pad = schrijf_website_audit_rapport(report)
+    report["report_files"] = {
+        "json": str(json_pad),
+        "markdown": str(md_pad),
+    }
+    if pdf_pad:
+        report["report_files"]["pdf"] = str(pdf_pad)
+
+    json_pad.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_pad.write_text(maak_website_audit_markdown_rapport(report), encoding="utf-8")
+    return report
+
+
+def voer_website_audit_worker_uit(scan_id, target_url, profiel, trigger_source="manual"):
+    try:
+        website_audit_log_toevoegen(
+            tekst_voor_taal(
+                f"Website audit worker started for {target_url} ({profiel}, source: {trigger_source}).",
+                f"Website-auditworker gestart voor {target_url} ({profiel}, bron: {trigger_source})."
+            )
+        )
+        report = voer_website_audit_scan_uit(scan_id, target_url, profiel)
+        summary = report.get("summary", {}) if isinstance(report.get("summary", {}), dict) else {}
+        severity_totals = summary.get("severity_totals", {}) if isinstance(summary.get("severity_totals", {}), dict) else {}
+        findings_top = report.get("findings", [])[:8] if isinstance(report.get("findings", []), list) else []
+        remediation_plan = report.get("remediation_plan", []) if isinstance(report.get("remediation_plan", []), list) else []
+        remediation_top = [dict(item) for item in remediation_plan[:3] if isinstance(item, dict)]
+
+        with WEBSITE_AUDIT_LOCK:
+            WEBSITE_AUDIT_STATE.update({
+                "running": False,
+                "state": "completed",
+                "finished_at": time.time(),
+                "stage": tekst_voor_taal("Website audit complete", "Website-audit afgerond"),
+                "progress_percent": 100,
+                "score": int(summary.get("score", 0) or 0),
+                "grade": str(summary.get("grade", "") or ""),
+                "exposure_level": str(summary.get("exposure_level", "") or ""),
+                "trigger_source": str(trigger_source or "manual"),
+                "checks_total": int(summary.get("checks_total", 0) or 0),
+                "checks_passed": int(summary.get("checks_passed", 0) or 0),
+                "checks_warn": int(summary.get("checks_warn", 0) or 0),
+                "checks_failed": int(summary.get("checks_failed", 0) or 0),
+                "pages_scanned": int(summary.get("pages_scanned", 0) or 0),
+                "links_checked": int(summary.get("links_checked", 0) or 0),
+                "forms_seen": int(summary.get("forms_seen", 0) or 0),
+                "buttons_seen": int(summary.get("buttons_seen", 0) or 0),
+                "forms_checked": int(summary.get("forms_checked", 0) or 0),
+                "buttons_checked": int(summary.get("buttons_checked", 0) or 0),
+                "form_probe_failures": int(summary.get("form_probe_failures", 0) or 0),
+                "button_probe_failures": int(summary.get("button_probe_failures", 0) or 0),
+                "findings_total": int(summary.get("findings_total", 0) or 0),
+                "findings_top": [dict(item) for item in findings_top if isinstance(item, dict)],
+                "remediation_top": remediation_top,
+                "severity_totals": {
+                    "critical": int(severity_totals.get("critical", 0) or 0),
+                    "high": int(severity_totals.get("high", 0) or 0),
+                    "medium": int(severity_totals.get("medium", 0) or 0),
+                    "low": int(severity_totals.get("low", 0) or 0),
+                },
+                "last_result": str(report.get("result_message", "") or ""),
+                "last_error": "",
+                "last_report_json": str(report.get("report_files", {}).get("json", "") if isinstance(report.get("report_files", {}), dict) else ""),
+                "last_report_markdown": str(report.get("report_files", {}).get("markdown", "") if isinstance(report.get("report_files", {}), dict) else ""),
+                "last_report_pdf": str(report.get("report_files", {}).get("pdf", "") if isinstance(report.get("report_files", {}), dict) else ""),
+                "updated_at": time.time(),
+            })
+
+        evalueer_website_audit_alerts(report, trigger_source=trigger_source)
+        website_audit_log_toevoegen(str(report.get("result_message", "") or ""))
+        registreer_notificatie(str(report.get("result_message", "") or ""))
+    except Exception as e:
+        foutmelding = tekst_voor_taal(
+            f"Website audit failed: {e}",
+            f"Website-audit mislukt: {e}"
+        )
+        with WEBSITE_AUDIT_LOCK:
+            WEBSITE_AUDIT_STATE.update({
+                "running": False,
+                "state": "error",
+                "finished_at": time.time(),
+                "updated_at": time.time(),
+                "progress_percent": max(WEBSITE_AUDIT_STATE.get("progress_percent", 0) or 0, 5),
+                "stage": tekst_voor_taal("Website audit failed", "Website-audit mislukt"),
+                "trigger_source": str(trigger_source or "manual"),
+                "last_result": foutmelding,
+                "last_error": str(e),
+            })
+            website_audit_log_toevoegen(foutmelding)
+
+        registreer_notificatie(foutmelding)
+
+
+def start_website_audit(target_url, profiel="standard", trigger_source="manual"):
+    profiel = normaliseer_website_audit_profiel(profiel)
+    trigger_source = str(trigger_source or "manual").strip().lower() or "manual"
+    doel_url = normaliseer_url_voor_browser_taak(target_url)
+    if not doel_url:
+        return False, tekst_voor_taal(
+            "Provide a valid website URL, for example https://example.com.",
+            "Geef een geldige website-URL op, bijvoorbeeld https://example.com."
+        )
+
+    with WEBSITE_AUDIT_LOCK:
+        if WEBSITE_AUDIT_STATE.get("running"):
+            huidig_doel = str(WEBSITE_AUDIT_STATE.get("target_url", "") or "").strip()
+            return False, tekst_voor_taal(
+                f"A website audit is already running for {huidig_doel or 'the previous target'}.",
+                f"Er draait al een website-audit voor {huidig_doel or 'het vorige doel'}."
+            )
+
+        scan_id = datetime.datetime.now().strftime("audit-%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        WEBSITE_AUDIT_STATE.update(standaard_website_audit_data())
+        WEBSITE_AUDIT_STATE.update({
+            "running": True,
+            "state": "running",
+            "started_at": time.time(),
+            "updated_at": time.time(),
+            "stage": tekst_voor_taal("Preparing website audit", "Website-audit voorbereiden"),
+            "progress_percent": 3,
+            "target_url": doel_url,
+            "target_host": str(urlparse(doel_url).netloc or ""),
+            "profile": profiel,
+            "trigger_source": trigger_source,
+            "scan_id": scan_id,
+        })
+        website_audit_log_toevoegen(
+            tekst_voor_taal(
+                f"Website audit queued for {doel_url} ({profiel}, source: {trigger_source}).",
+                f"Website-audit gestart voor {doel_url} ({profiel}, bron: {trigger_source})."
+            )
+        )
+
+    threading.Thread(target=voer_website_audit_worker_uit, args=(scan_id, doel_url, profiel, trigger_source), daemon=True).start()
+    return True, tekst_voor_taal(
+        f"Website audit started for {doel_url} with profile {website_audit_profiel_label(profiel)}.",
+        f"Website-audit gestart voor {doel_url} met profiel {website_audit_profiel_label(profiel)}."
+    )
+
+
 def parseer_security_scan_tijdstip(tijdstip):
     # Alle scheduler-paden gebruiken dezelfde tijdnormalisatie.
     genormaliseerd = normaliseer_dagelijkse_security_scan_tijd(tijdstip)
@@ -2129,6 +4979,287 @@ def start_dagelijkse_security_scan_monitor():
         return
     threading.Thread(target=dagelijkse_security_scan_monitor_worker, daemon=True).start()
     DAILY_SECURITY_SCAN_MONITOR_GESTART = True
+
+
+def bereken_volgende_website_audit_timestamp(frequentie, tijdstip, nu_timestamp=None):
+    if nu_timestamp is None:
+        nu_dt = datetime.datetime.now()
+    else:
+        nu_dt = datetime.datetime.fromtimestamp(float(nu_timestamp))
+
+    frequentie = normaliseer_website_audit_schedule_frequency(frequentie)
+    uur, minuut, tijdstip_genormaliseerd = parseer_security_scan_tijdstip(tijdstip)
+    geplande_dt = nu_dt.replace(hour=uur, minute=minuut, second=0, microsecond=0)
+
+    if frequentie == "daily":
+        if geplande_dt <= nu_dt:
+            geplande_dt += datetime.timedelta(days=1)
+    else:
+        while geplande_dt <= nu_dt:
+            geplande_dt += datetime.timedelta(days=7)
+
+    return geplande_dt.timestamp(), tijdstip_genormaliseerd
+
+
+def maak_website_audit_scheduler_slot(nu_timestamp, frequentie):
+    nu_local = time.localtime(float(nu_timestamp))
+    if normaliseer_website_audit_schedule_frequency(frequentie) == "weekly":
+        iso = datetime.date(nu_local.tm_year, nu_local.tm_mon, nu_local.tm_mday).isocalendar()
+        return f"{iso[0]:04d}-W{iso[1]:02d}"
+    return f"{nu_local.tm_year:04d}-{nu_local.tm_mon:02d}-{nu_local.tm_mday:02d}"
+
+
+def moet_geplande_website_audit_starten(nu_timestamp, frequentie, tijdstip, laatste_slot=""):
+    uur, minuut, _ = parseer_security_scan_tijdstip(tijdstip)
+    nu_local = time.localtime(float(nu_timestamp))
+    slot = maak_website_audit_scheduler_slot(nu_timestamp, frequentie)
+
+    if str(laatste_slot or "").strip() == slot:
+        return False, slot
+
+    nu_seconden = (nu_local.tm_hour * 3600) + (nu_local.tm_min * 60) + nu_local.tm_sec
+    gepland_seconden = (uur * 3600) + (minuut * 60)
+    return nu_seconden >= gepland_seconden, slot
+
+
+def huidige_website_audit_scheduler_payload():
+    enabled = parseer_bool_waarde(
+        instellingen.get("website_audit_schedule_enabled", DEFAULT_SETTINGS["website_audit_schedule_enabled"]),
+        standaard=False,
+    )
+    frequentie = normaliseer_website_audit_schedule_frequency(
+        instellingen.get("website_audit_schedule_frequency", DEFAULT_SETTINGS["website_audit_schedule_frequency"])
+    )
+    tijdstip = normaliseer_dagelijkse_security_scan_tijd(
+        instellingen.get("website_audit_schedule_time", DEFAULT_SETTINGS["website_audit_schedule_time"])
+    )
+    doel_url = normaliseer_url_voor_browser_taak(
+        instellingen.get("website_audit_schedule_target_url", DEFAULT_SETTINGS["website_audit_schedule_target_url"])
+    )
+    profiel = normaliseer_website_audit_profiel(
+        instellingen.get("website_audit_schedule_profile", DEFAULT_SETTINGS["website_audit_schedule_profile"])
+    )
+
+    volgende_run_at = 0.0
+    if enabled and doel_url:
+        volgende_run_at, tijdstip = bereken_volgende_website_audit_timestamp(frequentie, tijdstip)
+
+    with WEBSITE_AUDIT_SCHEDULE_LOCK:
+        payload = dict(WEBSITE_AUDIT_SCHEDULE_STATE)
+
+    payload.update({
+        "enabled": bool(enabled),
+        "frequency": frequentie,
+        "scheduled_time": tijdstip,
+        "target_url": doel_url,
+        "profile": profiel,
+        "profile_label": website_audit_profiel_label(profiel),
+        "next_run_at": float(volgende_run_at or 0.0),
+        "next_run_label": time.strftime("%Y-%m-%d %H:%M", time.localtime(volgende_run_at)) if volgende_run_at else "",
+        "monitor_running": bool(WEBSITE_AUDIT_SCHEDULE_MONITOR_GESTART),
+        "alert_webhook_configured": bool(normaliseer_website_audit_alert_webhook(instellingen.get("website_audit_alert_webhook", ""))),
+        "alert_score_drop": int(begrens_int_waarde(instellingen.get("website_audit_alert_score_drop", 12), 12, 0, 60)),
+        "alert_on_critical": parseer_bool_waarde(instellingen.get("website_audit_alert_on_critical", True), standaard=True),
+    })
+    return payload
+
+
+def website_audit_schedule_status_bericht():
+    payload = huidige_website_audit_scheduler_payload()
+    if not payload.get("enabled"):
+        return tekst_voor_taal(
+            "Website audit scheduler is off.",
+            "Website-auditscheduler staat uit."
+        )
+
+    target = str(payload.get("target_url", "") or "").strip()
+    if not target:
+        return tekst_voor_taal(
+            "Website audit scheduler is on, but no target URL is configured.",
+            "Website-auditscheduler staat aan, maar er is nog geen doel-URL ingesteld."
+        )
+
+    return tekst_voor_taal(
+        f"Website audit scheduler is active: {payload.get('frequency', 'daily')} at {payload.get('scheduled_time', '04:30')} for {target}. Next run: {payload.get('next_run_label', '-')}",
+        f"Website-auditscheduler is actief: {payload.get('frequency', 'daily')} om {payload.get('scheduled_time', '04:30')} voor {target}. Volgende run: {payload.get('next_run_label', '-')}"
+    )
+
+
+def verstuur_website_audit_alert_webhook(alert_payload, webhook_url):
+    webhook_url = normaliseer_website_audit_alert_webhook(webhook_url)
+    if not webhook_url:
+        return False, tekst_voor_taal("No alert webhook configured.", "Geen alert-webhook geconfigureerd.")
+
+    try:
+        body = json.dumps(alert_payload, ensure_ascii=False).encode("utf-8")
+        request_obj = urllib.request.Request(
+            webhook_url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "EchoWebsiteAudit/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request_obj, timeout=8) as response:
+            status = int(response.getcode() or 0)
+        if 200 <= status < 300:
+            return True, tekst_voor_taal("Alert webhook delivered.", "Alert-webhook verstuurd.")
+        return False, tekst_voor_taal(f"Alert webhook responded with {status}.", f"Alert-webhook gaf {status} terug.")
+    except Exception as e:
+        return False, tekst_voor_taal(f"Alert webhook failed: {e}", f"Alert-webhook mislukt: {e}")
+
+
+def evalueer_website_audit_alerts(report, trigger_source="manual"):
+    report = report if isinstance(report, dict) else {}
+    summary = report.get("summary", {}) if isinstance(report.get("summary", {}), dict) else {}
+    severity_totals = summary.get("severity_totals", {}) if isinstance(summary.get("severity_totals", {}), dict) else {}
+
+    score = int(summary.get("score", 0) or 0)
+    critical = int(severity_totals.get("critical", 0) or 0)
+    scan_id = str(report.get("scan_id", "") or "").strip()
+
+    threshold_drop = int(begrens_int_waarde(instellingen.get("website_audit_alert_score_drop", 12), 12, 0, 60))
+    alert_on_critical = parseer_bool_waarde(instellingen.get("website_audit_alert_on_critical", True), standaard=True)
+
+    with WEBSITE_AUDIT_SCHEDULE_LOCK:
+        vorige_score = int(WEBSITE_AUDIT_SCHEDULE_STATE.get("last_completed_score", 0) or 0)
+
+    score_drop = max(0, vorige_score - score) if vorige_score > 0 else 0
+    alert_reasons = []
+    if alert_on_critical and critical > 0:
+        alert_reasons.append(tekst_voor_taal(f"{critical} critical finding(s)", f"{critical} kritieke bevinding(en)"))
+    if threshold_drop > 0 and score_drop >= threshold_drop:
+        alert_reasons.append(tekst_voor_taal(f"score dropped by {score_drop}", f"score daalde met {score_drop}"))
+
+    webhook = normaliseer_website_audit_alert_webhook(instellingen.get("website_audit_alert_webhook", ""))
+    alert_sent = False
+    alert_result = tekst_voor_taal("No alert triggered.", "Geen alert geactiveerd.")
+
+    if alert_reasons:
+        alert_payload = {
+            "kind": "website_audit_alert",
+            "scan_id": scan_id,
+            "trigger_source": str(trigger_source or "manual"),
+            "target_url": str(report.get("target_url", "") or ""),
+            "profile": str(report.get("profile", "standard") or "standard"),
+            "score": score,
+            "grade": str(summary.get("grade", "") or ""),
+            "exposure_level": str(summary.get("exposure_level", "") or ""),
+            "critical_findings": critical,
+            "checks_failed": int(summary.get("checks_failed", 0) or 0),
+            "checks_warn": int(summary.get("checks_warn", 0) or 0),
+            "reasons": alert_reasons,
+            "created_at": time.time(),
+        }
+        if webhook:
+            alert_sent, alert_result = verstuur_website_audit_alert_webhook(alert_payload, webhook)
+        else:
+            alert_sent = True
+            alert_result = tekst_voor_taal("Alert triggered (local notification only).", "Alert geactiveerd (alleen lokale notificatie).")
+
+        notificatie = tekst_voor_taal(
+            f"Website audit alert for {report.get('target_url', '')}: {'; '.join(alert_reasons)}.",
+            f"Website-auditalert voor {report.get('target_url', '')}: {'; '.join(alert_reasons)}."
+        )
+        website_audit_log_toevoegen(notificatie)
+        registreer_notificatie(notificatie)
+
+    with WEBSITE_AUDIT_SCHEDULE_LOCK:
+        WEBSITE_AUDIT_SCHEDULE_STATE.update({
+            "last_completed_scan_id": scan_id,
+            "last_completed_score": score,
+            "updated_at": time.time(),
+        })
+        if alert_reasons:
+            WEBSITE_AUDIT_SCHEDULE_STATE["last_alert_at"] = time.time()
+            WEBSITE_AUDIT_SCHEDULE_STATE["last_alert_result"] = alert_result
+
+    return {
+        "triggered": bool(alert_reasons),
+        "sent": bool(alert_sent),
+        "result": alert_result,
+        "score_drop": score_drop,
+        "critical": critical,
+    }
+
+
+def verwerk_geplande_website_audit(nu_timestamp=None):
+    enabled = parseer_bool_waarde(
+        instellingen.get("website_audit_schedule_enabled", DEFAULT_SETTINGS["website_audit_schedule_enabled"]),
+        standaard=False,
+    )
+    if not enabled:
+        return False
+
+    frequentie = normaliseer_website_audit_schedule_frequency(
+        instellingen.get("website_audit_schedule_frequency", DEFAULT_SETTINGS["website_audit_schedule_frequency"])
+    )
+    tijdstip = normaliseer_dagelijkse_security_scan_tijd(
+        instellingen.get("website_audit_schedule_time", DEFAULT_SETTINGS["website_audit_schedule_time"])
+    )
+    doel_url = normaliseer_url_voor_browser_taak(
+        instellingen.get("website_audit_schedule_target_url", DEFAULT_SETTINGS["website_audit_schedule_target_url"])
+    )
+    profiel = normaliseer_website_audit_profiel(
+        instellingen.get("website_audit_schedule_profile", DEFAULT_SETTINGS["website_audit_schedule_profile"])
+    )
+
+    if not doel_url:
+        return False
+
+    nu = float(time.time() if nu_timestamp is None else nu_timestamp)
+    with WEBSITE_AUDIT_SCHEDULE_LOCK:
+        laatste_slot = str(WEBSITE_AUDIT_SCHEDULE_STATE.get("last_run_slot", "") or "")
+
+    moet_starten, slot = moet_geplande_website_audit_starten(nu, frequentie, tijdstip, laatste_slot)
+    if not moet_starten:
+        return False
+
+    gestart, bericht = start_website_audit(doel_url, profiel=profiel, trigger_source="scheduler")
+    bericht_schoon = opschonen_korte_tekst(bericht, max_lengte=280) or str(bericht or "")
+
+    with WEBSITE_AUDIT_SCHEDULE_LOCK:
+        WEBSITE_AUDIT_SCHEDULE_STATE.update({
+            "last_run_slot": slot,
+            "last_triggered_at": nu,
+            "last_trigger_success": bool(gestart),
+            "last_trigger_result": bericht_schoon,
+            "updated_at": time.time(),
+        })
+
+    if gestart:
+        website_audit_log_toevoegen(
+            tekst_voor_taal(
+                "Scheduled website audit started.",
+                "Geplande website-audit gestart."
+            )
+        )
+    else:
+        website_audit_log_toevoegen(
+            tekst_voor_taal(
+                f"Scheduled website audit skipped: {bericht_schoon}",
+                f"Geplande website-audit overgeslagen: {bericht_schoon}"
+            )
+        )
+    return bool(gestart)
+
+
+def website_audit_schedule_monitor_worker():
+    while True:
+        try:
+            verwerk_geplande_website_audit()
+        except Exception:
+            pass
+        time.sleep(20.0)
+
+
+def start_website_audit_schedule_monitor():
+    global WEBSITE_AUDIT_SCHEDULE_MONITOR_GESTART
+    if WEBSITE_AUDIT_SCHEDULE_MONITOR_GESTART:
+        return
+    threading.Thread(target=website_audit_schedule_monitor_worker, daemon=True).start()
+    WEBSITE_AUDIT_SCHEDULE_MONITOR_GESTART = True
 
 
 # Opruimflow met bevestiging: verwijdert dreigingen op basis van Defender threat IDs.
@@ -2691,9 +5822,12 @@ def maak_dashboard_payload():
             "suggested_files": dashboard_bestand_suggesties(),
         },
         "mobile_access": maak_mobiele_toegang_payload(),
+        "latest_screenshot": maak_screenshot_payload(),
         "system_scan": huidige_system_scan_payload(),
         "security_scan": huidige_security_scan_payload(),
         "security_daily_scan": huidige_dagelijkse_security_scan_payload(),
+        "website_audit": huidige_website_audit_payload(),
+        "website_audit_schedule": huidige_website_audit_scheduler_payload(),
         "pending_confirmation": maak_pending_bevestiging_payload(),
     }
 
@@ -3119,44 +6253,77 @@ def is_explicit_help_request(stap):
     ))
 
 
+MEEDENK_DIRECTE_TRIGGERS = (
+    "denk mee",
+    "meedenken",
+    "denk met mij mee",
+    "denk hardop",
+    "denk na met mij",
+    "help me think",
+    "think with me",
+    "reason with me",
+    "brainstorm with me",
+    "brainstorm met me",
+    "help mij nadenken",
+    "help me nadenken",
+)
+
+MEEDENK_BEGELEIDING_TRIGGERZINNEN = (
+    "i am stuck",
+    "i'm stuck",
+    "what should i do",
+    "ik zit vast",
+    "wat moet ik doen",
+    "ik heb hulp nodig",
+)
+
+DOORVRAAG_DIRECTE_TRIGGERS = (
+    "vraag door",
+    "doorvragen",
+    "stel vervolgvragen",
+    "stel me vervolgvragen",
+    "stel mij vervolgvragen",
+    "stel me vragen",
+    "stel mij vragen",
+    "vraag mij door",
+    "ask follow up",
+    "ask follow-up",
+    "follow up questions",
+    "follow-up questions",
+    "interview me",
+)
+
+DOORVRAAG_OPSCHONING_PATRONEN = (
+    r"\b(?:kun\s+je|kan\s+je|could\s+you|can\s+you|wil\s+je|please|alsjeblieft)\b",
+    r"\b(?:vraag\s+door|doorvragen|stel\s+(?:me|mij)\s+vervolgvragen|stel\s+(?:me|mij)\s+vragen|ask\s+follow(?:-|\s*)up(?:\s+questions)?|interview\s+me)\b",
+)
+
+
+def normaliseer_vraagtekst(tekst):
+    return re.sub(r"\s+", " ", str(tekst or "").lower()).strip()
+
+
+def bevat_trigger_frase(tekst, trigger_lijst):
+    return any(trigger in tekst for trigger in trigger_lijst)
+
+
 def is_meedenk_vraag(tekst):
-    tekst = re.sub(r"\s+", " ", str(tekst or "").lower()).strip()
-    triggers = [
-        "help me",
-        "can you help me",
-        "could you help me",
-        "i need help",
-        "i am stuck",
-        "i'm stuck",
-        "what should i do",
-        "how do i start",
-        "how can i",
-        "solution",
-        "solutions",
-        "ideas",
-        "advice",
-        "plan my",
-        "kun je me helpen",
-        "kan je me helpen",
-        "ik heb hulp nodig",
-        "ik zit vast",
-        "wat moet ik",
-        "hoe kan ik",
-        "hoe moet ik",
-        "hoe begin ik",
-        "denk mee",
-        "meedenken",
-        "oplossing",
-        "oplossingen",
-        "idee",
-        "ideeen",
-        "ideeën",
-        "advies",
-        "aanpak",
-        "strategie",
-        "plannen",
-    ]
-    return any(trigger in tekst for trigger in triggers)
+    tekst = normaliseer_vraagtekst(tekst)
+    if not tekst:
+        return False
+
+    if bevat_trigger_frase(tekst, MEEDENK_DIRECTE_TRIGGERS):
+        return True
+
+    return any(trigger in tekst for trigger in MEEDENK_BEGELEIDING_TRIGGERZINNEN)
+
+
+def is_doorvraag_verzoek(tekst):
+    tekst = normaliseer_vraagtekst(tekst)
+    if not tekst:
+        return False
+
+    return bevat_trigger_frase(tekst, DOORVRAAG_DIRECTE_TRIGGERS)
 
 
 INHOUDELIJKE_VRAAG_PREFIXEN = (
@@ -4180,6 +7347,460 @@ def vraag_online_ai_bericht(berichten, temperatuur=0.4, extra_payload=None, retu
     return str(bericht or "").strip()
 
 
+def cache_sleutel_voor_online_antwoord(tekst, uitgevoerde_resultaten=None):
+    basis_tekst = normaliseer_vergelijktekst(tekst, max_lengte=420)
+    taal = normaliseer_taalwaarde(instellingen.get("taal", DEFAULT_SETTINGS["taal"]))
+    model = huidige_ai_model_naam()
+    resultaten = ""
+
+    if uitgevoerde_resultaten:
+        opgeschoond = [
+            normaliseer_vergelijktekst(item, max_lengte=80)
+            for item in uitgevoerde_resultaten[:3]
+            if str(item or "").strip()
+        ]
+        resultaten = "|".join(opgeschoond)
+
+    return f"{taal}|{model}|{basis_tekst}|{resultaten}"
+
+
+def haal_online_antwoord_uit_cache(cache_sleutel):
+    nu = time.time()
+    sleutel = str(cache_sleutel or "").strip()
+    if not sleutel:
+        return ""
+
+    with ONLINE_ANTWOORD_CACHE_LOCK:
+        item = ONLINE_ANTWOORD_CACHE.get(sleutel)
+        if not item:
+            return ""
+
+        opgeslagen_at = float(item.get("at", 0.0) or 0.0)
+        if (nu - opgeslagen_at) > ONLINE_ANTWOORD_CACHE_TTL_SECONDS:
+            ONLINE_ANTWOORD_CACHE.pop(sleutel, None)
+            return ""
+
+        return str(item.get("antwoord", "") or "")
+
+
+def sla_online_antwoord_op_in_cache(cache_sleutel, antwoord):
+    sleutel = str(cache_sleutel or "").strip()
+    waarde = str(antwoord or "").strip()
+    if not sleutel or not waarde:
+        return
+
+    with ONLINE_ANTWOORD_CACHE_LOCK:
+        ONLINE_ANTWOORD_CACHE[sleutel] = {
+            "antwoord": waarde,
+            "at": time.time(),
+        }
+
+        if len(ONLINE_ANTWOORD_CACHE) > ONLINE_ANTWOORD_CACHE_MAX_ITEMS:
+            oudste_sleutel = min(
+                ONLINE_ANTWOORD_CACHE.items(),
+                key=lambda item: float(item[1].get("at", 0.0) or 0.0),
+            )[0]
+            ONLINE_ANTWOORD_CACHE.pop(oudste_sleutel, None)
+
+
+def tekst_start_met_prefix(tekst, prefixen):
+    tekst = str(tekst or "")
+    for prefix in prefixen:
+        if tekst.startswith(prefix):
+            return True
+    return False
+
+
+def normaliseer_invoer_commando(tekst):
+    return re.sub(r"\s+", " ", str(tekst or "")).strip()
+
+
+def strip_achtergrond_prefix(commando):
+    bron = normaliseer_invoer_commando(commando)
+    if not bron:
+        return "", False
+
+    bron_klein = bron.lower()
+    for prefix in ACHTERGROND_PREFIXEN:
+        if bron_klein.startswith(prefix):
+            opgeschoond = bron[len(prefix):].strip()
+            return opgeschoond, bool(opgeschoond)
+
+    return bron, False
+
+
+def extraheer_achtergrond_status_verzoek(commando):
+    tekst = normaliseer_invoer_commando(commando)
+    if not tekst:
+        return None
+
+    patronen = (
+        r"^(?:background|achtergrond)\s+status(?:\s+(?P<id>[a-z0-9-]{6,64}|latest|laatste))?$",
+        r"^status\s+(?:background|achtergrond)(?:\s+(?P<id>[a-z0-9-]{6,64}|latest|laatste))?$",
+    )
+    for patroon in patronen:
+        match = re.match(patroon, tekst, re.IGNORECASE)
+        if not match:
+            continue
+
+        taak_id = str(match.groupdict().get("id") or "").strip()
+        if not taak_id or taak_id.lower() in {"latest", "laatste"}:
+            return ""
+        return taak_id
+
+    return None
+
+
+def lijkt_samengesteld_commando(tekst):
+    tekst = normaliseer_invoer_commando(tekst).lower()
+    if not tekst:
+        return False
+    if "||" in tekst:
+        return True
+    return bool(SNELLE_ROUTE_SAMENGESTELD_REGEX.search(tekst))
+
+
+def extraheer_enkele_uitvoerbare_actie(commando):
+    if lijkt_samengesteld_commando(commando):
+        return ""
+
+    actie = normaliseer_actie(commando)
+    actie, uitvoerbaar = actie_is_uitvoerbaar_door_echo(actie)
+    if not uitvoerbaar:
+        return ""
+
+    return actie
+
+
+def commando_actie_is_cachebaar(actie):
+    actie = str(actie or "").strip().lower()
+    if not actie:
+        return False
+
+    if actie in {"confirm pending action", "cancel pending action", "current time"}:
+        return False
+
+    if actie in DANGEROUS_SYSTEM_ACTIONS:
+        return False
+
+    if tekst_start_met_prefix(actie, SNELLE_ROUTE_GEBLOKKEERDE_PREFIXEN):
+        return False
+
+    if actie in COMMANDO_CACHE_LEESMODUS_ACTIES:
+        return True
+
+    return tekst_start_met_prefix(actie, COMMANDO_CACHE_LEESMODUS_PREFIXEN)
+
+
+def cache_context_sleutel_voor_actie(actie):
+    actie_tekst = str(actie or "").strip()
+    if not actie_tekst:
+        return ""
+    actie_norm = actie_tekst.lower()
+
+    if actie_norm.startswith(("read file::", "summarize file::")):
+        delen = split_pad_payload(actie_tekst)
+        doel_tekst = delen[0] if delen else ""
+        doel_pad = resolve_bron_pad_voor_operatie(doel_tekst)
+        if not doel_pad or not doel_pad.exists() or not doel_pad.is_file():
+            return f"file-missing:{normaliseer_vergelijktekst(doel_tekst, max_lengte=160)}"
+
+        try:
+            stat = doel_pad.stat()
+        except OSError:
+            return f"file:{str(doel_pad)}"
+        return f"file:{str(doel_pad)}:{int(stat.st_mtime)}:{int(stat.st_size)}"
+
+    if actie_norm.startswith("list folder::"):
+        delen = split_pad_payload(actie_tekst)
+        doel_tekst = delen[0] if delen else "."
+        doel_pad = resolve_pad_voor_operatie(doel_tekst)
+        if not doel_pad:
+            return f"folder-missing:{normaliseer_vergelijktekst(doel_tekst, max_lengte=160)}"
+        try:
+            stat = doel_pad.stat()
+        except OSError:
+            return f"folder:{str(doel_pad)}"
+        return f"folder:{str(doel_pad)}:{int(stat.st_mtime)}"
+
+    return ""
+
+
+def cache_sleutel_voor_commando_antwoord(actie, bron="text"):
+    actie_norm = normaliseer_vergelijktekst(actie, max_lengte=320)
+    if not actie_norm:
+        return ""
+
+    taal = normaliseer_taalwaarde(instellingen.get("taal", DEFAULT_SETTINGS["taal"]))
+    bron_norm = str(bron or "text").strip().lower()
+    pending = normaliseer_vergelijktekst(GESPREK_CONTEXT.get("wacht_op_bevestiging", ""), max_lengte=140)
+    context_sleutel = cache_context_sleutel_voor_actie(actie)
+    return f"{taal}|{bron_norm}|{actie_norm}|{context_sleutel}|pending:{pending}"
+
+
+def haal_commando_antwoord_uit_cache(cache_sleutel):
+    sleutel = str(cache_sleutel or "").strip()
+    if not sleutel:
+        return None
+
+    nu = time.time()
+    with COMMANDO_ANTWOORD_CACHE_LOCK:
+        item = COMMANDO_ANTWOORD_CACHE.get(sleutel)
+        if not item:
+            return None
+
+        opgeslagen_at = float(item.get("at", 0.0) or 0.0)
+        if (nu - opgeslagen_at) > COMMANDO_ANTWOORD_CACHE_TTL_SECONDS:
+            COMMANDO_ANTWOORD_CACHE.pop(sleutel, None)
+            return None
+
+        return {
+            "message": str(item.get("message", "") or ""),
+            "intent": str(item.get("intent", "action") or "action"),
+            "category": str(item.get("category", "general") or "general"),
+        }
+
+
+def sla_commando_antwoord_op_in_cache(cache_sleutel, antwoord, actie, route_context=None):
+    sleutel = str(cache_sleutel or "").strip()
+    bericht = str(antwoord or "").strip()
+    if not sleutel or not bericht:
+        return
+
+    route = route_context if isinstance(route_context, dict) else {}
+    intent = str(route.get("intent") or "action").strip() or "action"
+    categorie = str(route.get("category") or categoriseer_actie(actie)).strip() or "general"
+
+    with COMMANDO_ANTWOORD_CACHE_LOCK:
+        COMMANDO_ANTWOORD_CACHE[sleutel] = {
+            "message": bericht,
+            "intent": intent,
+            "category": categorie,
+            "at": time.time(),
+        }
+
+        if len(COMMANDO_ANTWOORD_CACHE) > COMMANDO_ANTWOORD_CACHE_MAX_ITEMS:
+            oudste_sleutel = min(
+                COMMANDO_ANTWOORD_CACHE.items(),
+                key=lambda item: float(item[1].get("at", 0.0) or 0.0),
+            )[0]
+            COMMANDO_ANTWOORD_CACHE.pop(oudste_sleutel, None)
+
+
+def actie_is_snelle_route_geschikt(commando_tekst, actie):
+    actie = str(actie or "").strip().lower()
+    if not actie:
+        return False
+
+    if lijkt_samengesteld_commando(commando_tekst):
+        return False
+
+    if is_inhoudelijke_vraag(commando_tekst) or is_meedenk_vraag(commando_tekst) or is_doorvraag_verzoek(commando_tekst):
+        return False
+
+    if actie in DANGEROUS_SYSTEM_ACTIONS:
+        return False
+
+    if tekst_start_met_prefix(actie, SNELLE_ROUTE_GEBLOKKEERDE_PREFIXEN):
+        return False
+
+    if actie in SNELLE_ROUTE_ACTIES:
+        return True
+
+    return tekst_start_met_prefix(actie, SNELLE_ROUTE_PREFIXEN)
+
+
+def actie_is_zwaar_voor_achtergrond(actie):
+    actie = str(actie or "").strip().lower()
+    if not actie:
+        return False
+
+    if actie in ACHTERGROND_TAAK_ZWARE_ACTIES:
+        return True
+    return tekst_start_met_prefix(actie, ACHTERGROND_TAAK_ZWARE_PREFIXEN)
+
+
+def snoei_oude_achtergrond_taak_items_vergrendeld():
+    while len(ACHTERGROND_TAAK_VOLGORDE) > ACHTERGROND_TAAK_MAX_ITEMS:
+        oudste_id = ACHTERGROND_TAAK_VOLGORDE.pop(0)
+        ACHTERGROND_TAKEN.pop(oudste_id, None)
+
+
+def snapshot_achtergrond_taak(taak):
+    if not isinstance(taak, dict):
+        return {
+            "available": False,
+        }
+
+    nu = time.time()
+    gestart = float(taak.get("started_at", 0.0) or 0.0)
+    gestopt = float(taak.get("finished_at", 0.0) or 0.0)
+    duur_ms = int(taak.get("duration_ms", 0) or 0)
+    if gestart > 0 and gestopt <= 0 and duur_ms <= 0:
+        duur_ms = int(round(max(0.0, nu - gestart) * 1000))
+
+    status = str(taak.get("status", "queued") or "queued")
+    taak_id = str(taak.get("id", "") or "")
+
+    return {
+        "available": True,
+        "id": taak_id,
+        "short_id": taak_id[:8],
+        "command": str(taak.get("command", "") or ""),
+        "action": str(taak.get("action", "") or ""),
+        "category": str(taak.get("category", "general") or "general"),
+        "status": status,
+        "result": str(taak.get("result", "") or ""),
+        "error": str(taak.get("error", "") or ""),
+        "created_at": float(taak.get("created_at", 0.0) or 0.0),
+        "started_at": gestart,
+        "finished_at": gestopt,
+        "duration_ms": max(0, duur_ms),
+        "poll_path": f"/api/background-tasks/{taak_id}" if taak_id else "",
+    }
+
+
+def haal_achtergrond_taak_status(taak_id=""):
+    taak_id = str(taak_id or "").strip()
+
+    with ACHTERGROND_TAAK_LOCK:
+        doel_id = taak_id
+        if not doel_id:
+            if not ACHTERGROND_TAAK_VOLGORDE:
+                return None
+            doel_id = ACHTERGROND_TAAK_VOLGORDE[-1]
+
+        taak = ACHTERGROND_TAKEN.get(doel_id)
+        if not taak:
+            return None
+
+        return snapshot_achtergrond_taak(taak)
+
+
+def achtergrond_taak_status_bericht(taak_status):
+    if not isinstance(taak_status, dict) or not parseer_bool_waarde(taak_status.get("available", False), standaard=False):
+        return tekst_voor_taal(
+            "No background task found.",
+            "Geen achtergrondtaak gevonden."
+        )
+
+    taak_id = str(taak_status.get("short_id", "") or "?")
+    status = str(taak_status.get("status", "queued") or "queued")
+
+    if status == "queued":
+        return tekst_voor_taal(
+            f"Background task {taak_id} is queued.",
+            f"Achtergrondtaak {taak_id} staat in de wachtrij."
+        )
+
+    if status == "running":
+        return tekst_voor_taal(
+            f"Background task {taak_id} is running.",
+            f"Achtergrondtaak {taak_id} draait nu."
+        )
+
+    if status == "failed":
+        fout = str(taak_status.get("error", "") or "").strip()
+        if fout:
+            return tekst_voor_taal(
+                f"Background task {taak_id} failed: {fout}",
+                f"Achtergrondtaak {taak_id} is mislukt: {fout}"
+            )
+        return tekst_voor_taal(
+            f"Background task {taak_id} failed.",
+            f"Achtergrondtaak {taak_id} is mislukt."
+        )
+
+    resultaat = str(taak_status.get("result", "") or "").strip()
+    if resultaat:
+        return tekst_voor_taal(
+            f"Background task {taak_id} finished: {resultaat}",
+            f"Achtergrondtaak {taak_id} is klaar: {resultaat}"
+        )
+
+    return tekst_voor_taal(
+        f"Background task {taak_id} finished.",
+        f"Achtergrondtaak {taak_id} is klaar."
+    )
+
+
+def voer_achtergrond_taak_uit(taak_id):
+    with ACHTERGROND_TAAK_LOCK:
+        taak = ACHTERGROND_TAKEN.get(taak_id)
+        if not taak:
+            return
+        taak["status"] = "running"
+        taak["started_at"] = time.time()
+
+    resultaat_tekst = ""
+    fout_tekst = ""
+    status = "completed"
+    start_tijd = time.time()
+
+    try:
+        actie = str(taak.get("action", "") or "").strip()
+        if not actie:
+            raise RuntimeError("No executable action for background task")
+
+        resultaat = voer_enkele_actie_uit(actie)
+        resultaat_tekst = maak_eenduidig_antwoord(resultaat)
+        if not resultaat_tekst:
+            resultaat_tekst = tekst_voor_taal("Done.", "Klaar.")
+    except Exception as e:
+        status = "failed"
+        fout_tekst = str(e)
+
+    duur_ms = int(round(max(0.0, time.time() - start_tijd) * 1000))
+    with ACHTERGROND_TAAK_LOCK:
+        taak = ACHTERGROND_TAKEN.get(taak_id)
+        if not taak:
+            return
+        taak["status"] = status
+        taak["finished_at"] = time.time()
+        taak["duration_ms"] = duur_ms
+        taak["result"] = resultaat_tekst
+        taak["error"] = fout_tekst
+
+
+def start_achtergrond_taak(commando, actie):
+    taak_id = str(uuid.uuid4())
+    nu = time.time()
+    taak = {
+        "id": taak_id,
+        "command": str(commando or "").strip(),
+        "action": str(actie or "").strip(),
+        "category": categoriseer_actie(actie),
+        "status": "queued",
+        "result": "",
+        "error": "",
+        "created_at": nu,
+        "started_at": 0.0,
+        "finished_at": 0.0,
+        "duration_ms": 0,
+    }
+
+    with ACHTERGROND_TAAK_LOCK:
+        ACHTERGROND_TAKEN[taak_id] = taak
+        ACHTERGROND_TAAK_VOLGORDE.append(taak_id)
+        snoei_oude_achtergrond_taak_items_vergrendeld()
+
+    worker = threading.Thread(target=voer_achtergrond_taak_uit, args=(taak_id,), daemon=True)
+    worker.start()
+    return snapshot_achtergrond_taak(taak)
+
+
+def moet_achtergrond_taak_starten(bron, actie, expliciet=False):
+    if expliciet:
+        return True
+
+    bron_norm = str(bron or "text").strip().lower()
+    if bron_norm not in {"voice", "quick"}:
+        return False
+
+    return actie_is_zwaar_voor_achtergrond(actie)
+
+
+
 def vraag_online_ai_chat(tekst, uitgevoerde_resultaten=None):
     systeem_prompt = tekst_voor_taal(
         "You are Echo, a concise desktop assistant. Answer clearly and practically. If the user asks an open-ended question, explain it directly. If they ask for a plan, give a short actionable plan. Never claim you executed computer actions unless explicit results are provided in the context.",
@@ -4211,8 +7832,19 @@ def maak_online_ai_antwoord(tekst, uitgevoerde_resultaten=None):
     if not online_ai_beschikbaar():
         return ""
 
+    if is_meedenk_vraag(tekst) or is_doorvraag_verzoek(tekst):
+        return ""
+
+    cache_sleutel = cache_sleutel_voor_online_antwoord(tekst, uitgevoerde_resultaten)
+    cache_antwoord = haal_online_antwoord_uit_cache(cache_sleutel)
+    if cache_antwoord:
+        return cache_antwoord
+
     try:
-        return vraag_online_ai_chat(tekst, uitgevoerde_resultaten)
+        antwoord = vraag_online_ai_chat(tekst, uitgevoerde_resultaten)
+        if antwoord:
+            sla_online_antwoord_op_in_cache(cache_sleutel, antwoord)
+        return antwoord
     except (urllib.error.URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError):
         return ""
 
@@ -4758,6 +8390,12 @@ def categoriseer_actie(actie):
     if not actie:
         return "general"
 
+    if actie.startswith("website audit "):
+        return "system"
+
+    if actie.startswith("stream "):
+        return "automation"
+
     if actie.startswith(("task ", "timer ", "reminder ", "agenda show")):
         return "planner"
 
@@ -4847,8 +8485,13 @@ def categoriseer_verzoek_tekst(tekst):
     if not tekst:
         return "general"
 
+    if is_doorvraag_verzoek(tekst):
+        return "answer"
+
     if any(woord in tekst for woord in ("timer", "remind", "herinner", "agenda", "task", "taak", "planning", "plan mijn", "plan my")):
         return "planner"
+    if re.search(r"\b(?:website|site|url|webapp)\b", tekst) and re.search(r"\b(?:audit|scan|security|beveiliging|vulnerability|kwetsbaar|qa)\b", tekst):
+        return "system"
     if any(woord in tekst for woord in ("page", "pagina", "browser", "chrome", "edge", "tab", "website", "url", "formulier", "form")):
         return "browser"
     if re.search(r"\b(?:virus|viruses|virusen|virussen|malware|threat|threats|dreiging|dreigingen|defender|security|beveiliging|veiligheid|verdacht|gevaar)\b", tekst):
@@ -4888,7 +8531,7 @@ def analyseer_verzoek_routering(tekst):
         if uitvoerbaar and genormaliseerde_actie:
             uitvoerbare_acties.append(genormaliseerde_actie)
 
-    vraagachtig = bool(is_inhoudelijke_vraag(tekst) or is_meedenk_vraag(tekst))
+    vraagachtig = bool(is_inhoudelijke_vraag(tekst) or is_meedenk_vraag(tekst) or is_doorvraag_verzoek(tekst))
     actieachtig = bool(uitvoerbare_acties or tekst_lijkt_actiegericht(tekst))
     categorie = categoriseer_actie(uitvoerbare_acties[0]) if uitvoerbare_acties else categoriseer_verzoek_tekst(tekst)
 
@@ -5004,15 +8647,111 @@ def maak_best_mogelijke_antwoordtekst(tekst, uitgevoerde_resultaten=None):
     if inhoudelijk_bericht:
         return "builtin_answer", inhoudelijk_bericht
 
-    online_ai_bericht = maak_online_ai_antwoord(tekst, uitgevoerde_resultaten)
-    if online_ai_bericht:
-        return "online_answer", online_ai_bericht
+    doorvraag_bericht = maak_doorvraag_antwoord(tekst, uitgevoerde_resultaten)
+    if doorvraag_bericht:
+        return "guided_followup", doorvraag_bericht
 
     meedenk_bericht = maak_meedenk_antwoord(tekst, uitgevoerde_resultaten)
     if meedenk_bericht:
         return "guided_answer", meedenk_bericht
 
+    online_ai_bericht = maak_online_ai_antwoord(tekst, uitgevoerde_resultaten)
+    if online_ai_bericht:
+        return "online_answer", online_ai_bericht
+
     return "", ""
+
+
+def extraheer_doorvraag_onderwerp(tekst):
+    onderwerp = str(tekst or "")
+    for patroon in DOORVRAAG_OPSCHONING_PATRONEN:
+        onderwerp = re.sub(patroon, " ", onderwerp, flags=re.IGNORECASE)
+
+    onderwerp = schoon_vraag_onderwerp(onderwerp)
+    if onderwerp:
+        return onderwerp
+
+    return tekst_voor_taal("this topic", "dit onderwerp")
+
+
+def maak_doorvraag_antwoord(tekst, uitgevoerde_resultaten=None):
+    if not instellingen.get("agent_modus", True) or not is_doorvraag_verzoek(tekst):
+        return ""
+
+    tekst_norm = normaliseer_vraagtekst(tekst)
+    onderwerp = extraheer_doorvraag_onderwerp(tekst)
+
+    if any(woord in tekst_norm for woord in ("plan", "planning", "deadline", "study", "studie", "project", "taak", "task")):
+        vragen = [
+            tekst_voor_taal(
+                "What is the exact outcome you need this week?",
+                "Wat is de exacte uitkomst die je deze week nodig hebt?"
+            ),
+            tekst_voor_taal(
+                "Which one blocker is slowing you down the most right now?",
+                "Welke ene blokkade vertraagt je nu het meest?"
+            ),
+            tekst_voor_taal(
+                "How much focused time can you reserve today?",
+                "Hoeveel gefocuste tijd kun je vandaag vrijmaken?"
+            ),
+        ]
+    elif any(woord in tekst_norm for woord in ("code", "bug", "error", "debug", "python", "flask", "api")):
+        vragen = [
+            tekst_voor_taal(
+                "What behavior do you expect versus what happens now?",
+                "Welk gedrag verwacht je versus wat er nu gebeurt?"
+            ),
+            tekst_voor_taal(
+                "What is the smallest reproducible example?",
+                "Wat is het kleinste reproduceerbare voorbeeld?"
+            ),
+            tekst_voor_taal(
+                "Which change was made right before this started?",
+                "Welke wijziging is gedaan vlak voordat dit begon?"
+            ),
+        ]
+    else:
+        vragen = [
+            tekst_voor_taal(
+                "What outcome would make this successful for you?",
+                "Welke uitkomst zou dit voor jou succesvol maken?"
+            ),
+            tekst_voor_taal(
+                "What have you already tried, and what happened?",
+                "Wat heb je al geprobeerd, en wat gebeurde er toen?"
+            ),
+            tekst_voor_taal(
+                "What is the biggest constraint right now: time, energy, or tools?",
+                "Wat is nu de grootste beperking: tijd, energie of tools?"
+            ),
+        ]
+
+    delen = []
+    if uitgevoerde_resultaten:
+        delen.append(
+            tekst_voor_taal(
+                "I already handled this part: ",
+                "Dit deel heb ik al voor je gedaan: "
+            ) + "; ".join(uitgevoerde_resultaten) + "."
+        )
+
+    delen.append(
+        tekst_voor_taal(
+            f"As requested, I will ask follow-up questions about {onderwerp}.",
+            f"Zoals gevraagd ga ik doorvragen over {onderwerp}."
+        ) + " " +
+        " ".join(f"{index}. {vraag}" for index, vraag in enumerate(vragen, start=1))
+    )
+
+    delen.append(
+        tekst_voor_taal(
+            "Reply with the three answers in one message, then I will give you a focused next-step plan.",
+            "Antwoord met deze drie antwoorden in een bericht, dan geef ik je een gericht volgende-stappenplan."
+        )
+    )
+
+    return " ".join(delen)
 
 
 def combineer_agent_bericht(reply, resultaten):
@@ -7749,6 +11488,114 @@ def maak_planner_actie(originele_stap, stap):
     return ""
 
 
+def maak_stream_actie(originele_stap, stap):
+    # Herkent streaming-commando's (OBS, scenes, recording, markers) voor snelle live-bediening.
+    tekst = re.sub(r"\s+", " ", str(stap or "").lower()).strip()
+    if not tekst:
+        return ""
+
+    if re.fullmatch(r"(?:stream|streaming|obs)\s+(?:help|hulp|commands?|commando'?s)", tekst):
+        return "stream help"
+    if re.fullmatch(r"(?:help|hulp)\s+(?:met|for)?\s*(?:stream|streaming|obs)", tekst):
+        return "stream help"
+
+    if re.search(r"\b(?:stream(?:ing)?\s*mode|streammode)\b", tekst):
+        if re.search(r"\b(?:on|aan|enable|activate|inschakelen|inschakel|schakel|zet|start)\b", tekst):
+            return "stream mode on"
+        if re.search(r"\b(?:off|uit|disable|deactivate|uitschakelen|uitschakel|stop)\b", tekst):
+            return "stream mode off"
+
+    heeft_obs = bool(re.search(r"\bobs\b", tekst))
+    heeft_stream = bool(re.search(r"\b(?:stream|streaming|livestream)\b", tekst))
+    heeft_scene = bool(re.search(r"\b(?:scene|sc[eè]ne|beeld)\b", tekst))
+    heeft_recording = bool(re.search(r"\b(?:record(?:ing)?|opname)\b", tekst))
+    heeft_marker = bool(re.search(r"\b(?:clip|highlight|marker)\b", tekst))
+    heeft_go_live = bool(re.search(r"\b(?:go live|ga live)\b", tekst))
+
+    stream_context = heeft_obs or heeft_stream or heeft_scene or heeft_recording or heeft_marker or heeft_go_live
+    if not stream_context:
+        return ""
+
+    heeft_start = bool(re.search(r"\b(?:start|begin|beginnen|go|ga|zet)\b", tekst))
+    heeft_stop = bool(re.search(r"\b(?:stop|eindig|beindig|be[eë]indig)\b", tekst))
+
+    if (heeft_scene or heeft_obs or heeft_stream) and re.search(r"\b(?:brb|pauze|pause)\b", tekst):
+        if heeft_scene or bool(re.search(r"\b(?:scene|switch|wissel|toon|show|zet)\b", tekst)):
+            return "stream scene brb"
+
+    if (heeft_scene or heeft_obs or heeft_stream) and re.search(r"\b(?:game|gameplay|spel)\b", tekst):
+        if heeft_scene or bool(re.search(r"\b(?:scene|switch|wissel|toon|show|zet)\b", tekst)):
+            return "stream scene game"
+
+    if heeft_scene and re.search(r"\b(?:live|main|hoofd|default|standaard)\b", tekst):
+        return "stream scene live"
+
+    if heeft_marker:
+        return "stream marker"
+
+    if re.search(r"\b(?:mute|unmute|dempen|ontdempen)\b", tekst) and re.search(r"\b(?:mic|microfoon|microphone|obs|stream)\b", tekst):
+        return "stream mic toggle"
+
+    if heeft_recording:
+        if heeft_stop:
+            return "stream recording stop"
+        if heeft_start:
+            return "stream recording start"
+
+    if heeft_stream or heeft_go_live:
+        if heeft_stop:
+            return "stream stop"
+        if heeft_start or heeft_go_live:
+            return "stream start"
+
+    return ""
+
+
+def maak_website_audit_actie(originele_stap, stap):
+    tekst = re.sub(r"\s+", " ", str(stap or "").lower()).strip()
+    origineel = str(originele_stap or "").strip()
+    if not tekst:
+        return ""
+
+    if re.search(r"\b(?:website|websites?|site|url|webapp)\b", tekst) and re.search(r"\b(?:audit|scan|check|analyse|analyze|security|beveiliging|kwetsbaar|vulnerability|qa)\b", tekst):
+        if re.search(r"\b(?:schedule|scheduler|planning|gepland)\b", tekst) and re.search(r"\b(?:status|state|voortgang|ingesteld|config)\b", tekst):
+            return "website audit schedule status"
+        if re.search(r"\b(?:status|progress|voortgang|state)\b", tekst):
+            return "website audit status"
+        if re.search(r"\b(?:report|rapport|resultaten|results)\b", tekst):
+            scan_id_match = re.search(r"\b([a-z0-9][a-z0-9-]{5,80})\b", tekst)
+            if scan_id_match and scan_id_match.group(1).startswith("audit-"):
+                return f"website audit report::{scan_id_match.group(1)}"
+            return "website audit report latest"
+
+    if re.fullmatch(r"(?:website audit status|status website audit|website scan status|status website scan)", tekst):
+        return "website audit status"
+
+    if re.fullmatch(r"(?:website audit schedule status|website audit planning status|website scheduler status)", tekst):
+        return "website audit schedule status"
+
+    if re.fullmatch(r"(?:website audit report|website report|audit report website|website audit results?|website audit rapport)", tekst):
+        return "website audit report latest"
+
+    scan_context = bool(re.search(r"\b(?:scan|audit|check|analyse|analyze|test)\b", tekst))
+    security_context = bool(re.search(r"\b(?:security|beveiliging|kwetsbaar|vulnerability|risk|risico|headers?)\b", tekst))
+    functional_context = bool(re.search(r"\b(?:button|buttons|knop|knoppen|form|formulier|qa|quality)\b", tekst))
+    website_context = bool(re.search(r"\b(?:website|websites?|site|url|webapp)\b", tekst))
+
+    if not (scan_context and (website_context or security_context or functional_context)):
+        return ""
+
+    profiel = bepaal_website_audit_profiel_uit_tekst(tekst)
+    doel_url = extraheer_url_kandidaat_uit_tekst(origineel)
+    if not doel_url:
+        doel_url = bron_url_van_webactie(GESPREK_CONTEXT.get("laatste_webactie", ""))
+
+    if not doel_url:
+        return ""
+
+    return f"website audit start::{profiel}||{doel_url}"
+
+
 def is_veilig_app_doel(doel_tekst):
     return bool(re.fullmatch(r"[a-z0-9][a-z0-9 ._-]{1,60}", schoon_computerdoel(doel_tekst)))
 
@@ -8573,6 +12420,206 @@ def normaliseer_toets_combinatie(tekst):
             return []
 
     return resultaat
+
+
+def formatteer_hotkey_label(toetsen):
+    toetsen = [str(toets or "").strip() for toets in (toetsen or []) if str(toets or "").strip()]
+    if not toetsen:
+        return "-"
+    return " + ".join(toets.upper() for toets in toetsen)
+
+
+def stream_hotkey_tokens_uit_instelling(instelling_sleutel):
+    ruwe_waarde = str(instellingen.get(instelling_sleutel, "") or "").strip()
+    if not ruwe_waarde:
+        return []
+
+    ruwe_waarde = ruwe_waarde.replace(",", "+")
+    tokens = normaliseer_toets_combinatie(ruwe_waarde)
+    return tokens if tokens else []
+
+
+def kies_stream_hotkey(instelling_sleutels):
+    for sleutel in instelling_sleutels:
+        tokens = stream_hotkey_tokens_uit_instelling(sleutel)
+        if tokens:
+            return sleutel, tokens
+    return "", []
+
+
+def obs_focus_gewenst():
+    return parseer_bool_waarde(instellingen.get("stream_auto_focus_obs", True), standaard=True)
+
+
+def focus_obs_voor_stream_actie():
+    if not obs_focus_gewenst():
+        return False
+    return activeer_venster("obs", True)
+
+
+def voer_stream_hotkey_uit(instelling_sleutels, beschrijving_en, beschrijving_nl):
+    if not AUTOMATISERING_BESCHIKBAAR or pyautogui is None:
+        return tekst_voor_taal(
+            "Streaming controls need PyAutoGUI automation support.",
+            "Streaming-controls hebben PyAutoGUI-automation nodig."
+        )
+
+    _sleutel, toetsen = kies_stream_hotkey(instelling_sleutels)
+    if not toetsen:
+        return tekst_voor_taal(
+            "No valid OBS hotkey configured yet. Update instellingen.json stream_hotkey_* fields and mirror them in OBS Hotkeys.",
+            "Nog geen geldige OBS-hotkey geconfigureerd. Werk de stream_hotkey_* velden in instellingen.json bij en zet dezelfde hotkeys in OBS."
+        )
+
+    focus_obs_voor_stream_actie()
+
+    try:
+        if len(toetsen) == 1:
+            pyautogui.press(toetsen[0])
+        else:
+            pyautogui.hotkey(*toetsen)
+    except Exception as e:
+        return tekst_voor_taal(
+            f"Error sending stream hotkey: {e}",
+            f"Fout bij versturen van stream-hotkey: {e}"
+        )
+
+    hotkey_label = formatteer_hotkey_label(toetsen)
+    return tekst_voor_taal(
+        f"OBS {beschrijving_en} hotkey sent ({hotkey_label}).",
+        f"OBS-hotkey voor {beschrijving_nl} verstuurd ({hotkey_label})."
+    )
+
+
+def stream_hotkey_label_voor(*instelling_sleutels):
+    _sleutel, toetsen = kies_stream_hotkey(instelling_sleutels)
+    return formatteer_hotkey_label(toetsen)
+
+
+def maak_stream_help_bericht():
+    start_stream_hotkey = stream_hotkey_label_voor("stream_hotkey_start_stream", "stream_hotkey_toggle_stream")
+    stop_stream_hotkey = stream_hotkey_label_voor("stream_hotkey_stop_stream", "stream_hotkey_toggle_stream")
+    start_rec_hotkey = stream_hotkey_label_voor("stream_hotkey_start_recording", "stream_hotkey_toggle_recording")
+    stop_rec_hotkey = stream_hotkey_label_voor("stream_hotkey_stop_recording", "stream_hotkey_toggle_recording")
+    scene_live_hotkey = stream_hotkey_label_voor("stream_hotkey_scene_live")
+    scene_brb_hotkey = stream_hotkey_label_voor("stream_hotkey_scene_brb")
+    scene_game_hotkey = stream_hotkey_label_voor("stream_hotkey_scene_game")
+    marker_hotkey = stream_hotkey_label_voor("stream_hotkey_clip_marker")
+    mic_hotkey = stream_hotkey_label_voor("stream_hotkey_toggle_mic")
+
+    if gebruik_nederlands():
+        return (
+            "Stream Deck gereed. Gebruik: stream mode on, stream start, stream stop, "
+            "stream recording start, stream scene brb, stream marker. "
+            f"Hotkeys nu: start {start_stream_hotkey}, stop {stop_stream_hotkey}, opname start {start_rec_hotkey}, "
+            f"opname stop {stop_rec_hotkey}, scene live {scene_live_hotkey}, scene brb {scene_brb_hotkey}, "
+            f"scene game {scene_game_hotkey}, marker {marker_hotkey}, mic toggle {mic_hotkey}. "
+            "Zet dezelfde combinaties in OBS > Settings > Hotkeys."
+        )
+
+    return (
+        "Stream deck ready. Use: stream mode on, stream start, stream stop, "
+        "stream recording start, stream scene brb, stream marker. "
+        f"Current hotkeys: start {start_stream_hotkey}, stop {stop_stream_hotkey}, recording start {start_rec_hotkey}, "
+        f"recording stop {stop_rec_hotkey}, scene live {scene_live_hotkey}, scene brb {scene_brb_hotkey}, "
+        f"scene game {scene_game_hotkey}, marker {marker_hotkey}, mic toggle {mic_hotkey}. "
+        "Mirror these combinations in OBS > Settings > Hotkeys."
+    )
+
+
+def voer_stream_regie_actie_uit(actie):
+    actie = str(actie or "").strip().lower()
+
+    if actie == "stream help":
+        return maak_stream_help_bericht()
+
+    if actie == "stream mode on":
+        activeer_automatisering_modus()
+        obs_focused = focus_obs_voor_stream_actie()
+        if obs_focused:
+            return tekst_voor_taal(
+                "Stream mode enabled. Automation is active and OBS is focused.",
+                "Stream-modus ingeschakeld. Automation staat aan en OBS is gefocust."
+            )
+        return tekst_voor_taal(
+            "Stream mode enabled. Automation is active.",
+            "Stream-modus ingeschakeld. Automation staat aan."
+        )
+
+    if actie == "stream mode off":
+        deactiveer_automatisering_modus()
+        return tekst_voor_taal(
+            "Stream mode disabled.",
+            "Stream-modus uitgeschakeld."
+        )
+
+    if actie == "stream start":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_start_stream", "stream_hotkey_toggle_stream"),
+            "start stream",
+            "stream starten",
+        )
+
+    if actie == "stream stop":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_stop_stream", "stream_hotkey_toggle_stream"),
+            "stop stream",
+            "stream stoppen",
+        )
+
+    if actie == "stream recording start":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_start_recording", "stream_hotkey_toggle_recording"),
+            "start recording",
+            "opname starten",
+        )
+
+    if actie == "stream recording stop":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_stop_recording", "stream_hotkey_toggle_recording"),
+            "stop recording",
+            "opname stoppen",
+        )
+
+    if actie == "stream scene live":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_scene_live",),
+            "switch scene live",
+            "scene live",
+        )
+
+    if actie == "stream scene brb":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_scene_brb",),
+            "switch scene BRB",
+            "scene BRB",
+        )
+
+    if actie == "stream scene game":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_scene_game",),
+            "switch scene game",
+            "scene game",
+        )
+
+    if actie == "stream marker":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_clip_marker",),
+            "drop marker",
+            "marker plaatsen",
+        )
+
+    if actie == "stream mic toggle":
+        return voer_stream_hotkey_uit(
+            ("stream_hotkey_toggle_mic",),
+            "toggle mic",
+            "mic togglen",
+        )
+
+    return tekst_voor_taal(
+        "Unknown stream action.",
+        "Onbekende stream-actie."
+    )
 
 
 def vind_macro_sleutel(stap):
@@ -9507,10 +13554,136 @@ def verplaats_actief_venster(richting, afstand):
 
 
 def maak_screenshot_pad():
-    screenshot_map = Path.home() / "Pictures" / "Echo Screenshots"
-    screenshot_map.mkdir(parents=True, exist_ok=True)
+    screenshot_map = screenshot_map_pad()
     bestandsnaam = f"echo-screenshot-{time.strftime('%Y%m%d-%H%M%S')}.png"
     return screenshot_map / bestandsnaam
+
+
+def screenshot_map_pad():
+    screenshot_map = Path.home() / "Pictures" / "Echo Screenshots"
+    screenshot_map.mkdir(parents=True, exist_ok=True)
+    return screenshot_map
+
+
+def is_geldige_screenshot_bestandsnaam(bestandsnaam):
+    naam = str(bestandsnaam or "").strip()
+    return bool(SCREENSHOT_BESTANDSNAAM_REGEX.fullmatch(naam))
+
+
+def veilige_screenshot_bestand_pad(bestandsnaam):
+    naam = str(bestandsnaam or "").strip()
+    if not is_geldige_screenshot_bestandsnaam(naam):
+        return None
+
+    map_pad = screenshot_map_pad()
+    bestand_pad = map_pad / naam
+    try:
+        bestand_pad.resolve().relative_to(map_pad.resolve())
+    except Exception:
+        return None
+    return bestand_pad
+
+
+def vind_nieuwste_screenshot_pad():
+    map_pad = screenshot_map_pad()
+    kandidaten = []
+
+    try:
+        for bestand in map_pad.glob("echo-screenshot-*.png"):
+            if not bestand.is_file():
+                continue
+            try:
+                stat = bestand.stat()
+            except OSError:
+                continue
+            kandidaten.append((float(stat.st_mtime), bestand))
+    except Exception:
+        return None
+
+    if not kandidaten:
+        return None
+
+    kandidaten.sort(key=lambda item: item[0], reverse=True)
+    return kandidaten[0][1]
+
+
+def combineer_url_pad(base_url, pad):
+    base = str(base_url or "").rstrip("/")
+    pad_deel = "/" + str(pad or "").lstrip("/")
+    return f"{base}{pad_deel}" if base else pad_deel
+
+
+def maak_screenshot_download_pad(bestandsnaam):
+    return f"/api/screenshots/{bestandsnaam}"
+
+
+def maak_screenshot_payload():
+    screenshot_pad = vind_nieuwste_screenshot_pad()
+    if not screenshot_pad:
+        return {
+            "available": False,
+        }
+
+    try:
+        stat = screenshot_pad.stat()
+    except OSError:
+        return {
+            "available": False,
+        }
+
+    bestandsnaam = screenshot_pad.name
+    download_pad = maak_screenshot_download_pad(bestandsnaam)
+    mobiel = maak_mobiele_toegang_payload()
+    mobiele_download_urls = []
+
+    for basis_url in mobiel.get("network_urls", []):
+        url = combineer_url_pad(basis_url, download_pad)
+        if url not in mobiele_download_urls:
+            mobiele_download_urls.append(url)
+
+    primary_mobile_download_url = mobiele_download_urls[0] if mobiele_download_urls else ""
+
+    return {
+        "available": True,
+        "filename": bestandsnaam,
+        "size_bytes": int(stat.st_size),
+        "created_at": float(stat.st_mtime),
+        "created_at_label": time.strftime("%H:%M:%S", time.localtime(float(stat.st_mtime))),
+        "download_path": download_pad,
+        "local_download_url": combineer_url_pad(mobiel.get("local_url", ""), download_pad),
+        "mobile_download_urls": mobiele_download_urls,
+        "mobile_primary_download_url": primary_mobile_download_url,
+    }
+
+
+def maak_laatste_screenshot_marker(payload=None):
+    gegevens = payload if isinstance(payload, dict) else maak_screenshot_payload()
+    if not parseer_bool_waarde(gegevens.get("available", False), standaard=False):
+        return ""
+
+    bestandsnaam = str(gegevens.get("filename", "") or "").strip()
+    created_at = int(float(gegevens.get("created_at", 0.0) or 0.0))
+    grootte = int(gegevens.get("size_bytes", 0) or 0)
+    return f"{bestandsnaam}|{created_at}|{grootte}"
+
+
+def maak_commando_artifacts_payload(vorige_screenshot_marker=""):
+    payload = {
+        "screenshot": {
+            "available": False,
+        }
+    }
+
+    screenshot_payload = maak_screenshot_payload()
+    if not parseer_bool_waarde(screenshot_payload.get("available", False), standaard=False):
+        return payload
+
+    huidige_marker = maak_laatste_screenshot_marker(screenshot_payload)
+    if vorige_screenshot_marker and huidige_marker == vorige_screenshot_marker:
+        return payload
+
+    payload["screenshot"] = screenshot_payload
+    return payload
 
 
 def maak_windows_screenshot(bestemming):
@@ -10964,7 +15137,7 @@ def normaliseer_actie(stap):
     if not originele_stap:
         return ""
 
-    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "help topic::", "browser click link::", "security threat scan start", "security threat scan status", "security threat cleanup", "mobile access status", "mobile access link")) or stap == "app search help":
+    if stap.startswith(("calculate::", "open browser url::", "copy path::", "move path::", "rename path::", "delete path::", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "timer ", "reminder ", "task ", "agenda show", "app search::", "steam open game::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "stream ", "help topic::", "browser click link::", "security threat scan start", "security threat scan status", "security threat cleanup", "mobile access status", "mobile access link", "website audit start::", "website audit report::")) or stap in {"app search help", "website audit status", "website audit report latest", "website audit schedule status"}:
         return originele_stap
 
     specifieke_help_actie = maak_specifieke_help_actie(originele_stap)
@@ -10973,6 +15146,14 @@ def normaliseer_actie(stap):
 
     if is_explicit_help_request(stap):
         return "help"
+
+    stream_actie = maak_stream_actie(originele_stap, stap)
+    if stream_actie:
+        return stream_actie
+
+    website_audit_actie = maak_website_audit_actie(originele_stap, stap)
+    if website_audit_actie:
+        return website_audit_actie
 
     systeem_actie = maak_systeem_actie(stap)
     if systeem_actie:
@@ -11050,17 +15231,19 @@ def mapnaam_uit_actie(actie):
 def actie_prioriteit(stap):
     # Lagere score betekent eerder uitvoeren binnen een samengesteld plan.
     stap = stap.lower()
-    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "mobile access status", "mobile access link"}:
+    if stap in {"confirm pending action", "cancel pending action", "automation enable", "automation disable", "automation status", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "mobile access status", "mobile access link", "website audit status", "website audit report latest", "website audit schedule status"}:
         return 0
     if stap.startswith(("timer ", "reminder ", "task ", "agenda show")):
         return 1
     if stap.startswith(("open website", "open websites", "open new tab", "open new tabs", "search google", "search youtube", "open browser url::")) or "youtube" in stap or "google" in stap or "browser" in stap:
         return 1
+    if stap.startswith("stream "):
+        return 2
     if stap.startswith("steam open game::"):
         return 2
     if stap.startswith("calculate::"):
         return 2
-    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "apps uninstall::", "battery status", "wifi quality", "disk space", "ip address", "mobile access status", "mobile access link", "current time")):
+    if stap.startswith(("open notepad", "open file explorer", "open calculator", "open paint", "open command prompt", "open app ", "open folder ", "open file ", "open setting ", "create file ", "list folder::", "read file::", "summarize file::", "append file::", "overwrite file::", "rewrite file::", "search files::", "copy path::", "move path::", "rename path::", "delete path::", "system info", "system scan start", "system scan status", "security threat scan start", "security threat scan status", "security threat cleanup", "apps scan", "apps updates", "apps updates list", "apps updates apply", "apps uninstall::", "battery status", "wifi quality", "disk space", "ip address", "mobile access status", "mobile access link", "current time", "website audit start::", "website audit report::")):
         return 2
     if stap.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "whatsapp send::", "whatsapp call::", "discord send::", "discord dm::", "discord call::", "app control::")):
         return 3
@@ -11313,6 +15496,25 @@ def voer_enkele_actie_uit(actie):
     if actie == "security threat scan status":
         return security_scan_status_bericht()
 
+    if actie.startswith("website audit start::"):
+        payload = actie.split("::", 1)[1]
+        profiel, doel_url = parseer_website_audit_start_payload(payload)
+        gestart, bericht = start_website_audit(doel_url, profiel=profiel)
+        return bericht
+
+    if actie == "website audit status":
+        return website_audit_status_bericht()
+
+    if actie == "website audit schedule status":
+        return website_audit_schedule_status_bericht()
+
+    if actie == "website audit report latest":
+        return website_audit_rapport_bericht("latest")
+
+    if actie.startswith("website audit report::"):
+        scan_id = actie.split("::", 1)[1]
+        return website_audit_rapport_bericht(scan_id)
+
     if actie == "security threat cleanup":
         if platform.system().lower() != "windows":
             return tekst_voor_taal(
@@ -11353,7 +15555,7 @@ def voer_enkele_actie_uit(actie):
     if actie in {"system info", "battery status", "wifi quality", "disk space", "ip address", "mobile access status", "mobile access link", "current time"}:
         return voer_systeeminfo_uit(actie)
 
-    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "app control::")):
+    if actie.startswith(("run macro ", "mouse ", "type text::", "press key::", "press hotkey::", "take screenshot", "volume ", "brightness ", "window ", "wifi ", "bluetooth ", "app search::", "app control::", "stream ")):
         blokkade = geavanceerde_besturing_geblokkeerd(actie)
         if blokkade:
             return blokkade
@@ -11427,6 +15629,9 @@ def voer_enkele_actie_uit(actie):
             )
         app_naam, zoekterm = payload.split("||", 1)
         return voer_app_zoekactie_uit(app_naam, zoekterm)
+
+    if actie.startswith("stream "):
+        return voer_stream_regie_actie_uit(actie)
 
     if actie.startswith("run macro "):
         macro_sleutel = re.sub(r"^run macro\s*", "", actie).strip()
@@ -12172,6 +16377,8 @@ def execute_command():
             'message': tekst_voor_taal('No command provided', 'Geen opdracht opgegeven')
         }), 400
 
+    vorige_screenshot_marker = maak_laatste_screenshot_marker()
+
     if bron == 'voice' and is_recente_dubbele_spraakopdracht(commando):
         update_routering_context('action', 'duplicate_guard', 'general', 'ignored', 'duplicate voice command')
         markeer_laatste_commando(commando)
@@ -12182,12 +16389,133 @@ def execute_command():
             'duplicate_ignored': True,
             'route': huidige_routering_context(),
             'pending_confirmation': maak_pending_bevestiging_payload(),
+            'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
         })
-    
+
     start_tijd = time.time()
     markeer_laatste_commando(commando)
+
     try:
-        bericht = voer_commando_uit(commando, spreek_hardop=server_speech)
+        status_taak_id = extraheer_achtergrond_status_verzoek(commando)
+        if status_taak_id is not None:
+            taak_status = haal_achtergrond_taak_status(status_taak_id)
+            status_bericht = achtergrond_taak_status_bericht(taak_status)
+            update_routering_context('action', 'background_task', 'system', 'status')
+            bericht = finaliseer_commando_antwoord(commando, status_bericht, spreek_hardop=server_speech)
+
+            duur_ms = int(round((time.time() - start_tijd) * 1000))
+            GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
+            GESPREK_CONTEXT['laatste_commando_succes'] = True
+            payload = {
+                'status': 'success',
+                'message': bericht,
+                'duration_ms': duur_ms,
+                'duplicate_ignored': False,
+                'route': huidige_routering_context(),
+                'pending_confirmation': maak_pending_bevestiging_payload(),
+                'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
+            }
+            if taak_status:
+                payload['background_task'] = taak_status
+            else:
+                payload['background_task'] = {
+                    'available': False,
+                    'id': str(status_taak_id or '').strip(),
+                }
+            return jsonify(payload)
+
+        commando_voor_verwerking, expliciete_achtergrond = strip_achtergrond_prefix(commando)
+        if not commando_voor_verwerking:
+            commando_voor_verwerking = commando
+
+        enkele_actie = extraheer_enkele_uitvoerbare_actie(commando_voor_verwerking)
+        cache_sleutel = ''
+        if enkele_actie and commando_actie_is_cachebaar(enkele_actie):
+            cache_sleutel = cache_sleutel_voor_commando_antwoord(enkele_actie, bron=bron)
+            cache_item = haal_commando_antwoord_uit_cache(cache_sleutel)
+            if cache_item:
+                intent = str(cache_item.get('intent') or 'action').strip() or 'action'
+                categorie = str(cache_item.get('category') or categoriseer_actie(enkele_actie)).strip() or 'general'
+                update_routering_context(intent, 'response_cache', categorie, 'cache_hit')
+                bericht = finaliseer_commando_antwoord(
+                    commando_voor_verwerking,
+                    cache_item.get('message', ''),
+                    spreek_hardop=server_speech,
+                )
+
+                duur_ms = int(round((time.time() - start_tijd) * 1000))
+                GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
+                GESPREK_CONTEXT['laatste_commando_succes'] = True
+                return jsonify({
+                    'status': 'success',
+                    'message': bericht,
+                    'duration_ms': duur_ms,
+                    'duplicate_ignored': False,
+                    'cache_hit': True,
+                    'route': huidige_routering_context(),
+                    'pending_confirmation': maak_pending_bevestiging_payload(),
+                    'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
+                })
+
+        if enkele_actie and moet_achtergrond_taak_starten(bron, enkele_actie, expliciet=expliciete_achtergrond):
+            taak_status = start_achtergrond_taak(commando_voor_verwerking, enkele_actie)
+            categorie = str(taak_status.get('category') or categoriseer_actie(enkele_actie)).strip() or 'general'
+            short_id = str(taak_status.get('short_id', '') or '')
+            taak_id = str(taak_status.get('id', '') or '')
+            status_pad = str(taak_status.get('poll_path', '') or '')
+
+            update_routering_context('action', 'background_task', categorie, 'queued', f'task {short_id}')
+            bericht = finaliseer_commando_antwoord(
+                commando,
+                tekst_voor_taal(
+                    f'Started in background as task {short_id}. Check status with "background status {taak_id}" or {status_pad}.',
+                    f'Op de achtergrond gestart als taak {short_id}. Check status met "achtergrond status {taak_id}" of {status_pad}.'
+                ),
+                spreek_hardop=server_speech,
+            )
+
+            duur_ms = int(round((time.time() - start_tijd) * 1000))
+            GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
+            GESPREK_CONTEXT['laatste_commando_succes'] = True
+            return jsonify({
+                'status': 'success',
+                'message': bericht,
+                'duration_ms': duur_ms,
+                'duplicate_ignored': False,
+                'queued': True,
+                'background_task': taak_status,
+                'route': huidige_routering_context(),
+                'pending_confirmation': maak_pending_bevestiging_payload(),
+                'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
+            })
+
+        if enkele_actie and actie_is_snelle_route_geschikt(commando_voor_verwerking, enkele_actie):
+            categorie = categoriseer_actie(enkele_actie)
+            update_routering_context('action', 'fast_path', categorie, 'executing')
+            actie_bericht = voer_enkele_actie_uit(enkele_actie)
+            update_routering_context('action', 'fast_path', categorie, 'completed')
+            bericht = finaliseer_commando_antwoord(commando_voor_verwerking, actie_bericht, spreek_hardop=server_speech)
+
+            if cache_sleutel:
+                sla_commando_antwoord_op_in_cache(cache_sleutel, bericht, enkele_actie, huidige_routering_context())
+
+            duur_ms = int(round((time.time() - start_tijd) * 1000))
+            GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
+            GESPREK_CONTEXT['laatste_commando_succes'] = True
+            return jsonify({
+                'status': 'success',
+                'message': bericht,
+                'duration_ms': duur_ms,
+                'duplicate_ignored': False,
+                'route': huidige_routering_context(),
+                'pending_confirmation': maak_pending_bevestiging_payload(),
+                'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
+            })
+
+        bericht = voer_commando_uit(commando_voor_verwerking, spreek_hardop=server_speech)
+        if cache_sleutel:
+            sla_commando_antwoord_op_in_cache(cache_sleutel, bericht, enkele_actie, huidige_routering_context())
+
         duur_ms = int(round((time.time() - start_tijd) * 1000))
         GESPREK_CONTEXT['laatste_commando_duur_ms'] = duur_ms
         GESPREK_CONTEXT['laatste_commando_succes'] = True
@@ -12198,6 +16526,7 @@ def execute_command():
             'duplicate_ignored': False,
             'route': huidige_routering_context(),
             'pending_confirmation': maak_pending_bevestiging_payload(),
+            'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
         })
     except Exception as e:
         duur_ms = int(round((time.time() - start_tijd) * 1000))
@@ -12218,6 +16547,7 @@ def execute_command():
             'duplicate_ignored': False,
             'route': huidige_routering_context(),
             'pending_confirmation': maak_pending_bevestiging_payload(),
+            'artifacts': maak_commando_artifacts_payload(vorige_screenshot_marker),
         })
 
 # Spraak-API: herkent audio en stuurt door naar dezelfde commandorouter.
@@ -12309,6 +16639,255 @@ def get_dashboard():
 @app.route('/api/mobile-access', methods=['GET'])
 def get_mobile_access_status():
     return jsonify(maak_mobiele_toegang_payload())
+
+
+@app.route('/api/screenshot/latest', methods=['GET'])
+def get_latest_screenshot_status():
+    return jsonify(maak_screenshot_payload())
+
+
+@app.route('/api/background-tasks/latest', methods=['GET'])
+def get_latest_background_task_status():
+    taak_status = haal_achtergrond_taak_status('')
+    bericht = achtergrond_taak_status_bericht(taak_status)
+    if not taak_status:
+        return jsonify({
+            'status': 'error',
+            'message': bericht,
+            'task': {
+                'available': False,
+            },
+        }), 404
+
+    return jsonify({
+        'status': 'success',
+        'message': bericht,
+        'task': taak_status,
+    })
+
+
+@app.route('/api/background-tasks/<taak_id>', methods=['GET'])
+def get_background_task_status(taak_id):
+    taak_status = haal_achtergrond_taak_status(taak_id)
+    bericht = achtergrond_taak_status_bericht(taak_status)
+    if not taak_status:
+        return jsonify({
+            'status': 'error',
+            'message': bericht,
+            'task': {
+                'available': False,
+                'id': str(taak_id or '').strip(),
+            },
+        }), 404
+
+    return jsonify({
+        'status': 'success',
+        'message': bericht,
+        'task': taak_status,
+    })
+
+
+@app.route('/api/website-audit/status', methods=['GET'])
+def get_website_audit_status():
+    return jsonify({
+        'status': 'success',
+        'message': website_audit_status_bericht(),
+        'audit': huidige_website_audit_payload(),
+        'schedule': huidige_website_audit_scheduler_payload(),
+    })
+
+
+@app.route('/api/website-audit/schedule', methods=['GET'])
+def get_website_audit_schedule():
+    return jsonify({
+        'status': 'success',
+        'message': website_audit_schedule_status_bericht(),
+        'schedule': huidige_website_audit_scheduler_payload(),
+    })
+
+
+@app.route('/api/website-audit/schedule', methods=['POST'])
+def update_website_audit_schedule():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Invalid JSON payload', 'Ongeldige JSON-payload'),
+        }), 400
+
+    instellingen['website_audit_schedule_enabled'] = parseer_bool_waarde(
+        data.get('enabled', instellingen.get('website_audit_schedule_enabled', False)),
+        standaard=False,
+    )
+    instellingen['website_audit_schedule_frequency'] = normaliseer_website_audit_schedule_frequency(
+        data.get('frequency', instellingen.get('website_audit_schedule_frequency', 'daily'))
+    )
+    instellingen['website_audit_schedule_time'] = normaliseer_dagelijkse_security_scan_tijd(
+        data.get('scheduled_time', instellingen.get('website_audit_schedule_time', '04:30'))
+    )
+    instellingen['website_audit_schedule_target_url'] = normaliseer_url_voor_browser_taak(
+        data.get('target_url', instellingen.get('website_audit_schedule_target_url', ''))
+    )
+    instellingen['website_audit_schedule_profile'] = normaliseer_website_audit_profiel(
+        data.get('profile', instellingen.get('website_audit_schedule_profile', 'standard'))
+    )
+    instellingen['website_audit_alert_webhook'] = normaliseer_website_audit_alert_webhook(
+        data.get('alert_webhook', instellingen.get('website_audit_alert_webhook', ''))
+    )
+    instellingen['website_audit_alert_score_drop'] = int(begrens_int_waarde(
+        data.get('alert_score_drop', instellingen.get('website_audit_alert_score_drop', 12)),
+        standaard=12,
+        minimum=0,
+        maximum=60,
+    ))
+    instellingen['website_audit_alert_on_critical'] = parseer_bool_waarde(
+        data.get('alert_on_critical', instellingen.get('website_audit_alert_on_critical', True)),
+        standaard=True,
+    )
+
+    synchroniseer_taalinstellingen(instellingen)
+    sla_instellingen_op(instellingen)
+
+    return jsonify({
+        'status': 'success',
+        'message': tekst_voor_taal('Website audit scheduler updated.', 'Website-auditscheduler bijgewerkt.'),
+        'schedule': huidige_website_audit_scheduler_payload(),
+    })
+
+
+@app.route('/api/website-audit/start', methods=['POST'])
+def start_website_audit_endpoint():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Invalid JSON payload', 'Ongeldige JSON-payload'),
+        }), 400
+
+    doel_url = str(data.get('url', '')).strip()
+    profiel = normaliseer_website_audit_profiel(data.get('profile', 'standard'))
+    gestart, bericht = start_website_audit(doel_url, profiel=profiel)
+    return jsonify({
+        'status': 'success' if gestart else 'error',
+        'message': bericht,
+        'audit': huidige_website_audit_payload(),
+    }), (200 if gestart else 409)
+
+
+@app.route('/api/website-audit/report/latest', methods=['GET'])
+def get_latest_website_audit_report():
+    rapport = laad_laatste_website_audit_rapport()
+    if not rapport:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('No website audit report found', 'Geen website-auditrapport gevonden'),
+        }), 404
+
+    rapport = verrijk_website_audit_report_api_links(rapport)
+
+    return jsonify({
+        'status': 'success',
+        'message': website_audit_rapport_bericht('latest'),
+        'report': rapport,
+    })
+
+
+@app.route('/api/website-audit/report/<scan_id>', methods=['GET'])
+def get_website_audit_report(scan_id):
+    rapport = laad_website_audit_rapport(scan_id)
+    if not rapport:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Website audit report not found', 'Website-auditrapport niet gevonden'),
+            'scan_id': str(scan_id or '').strip(),
+        }), 404
+
+    rapport = verrijk_website_audit_report_api_links(rapport)
+
+    return jsonify({
+        'status': 'success',
+        'message': website_audit_rapport_bericht(scan_id),
+        'report': rapport,
+    })
+
+
+@app.route('/api/website-audit/report/latest/download/<formaat>', methods=['GET'])
+def download_latest_website_audit_report(formaat):
+    rapport = laad_laatste_website_audit_rapport()
+    if not rapport:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('No website audit report found', 'Geen website-auditrapport gevonden'),
+        }), 404
+
+    pad = website_audit_report_pad_voor_formaat(rapport, formaat)
+    if pad is None:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Requested report format is unavailable.', 'Gevraagd rapportformaat is niet beschikbaar.'),
+        }), 404
+
+    extensie = pad.suffix.lower()
+    mimetype = 'application/octet-stream'
+    if extensie == '.json':
+        mimetype = 'application/json'
+    elif extensie == '.md':
+        mimetype = 'text/markdown'
+    elif extensie == '.pdf':
+        mimetype = 'application/pdf'
+
+    response = send_file(pad, mimetype=mimetype, conditional=True)
+    response.headers['Content-Disposition'] = f'attachment; filename="{pad.name}"'
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/api/website-audit/report/<scan_id>/download/<formaat>', methods=['GET'])
+def download_website_audit_report(scan_id, formaat):
+    rapport = laad_website_audit_rapport(scan_id)
+    if not rapport:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Website audit report not found', 'Website-auditrapport niet gevonden'),
+            'scan_id': str(scan_id or '').strip(),
+        }), 404
+
+    pad = website_audit_report_pad_voor_formaat(rapport, formaat)
+    if pad is None:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Requested report format is unavailable.', 'Gevraagd rapportformaat is niet beschikbaar.'),
+            'scan_id': str(scan_id or '').strip(),
+        }), 404
+
+    extensie = pad.suffix.lower()
+    mimetype = 'application/octet-stream'
+    if extensie == '.json':
+        mimetype = 'application/json'
+    elif extensie == '.md':
+        mimetype = 'text/markdown'
+    elif extensie == '.pdf':
+        mimetype = 'application/pdf'
+
+    response = send_file(pad, mimetype=mimetype, conditional=True)
+    response.headers['Content-Disposition'] = f'attachment; filename="{pad.name}"'
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/api/screenshots/<bestandsnaam>', methods=['GET'])
+def download_screenshot(bestandsnaam):
+    screenshot_pad = veilige_screenshot_bestand_pad(bestandsnaam)
+    if screenshot_pad is None or not screenshot_pad.exists() or not screenshot_pad.is_file():
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Screenshot not found', 'Screenshot niet gevonden')
+        }), 404
+
+    response = send_file(screenshot_pad, mimetype='image/png', conditional=True)
+    response.headers['Content-Disposition'] = f'attachment; filename="{screenshot_pad.name}"'
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 # Bijwerken en normaliseren van instellingen via de UI.
 @app.route('/api/instellingen', methods=['POST'])
@@ -12580,6 +17159,9 @@ if __name__ == '__main__':
 
     if not auto_reload or is_reloader_child:
         start_dagelijkse_security_scan_monitor()
+
+    if not auto_reload or is_reloader_child:
+        start_website_audit_schedule_monitor()
 
     if moet_auto_openen(auto_open, auto_reload, open_on_reload):
         threading.Timer(1.0, lambda: open_echo_interface(url, window_mode)).start()

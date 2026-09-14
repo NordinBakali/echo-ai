@@ -59,6 +59,20 @@
 
         <section class="hud-panels" id="hudPanels">
             <aside class="hud-panel hud-panel-left" aria-label="Launch and control panel">
+                <div class="panel-block command-center" id="commandCenterPanel">
+                    <p class="panel-kicker" id="overviewKicker">Command Center</p>
+                    <div class="overview-chips" id="overviewChips" aria-live="polite">
+                        <span class="overview-chip" id="overviewMicChip">MIC READY</span>
+                        <span class="overview-chip" id="overviewVoiceChip">VOICE READY</span>
+                        <span class="overview-chip" id="overviewCameraChip">CAMERA OFF</span>
+                        <span class="overview-chip" id="overviewPendingChip">NO PENDING</span>
+                        <span class="overview-chip" id="overviewStreamChip">STREAM STANDBY</span>
+                    </div>
+                    <label class="overview-filter-label" id="actionFilterLabel" for="actionFilterInput">Filter Actions</label>
+                    <input id="actionFilterInput" class="overview-filter-input" type="text" placeholder="Filter: stream, camera, security">
+                    <p class="panel-note" id="actionFilterHint">Type to quickly find actions and routines.</p>
+                </div>
+
                 <div class="panel-block">
                     <p class="panel-kicker">App Launchers</p>
                     <div class="panel-grid">
@@ -110,6 +124,24 @@
                         <button type="button" class="panel-action routine-action" data-command="phone status">Phone Link Status</button>
                     </div>
                 </div>
+
+                <div class="panel-block" id="streamDeckPanel">
+                    <p class="panel-kicker" id="streamKicker">Streaming Deck</p>
+                    <p class="panel-note" id="streamStatusNote">One-tap stream controls for OBS.</p>
+                    <div class="panel-grid">
+                        <button type="button" class="panel-action" id="streamModeBtn" data-command="stream mode on">Stream Mode</button>
+                        <button type="button" class="panel-action" id="streamGoLiveBtn" data-command="stream start">Go Live</button>
+                        <button type="button" class="panel-action" id="streamStopBtn" data-command="stream stop">Stop Live</button>
+                        <button type="button" class="panel-action" id="streamRecStartBtn" data-command="stream recording start">Start Recording</button>
+                        <button type="button" class="panel-action" id="streamRecStopBtn" data-command="stream recording stop">Stop Recording</button>
+                        <button type="button" class="panel-action" id="streamSceneLiveBtn" data-command="stream scene live">Scene Live</button>
+                        <button type="button" class="panel-action" id="streamSceneBrbBtn" data-command="stream scene brb">Scene BRB</button>
+                        <button type="button" class="panel-action" id="streamSceneGameBtn" data-command="stream scene game">Scene Game</button>
+                        <button type="button" class="panel-action" id="streamMarkerBtn" data-command="stream marker">Drop Marker</button>
+                        <button type="button" class="panel-action" id="streamMicBtn" data-command="stream mic toggle">Mic Toggle</button>
+                        <button type="button" class="panel-action" id="streamHelpBtn" data-command="stream help">Stream Help</button>
+                    </div>
+                </div>
             </aside>
 
             <aside class="hud-panel hud-panel-right" aria-label="Text command panel">
@@ -119,6 +151,68 @@
                         <input id="commandInput" type="text" placeholder="Type a command for Echo">
                         <button id="sendBtn" type="submit">Send</button>
                     </form>
+                    <div class="command-suggestions" id="commandSuggestions" aria-live="polite"></div>
+                </div>
+
+                <div class="panel-block website-audit-panel" id="websiteAuditPanel">
+                    <p class="panel-kicker" id="websiteAuditKicker">Website Audit</p>
+                    <p class="panel-note" id="websiteAuditState">Audit idle. Add a URL and start a scan.</p>
+                    <div class="website-audit-progress" aria-hidden="true">
+                        <div class="website-audit-progress__fill" id="websiteAuditProgressBar"></div>
+                    </div>
+                    <form id="websiteAuditForm" class="website-audit-form" autocomplete="off">
+                        <input id="websiteAuditUrlInput" type="text" placeholder="https://example.com" inputmode="url" spellcheck="false">
+                        <select id="websiteAuditProfileSelect">
+                            <option value="quick">Quick</option>
+                            <option value="standard" selected>Standard</option>
+                            <option value="security">Security</option>
+                            <option value="full">Full</option>
+                        </select>
+                        <button id="websiteAuditStartBtn" type="submit" class="panel-action">Start Audit</button>
+                    </form>
+                    <div class="pending-actions">
+                        <button id="websiteAuditStatusBtn" type="button" class="panel-action" data-command="website audit status">Audit Status</button>
+                        <button id="websiteAuditReportBtn" type="button" class="panel-action" data-command="website audit report latest">Latest Report</button>
+                    </div>
+                    <div class="pending-actions">
+                        <button id="websiteAuditDownloadJsonBtn" type="button" class="panel-action">Download JSON</button>
+                        <button id="websiteAuditDownloadMdBtn" type="button" class="panel-action">Download MD</button>
+                    </div>
+                    <div class="pending-actions">
+                        <button id="websiteAuditDownloadPdfBtn" type="button" class="panel-action">Download PDF</button>
+                        <button id="websiteAuditScheduleStatusBtn" type="button" class="panel-action" data-command="website audit schedule status">Schedule Status</button>
+                    </div>
+                    <p class="panel-note website-audit-score" id="websiteAuditScore">Score: --</p>
+                    <p class="panel-note website-audit-meta" id="websiteAuditMeta">Pass: 0 | Warn: 0 | Fail: 0</p>
+                    <p class="panel-note website-audit-schedule-state" id="websiteAuditScheduleState">Scheduler: off</p>
+                    <form id="websiteAuditScheduleForm" class="website-audit-schedule-form" autocomplete="off">
+                        <input id="websiteAuditScheduleUrlInput" type="text" placeholder="https://example.com" inputmode="url" spellcheck="false">
+                        <select id="websiteAuditScheduleProfileSelect">
+                            <option value="quick">Quick</option>
+                            <option value="standard" selected>Standard</option>
+                            <option value="security">Security</option>
+                            <option value="full">Full</option>
+                        </select>
+                        <select id="websiteAuditFrequencySelect">
+                            <option value="daily" selected>Daily</option>
+                            <option value="weekly">Weekly</option>
+                        </select>
+                        <input id="websiteAuditTimeInput" type="time" value="04:30">
+                        <input id="websiteAuditAlertDropInput" type="number" min="0" max="60" step="1" value="12" placeholder="Drop">
+                        <input id="websiteAuditWebhookInput" type="text" placeholder="Alert webhook (optional)" spellcheck="false">
+                        <label class="website-audit-toggle">
+                            <input id="websiteAuditScheduleEnabledToggle" type="checkbox">
+                            <span>Scheduler On</span>
+                        </label>
+                        <label class="website-audit-toggle">
+                            <input id="websiteAuditAlertCriticalToggle" type="checkbox" checked>
+                            <span>Alert Critical</span>
+                        </label>
+                        <button id="websiteAuditScheduleSaveBtn" type="submit" class="panel-action">Save Schedule</button>
+                    </form>
+                    <div class="website-audit-recommendations" id="websiteAuditRecommendations" aria-live="polite"></div>
+                    <div class="website-audit-findings" id="websiteAuditFindings" aria-live="polite"></div>
+                    <div class="website-audit-logs" id="websiteAuditLogs" aria-live="polite"></div>
                 </div>
 
                 <div class="panel-block">
@@ -150,6 +244,28 @@
                     <div class="pending-actions">
                         <button id="mobileSaveScreenshotBtn" type="button" class="panel-action">Save Last Screenshot</button>
                         <button id="mobileOpenScreenshotBtn" type="button" class="panel-action">Open Screenshot</button>
+                    </div>
+                </div>
+
+                <div class="panel-block camera-lab" id="cameraLabPanel">
+                    <p class="panel-kicker" id="cameraKicker">Camera Lab</p>
+                    <p class="panel-note" id="cameraState">Camera: off</p>
+                    <div class="camera-preview-shell">
+                        <video id="cameraPreview" playsinline autoplay muted></video>
+                        <p class="camera-preview-overlay" id="cameraPreviewOverlay">Camera is off</p>
+                    </div>
+                    <p class="panel-note" id="cameraInsight">No QR or mood scan yet.</p>
+                    <div class="pending-actions">
+                        <button id="cameraStartBtn" type="button">Start Camera</button>
+                        <button id="cameraStopBtn" type="button">Stop Camera</button>
+                    </div>
+                    <div class="pending-actions">
+                        <button id="cameraScanQrBtn" type="button">Scan QR</button>
+                        <button id="cameraMoodBtn" type="button">Mood Check</button>
+                    </div>
+                    <div class="pending-actions">
+                        <button id="cameraMuteBtn" type="button">Mute Mic</button>
+                        <button id="cameraDeafenBtn" type="button">Deafen Echo</button>
                     </div>
                 </div>
 

@@ -22,6 +22,7 @@ const dailySecurityResult = document.getElementById('dailySecurityResult');
 const commandForm = document.getElementById('commandForm');
 const commandInput = document.getElementById('commandInput');
 const sendBtn = document.getElementById('sendBtn');
+const commandSuggestions = document.getElementById('commandSuggestions');
 const messages = document.getElementById('messages');
 const visualizer = document.getElementById('voiceVisualizer');
 const visualizerBars = Array.from(visualizer ? visualizer.querySelectorAll('.bar') : []);
@@ -35,6 +36,68 @@ const mobileOpenLinkBtn = document.getElementById('mobileOpenLinkBtn');
 const mobileScreenshotState = document.getElementById('mobileScreenshotState');
 const mobileSaveScreenshotBtn = document.getElementById('mobileSaveScreenshotBtn');
 const mobileOpenScreenshotBtn = document.getElementById('mobileOpenScreenshotBtn');
+const cameraKicker = document.getElementById('cameraKicker');
+const cameraState = document.getElementById('cameraState');
+const cameraInsight = document.getElementById('cameraInsight');
+const cameraPreview = document.getElementById('cameraPreview');
+const cameraPreviewOverlay = document.getElementById('cameraPreviewOverlay');
+const cameraStartBtn = document.getElementById('cameraStartBtn');
+const cameraStopBtn = document.getElementById('cameraStopBtn');
+const cameraScanQrBtn = document.getElementById('cameraScanQrBtn');
+const cameraMoodBtn = document.getElementById('cameraMoodBtn');
+const cameraMuteBtn = document.getElementById('cameraMuteBtn');
+const cameraDeafenBtn = document.getElementById('cameraDeafenBtn');
+const streamKicker = document.getElementById('streamKicker');
+const streamStatusNote = document.getElementById('streamStatusNote');
+const streamModeBtn = document.getElementById('streamModeBtn');
+const streamGoLiveBtn = document.getElementById('streamGoLiveBtn');
+const streamStopBtn = document.getElementById('streamStopBtn');
+const streamRecStartBtn = document.getElementById('streamRecStartBtn');
+const streamRecStopBtn = document.getElementById('streamRecStopBtn');
+const streamSceneLiveBtn = document.getElementById('streamSceneLiveBtn');
+const streamSceneBrbBtn = document.getElementById('streamSceneBrbBtn');
+const streamSceneGameBtn = document.getElementById('streamSceneGameBtn');
+const streamMarkerBtn = document.getElementById('streamMarkerBtn');
+const streamMicBtn = document.getElementById('streamMicBtn');
+const streamHelpBtn = document.getElementById('streamHelpBtn');
+const overviewKicker = document.getElementById('overviewKicker');
+const overviewMicChip = document.getElementById('overviewMicChip');
+const overviewVoiceChip = document.getElementById('overviewVoiceChip');
+const overviewCameraChip = document.getElementById('overviewCameraChip');
+const overviewPendingChip = document.getElementById('overviewPendingChip');
+const overviewStreamChip = document.getElementById('overviewStreamChip');
+const actionFilterLabel = document.getElementById('actionFilterLabel');
+const actionFilterInput = document.getElementById('actionFilterInput');
+const actionFilterHint = document.getElementById('actionFilterHint');
+const websiteAuditKicker = document.getElementById('websiteAuditKicker');
+const websiteAuditState = document.getElementById('websiteAuditState');
+const websiteAuditForm = document.getElementById('websiteAuditForm');
+const websiteAuditUrlInput = document.getElementById('websiteAuditUrlInput');
+const websiteAuditProfileSelect = document.getElementById('websiteAuditProfileSelect');
+const websiteAuditStartBtn = document.getElementById('websiteAuditStartBtn');
+const websiteAuditStatusBtn = document.getElementById('websiteAuditStatusBtn');
+const websiteAuditReportBtn = document.getElementById('websiteAuditReportBtn');
+const websiteAuditDownloadJsonBtn = document.getElementById('websiteAuditDownloadJsonBtn');
+const websiteAuditDownloadMdBtn = document.getElementById('websiteAuditDownloadMdBtn');
+const websiteAuditDownloadPdfBtn = document.getElementById('websiteAuditDownloadPdfBtn');
+const websiteAuditScheduleStatusBtn = document.getElementById('websiteAuditScheduleStatusBtn');
+const websiteAuditScore = document.getElementById('websiteAuditScore');
+const websiteAuditMeta = document.getElementById('websiteAuditMeta');
+const websiteAuditScheduleState = document.getElementById('websiteAuditScheduleState');
+const websiteAuditProgressBar = document.getElementById('websiteAuditProgressBar');
+const websiteAuditScheduleForm = document.getElementById('websiteAuditScheduleForm');
+const websiteAuditScheduleUrlInput = document.getElementById('websiteAuditScheduleUrlInput');
+const websiteAuditScheduleProfileSelect = document.getElementById('websiteAuditScheduleProfileSelect');
+const websiteAuditFrequencySelect = document.getElementById('websiteAuditFrequencySelect');
+const websiteAuditTimeInput = document.getElementById('websiteAuditTimeInput');
+const websiteAuditAlertDropInput = document.getElementById('websiteAuditAlertDropInput');
+const websiteAuditWebhookInput = document.getElementById('websiteAuditWebhookInput');
+const websiteAuditScheduleEnabledToggle = document.getElementById('websiteAuditScheduleEnabledToggle');
+const websiteAuditAlertCriticalToggle = document.getElementById('websiteAuditAlertCriticalToggle');
+const websiteAuditScheduleSaveBtn = document.getElementById('websiteAuditScheduleSaveBtn');
+const websiteAuditFindings = document.getElementById('websiteAuditFindings');
+const websiteAuditRecommendations = document.getElementById('websiteAuditRecommendations');
+const websiteAuditLogs = document.getElementById('websiteAuditLogs');
 const mobileVoiceFileInput = document.getElementById('mobileVoiceFileInput');
 const historyCommands = document.getElementById('historyCommands');
 const pendingConfirm = document.getElementById('pendingConfirm');
@@ -68,6 +131,9 @@ const appState = {
     wakeArmTimeoutMs: 9000,
     aiName: 'Echo',
     voiceOutputEnabled: true,
+    voiceOutputUserEnabled: true,
+    micMuted: false,
+    deafenEnabled: false,
     browserVoicePreference: '',
     premiumVoiceId: '',
     premiumTtsBaseUrl: '',
@@ -83,6 +149,13 @@ const appState = {
     lastAssistantMessageAt: 0,
     activeAudio: null,
     activeAudioUrl: '',
+    cameraStream: null,
+    cameraPermission: 'unknown',
+    cameraBusy: false,
+    lastDetectedMood: '',
+    streamLive: false,
+    streamRecording: false,
+    actionFilterQuery: '',
     threatLevel: 'nominal',
     threatResetTimer: null,
     runtimeBuildId: '',
@@ -109,9 +182,47 @@ const appState = {
         download_path: '',
         mobile_primary_download_url: '',
     },
+    websiteAuditSnapshot: {
+        running: false,
+        state: 'idle',
+        scan_id: '',
+        progress_percent: 0,
+        profile: 'standard',
+        target_url: '',
+        score: 0,
+        grade: '',
+        exposure_level: '',
+        checks_passed: 0,
+        checks_warn: 0,
+        checks_failed: 0,
+        findings_top: [],
+        remediation_top: [],
+        recent_logs: [],
+        last_result: '',
+        last_report_json: '',
+        last_report_markdown: '',
+        last_report_pdf: '',
+        pdf_available: false,
+    },
+    websiteAuditScheduleSnapshot: {
+        enabled: false,
+        frequency: 'daily',
+        scheduled_time: '04:30',
+        target_url: '',
+        profile: 'standard',
+        next_run_at: 0,
+        next_run_label: '',
+        monitor_running: false,
+        alert_score_drop: 12,
+        alert_on_critical: true,
+        alert_webhook_configured: false,
+        last_alert_result: '',
+    },
     mobilePrimaryUrl: '',
     commandHistory: [],
     commandHistoryCursor: -1,
+    visibleCommandSuggestions: [],
+    selectedSuggestionIndex: -1,
     pendingCommands: {
         confirm: 'bevestig wachtende actie',
         cancel: 'annuleer wachtende actie',
@@ -128,6 +239,52 @@ const ECHO_RUNTIME_PORT_SPAN = 50;
 const COMMAND_HISTORY_STORAGE_KEY = 'echo_command_history_v1';
 const COMMAND_HISTORY_MAX_ITEMS = 16;
 const VOICE_UPLOAD_TIMEOUT_MS = 28000;
+const CAMERA_SCAN_ATTEMPTS = 8;
+const CAMERA_SCAN_INTERVAL_MS = 260;
+const YOUTUBE_SEARCH_BASE_URL = 'https://www.youtube.com/results?search_query=';
+const MAX_COMMAND_SUGGESTIONS = 6;
+const ACTION_FILTER_BUTTON_SELECTOR = [
+    '.panel-action',
+    '#cameraStartBtn',
+    '#cameraStopBtn',
+    '#cameraScanQrBtn',
+    '#cameraMoodBtn',
+    '#cameraMuteBtn',
+    '#cameraDeafenBtn',
+    '#mobileCopyLinkBtn',
+    '#mobileOpenLinkBtn',
+    '#mobileSaveScreenshotBtn',
+    '#mobileOpenScreenshotBtn',
+].join(', ');
+const PANEL_COLLAPSE_STORAGE_KEY = 'echo_panel_collapse_v1';
+const STANDAARD_INGEKLAPTE_PANEL_IDS = ['mobileLabPanel', 'cameraLabPanel'];
+const LOCAL_SLASH_SUGGESTIONS = [
+    '/help',
+    '/scanqr',
+    '/mood',
+    '/golive',
+    '/endlive',
+    '/record on',
+    '/record off',
+    '/scene live',
+    '/scene brb',
+    '/scene game',
+    '/marker',
+    '/stream on',
+    '/stream off',
+    '/stream help',
+    '/audit status',
+    '/audit report',
+    '/audit schedule',
+    '/mute',
+    '/unmute',
+    '/deafen',
+    '/undeafen',
+    '/camera on',
+    '/camera off',
+    '/clear',
+    '/lang',
+];
 
 // Threat-profielen sturen visuele state en contextlabels in de UI.
 const THREAT_LEVELS = {
@@ -261,6 +418,123 @@ const UI_STRINGS = {
         mobile_screenshot_save_failed: 'Screenshot opslaan op telefoon mislukte.',
         mobile_screenshot_open_missing: 'Geen screenshot beschikbaar om te openen.',
         routine_prefill_ready: 'Concept klaar. Voeg alleen nog je tekst toe.',
+        camera_kicker: 'Camera Lab',
+        camera_start_button: 'Start Camera',
+        camera_stop_button: 'Stop Camera',
+        camera_scan_qr_button: 'Scan QR',
+        camera_mood_button: 'Mood Check',
+        camera_mute_button: 'Mute Mic',
+        camera_unmute_button: 'Unmute Mic',
+        camera_deafen_button: 'Deafen Echo',
+        camera_undeafen_button: 'Undeafen Echo',
+        camera_state_off: 'Camera: uit',
+        camera_state_requesting: 'Camera: toestemming gevraagd...',
+        camera_state_ready: 'Camera: actief',
+        camera_state_denied: 'Camera: toestemming geweigerd',
+        camera_state_unavailable: 'Camera niet beschikbaar in deze browser',
+        camera_insight_idle: 'Nog geen QR of mood scan uitgevoerd.',
+        camera_busy: 'Camera bezig...',
+        camera_qr_scanning: 'QR-scan bezig...',
+        camera_qr_found: 'QR gevonden: {value}',
+        camera_qr_not_found: 'Geen QR-code gevonden. Houd de code dichterbij en probeer opnieuw.',
+        camera_qr_not_supported: 'QR-scan wordt niet ondersteund in deze browser.',
+        camera_qr_open_link_confirm: 'QR-link openen in een nieuw tabblad?\n\n{url}',
+        camera_preview_not_ready: 'Nog geen camerabeeld beschikbaar. Probeer opnieuw.',
+        camera_mood_scanning: 'Mood check bezig...',
+        camera_face_not_found: 'Geen gezicht gevonden. Kijk recht in de camera en probeer opnieuw.',
+        camera_mood_manual_prompt: 'Typ je mood: sad, chill of happy',
+        camera_mood_manual_cancelled: 'Mood check geannuleerd.',
+        camera_talk_check: 'Heb je nu zin om met Echo te praten?',
+        camera_talk_later: 'Begrepen, ik blijf op de achtergrond. Roep me als je wilt praten.',
+        camera_mood_low: 'Je lijkt wat laag in energie.',
+        camera_mood_happy: 'Je lijkt vrolijk.',
+        camera_mood_neutral: 'Je lijkt rustig.',
+        camera_music_low_open: 'Ik open opbeurende muziek om je mood te liften.',
+        camera_music_happy_open: 'Ik open een happy playlist om je vibe vast te houden.',
+        camera_music_neutral_open: 'Ik open rustige muziek die bij je tempo past.',
+        camera_music_popup_blocked: 'Kon geen nieuw tabblad openen. Schakel pop-ups toe voor deze pagina.',
+        camera_mic_muted: 'Microfoon gemute. Echo luistert niet.',
+        camera_mic_unmuted: 'Microfoon weer actief. Echo kan weer luisteren.',
+        camera_mic_blocked: 'Microfoon staat op mute. Klik Unmute Mic in Camera Lab.',
+        camera_deafen_enabled: 'Echo gedeafend. Stem-audio staat uit.',
+        camera_deafen_disabled: 'Echo undeafened. Stem-audio staat weer aan.',
+        stream_kicker: 'Streaming Deck',
+        stream_note: 'One-tap stream controls for OBS.',
+        stream_mode_button: 'Stream Mode',
+        stream_go_live_button: 'Go Live',
+        stream_stop_live_button: 'Stop Live',
+        stream_record_start_button: 'Start Recording',
+        stream_record_stop_button: 'Stop Recording',
+        stream_scene_live_button: 'Scene Live',
+        stream_scene_brb_button: 'Scene BRB',
+        stream_scene_game_button: 'Scene Game',
+        stream_marker_button: 'Drop Marker',
+        stream_mic_toggle_button: 'Mic Toggle',
+        stream_help_button: 'Stream Help',
+        website_audit_kicker: 'Website Audit',
+        website_audit_idle: 'Audit stand-by. Voeg een URL toe en start een scan.',
+        website_audit_running: 'Audit bezig: {stage} ({progress}%)',
+        website_audit_completed: 'Audit klaar voor {target}.',
+        website_audit_error: 'Auditfout: {message}',
+        website_audit_url_placeholder: 'https://voorbeeld.nl',
+        website_audit_start_button: 'Start Audit',
+        website_audit_status_button: 'Audit Status',
+        website_audit_report_button: 'Laatste Rapport',
+        website_audit_download_json_button: 'Download JSON',
+        website_audit_download_md_button: 'Download MD',
+        website_audit_download_pdf_button: 'Download PDF',
+        website_audit_schedule_status_button: 'Schedule Status',
+        website_audit_schedule_url_placeholder: 'Scheduler URL (optioneel)',
+        website_audit_schedule_webhook_placeholder: 'Alert webhook (optioneel)',
+        website_audit_schedule_enabled_label: 'Scheduler aan',
+        website_audit_schedule_alert_critical_label: 'Alert kritisch',
+        website_audit_schedule_save_button: 'Schema opslaan',
+        website_audit_schedule_save_success: 'Website-auditschema opgeslagen.',
+        website_audit_schedule_save_failed: 'Website-auditschema opslaan mislukt.',
+        website_audit_schedule_state_off: 'Scheduler: uit',
+        website_audit_schedule_state_no_target: 'Scheduler aan ({frequency} {time}), maar geen doel-URL ingesteld.',
+        website_audit_schedule_state_on: 'Scheduler: {frequency} om {time} | Volgende: {next}',
+        website_audit_frequency_daily: 'Dagelijks',
+        website_audit_frequency_weekly: 'Wekelijks',
+        website_audit_profile_quick: 'Snel',
+        website_audit_profile_standard: 'Standaard',
+        website_audit_profile_security: 'Beveiliging',
+        website_audit_profile_full: 'Volledig',
+        website_audit_start_missing_url: 'Voeg eerst een website-URL toe.',
+        website_audit_score_line: 'Score: {score}/100 ({grade})',
+        website_audit_score_pending: 'Score: --',
+        website_audit_meta_line: 'Pass: {pass} | Warn: {warn} | Fail: {fail}',
+        website_audit_findings_empty: 'Nog geen bevindingen om te tonen.',
+        website_audit_recommendations_empty: 'Nog geen actieplan gevonden.',
+        website_audit_logs_empty: 'Nog geen audit-logs beschikbaar.',
+        website_audit_download_unavailable: 'Geen auditrapport beschikbaar om te downloaden.',
+        website_audit_download_started: 'Download gestart ({format}).',
+        overview_kicker: 'Command Center',
+        overview_filter_label: 'Filter Acties',
+        overview_filter_placeholder: 'Filter: stream, camera, security',
+        overview_filter_hint: 'Typ om acties en routines snel te vinden.',
+        overview_filter_active: '{visible} zichtbaar, {hidden} verborgen door filter.',
+        overview_chip_mic_ready: 'MIC READY',
+        overview_chip_mic_muted: 'MIC MUTED',
+        overview_chip_mic_listening: 'MIC LISTENING',
+        overview_chip_voice_ready: 'VOICE READY',
+        overview_chip_voice_deafened: 'VOICE DEAFENED',
+        overview_chip_voice_speaking: 'VOICE SPEAKING',
+        overview_chip_camera_on: 'CAMERA ON',
+        overview_chip_camera_off: 'CAMERA OFF',
+        overview_chip_pending_on: 'CONFIRM NEEDED',
+        overview_chip_pending_off: 'NO PENDING',
+        overview_chip_stream_live: 'STREAM LIVE',
+        overview_chip_stream_recording: 'STREAM REC',
+        overview_chip_stream_live_recording: 'LIVE + REC',
+        overview_chip_stream_idle: 'STREAM STANDBY',
+        panel_expand: 'Uitklappen',
+        panel_collapse: 'Inklappen',
+        voice_status_mic_muted: 'Microfoon staat op mute',
+        voice_button_muted: 'Mic Gemute',
+        command_suggestions_empty: 'Geen suggesties',
+        shortcut_help_text: 'Lokale snelkoppelingen: /help, /scanqr, /mood, /golive, /endlive, /record on, /record off, /scene live, /scene brb, /scene game, /marker, /stream on, /stream off, /stream help, /audit status, /audit report, /audit schedule, /mute, /unmute, /deafen, /undeafen, /camera on, /camera off, /clear, /lang',
+        shortcut_unknown: 'Onbekende snelkoppeling. Typ /help voor opties.',
         history_empty: 'Nog geen recente commando\'s.',
     },
     en: {
@@ -369,6 +643,123 @@ const UI_STRINGS = {
         mobile_screenshot_save_failed: 'Could not save screenshot to your phone.',
         mobile_screenshot_open_missing: 'No screenshot available to open.',
         routine_prefill_ready: 'Draft ready. Add your text and send.',
+        camera_kicker: 'Camera Lab',
+        camera_start_button: 'Start Camera',
+        camera_stop_button: 'Stop Camera',
+        camera_scan_qr_button: 'Scan QR',
+        camera_mood_button: 'Mood Check',
+        camera_mute_button: 'Mute Mic',
+        camera_unmute_button: 'Unmute Mic',
+        camera_deafen_button: 'Deafen Echo',
+        camera_undeafen_button: 'Undeafen Echo',
+        camera_state_off: 'Camera: off',
+        camera_state_requesting: 'Camera: requesting permission...',
+        camera_state_ready: 'Camera: active',
+        camera_state_denied: 'Camera: permission denied',
+        camera_state_unavailable: 'Camera is not available in this browser',
+        camera_insight_idle: 'No QR or mood scan yet.',
+        camera_busy: 'Camera busy...',
+        camera_qr_scanning: 'Scanning QR code...',
+        camera_qr_found: 'QR found: {value}',
+        camera_qr_not_found: 'No QR code detected. Move closer and try again.',
+        camera_qr_not_supported: 'QR scanning is not supported in this browser.',
+        camera_qr_open_link_confirm: 'Open this QR link in a new tab?\n\n{url}',
+        camera_preview_not_ready: 'No camera frame available yet. Try again.',
+        camera_mood_scanning: 'Running mood check...',
+        camera_face_not_found: 'No face detected. Look at the camera and try again.',
+        camera_mood_manual_prompt: 'Type your mood: sad, chill, or happy',
+        camera_mood_manual_cancelled: 'Mood check canceled.',
+        camera_talk_check: 'Do you feel like talking with Echo right now?',
+        camera_talk_later: 'Understood. I will stay in the background until you call me.',
+        camera_mood_low: 'You look a bit low-energy.',
+        camera_mood_happy: 'You look cheerful.',
+        camera_mood_neutral: 'You look calm.',
+        camera_music_low_open: 'Opening uplifting music to raise your mood.',
+        camera_music_happy_open: 'Opening a happy playlist to keep your vibe going.',
+        camera_music_neutral_open: 'Opening calm music that matches your pace.',
+        camera_music_popup_blocked: 'Could not open a new tab. Allow pop-ups for this page.',
+        camera_mic_muted: 'Microphone muted. Echo is not listening.',
+        camera_mic_unmuted: 'Microphone unmuted. Echo can listen again.',
+        camera_mic_blocked: 'Microphone is muted. Click Unmute Mic in Camera Lab.',
+        camera_deafen_enabled: 'Echo deafened. Voice audio is off.',
+        camera_deafen_disabled: 'Echo undeafened. Voice audio is on again.',
+        stream_kicker: 'Streaming Deck',
+        stream_note: 'One-tap stream controls for OBS.',
+        stream_mode_button: 'Stream Mode',
+        stream_go_live_button: 'Go Live',
+        stream_stop_live_button: 'Stop Live',
+        stream_record_start_button: 'Start Recording',
+        stream_record_stop_button: 'Stop Recording',
+        stream_scene_live_button: 'Scene Live',
+        stream_scene_brb_button: 'Scene BRB',
+        stream_scene_game_button: 'Scene Game',
+        stream_marker_button: 'Drop Marker',
+        stream_mic_toggle_button: 'Mic Toggle',
+        stream_help_button: 'Stream Help',
+        website_audit_kicker: 'Website Audit',
+        website_audit_idle: 'Audit idle. Add a URL and start a scan.',
+        website_audit_running: 'Audit running: {stage} ({progress}%)',
+        website_audit_completed: 'Audit completed for {target}.',
+        website_audit_error: 'Audit error: {message}',
+        website_audit_url_placeholder: 'https://example.com',
+        website_audit_start_button: 'Start Audit',
+        website_audit_status_button: 'Audit Status',
+        website_audit_report_button: 'Latest Report',
+        website_audit_download_json_button: 'Download JSON',
+        website_audit_download_md_button: 'Download MD',
+        website_audit_download_pdf_button: 'Download PDF',
+        website_audit_schedule_status_button: 'Schedule Status',
+        website_audit_schedule_url_placeholder: 'Scheduler URL (optional)',
+        website_audit_schedule_webhook_placeholder: 'Alert webhook (optional)',
+        website_audit_schedule_enabled_label: 'Scheduler On',
+        website_audit_schedule_alert_critical_label: 'Alert Critical',
+        website_audit_schedule_save_button: 'Save Schedule',
+        website_audit_schedule_save_success: 'Website audit schedule saved.',
+        website_audit_schedule_save_failed: 'Could not save website audit schedule.',
+        website_audit_schedule_state_off: 'Scheduler: off',
+        website_audit_schedule_state_no_target: 'Scheduler is on ({frequency} {time}), but no target URL is configured.',
+        website_audit_schedule_state_on: 'Scheduler: {frequency} at {time} | Next: {next}',
+        website_audit_frequency_daily: 'Daily',
+        website_audit_frequency_weekly: 'Weekly',
+        website_audit_profile_quick: 'Quick',
+        website_audit_profile_standard: 'Standard',
+        website_audit_profile_security: 'Security',
+        website_audit_profile_full: 'Full',
+        website_audit_start_missing_url: 'Add a website URL first.',
+        website_audit_score_line: 'Score: {score}/100 ({grade})',
+        website_audit_score_pending: 'Score: --',
+        website_audit_meta_line: 'Pass: {pass} | Warn: {warn} | Fail: {fail}',
+        website_audit_findings_empty: 'No findings to show yet.',
+        website_audit_recommendations_empty: 'No remediation plan available yet.',
+        website_audit_logs_empty: 'No audit logs available yet.',
+        website_audit_download_unavailable: 'No audit report available for download.',
+        website_audit_download_started: 'Download started ({format}).',
+        overview_kicker: 'Command Center',
+        overview_filter_label: 'Filter Actions',
+        overview_filter_placeholder: 'Filter: stream, camera, security',
+        overview_filter_hint: 'Type to quickly find actions and routines.',
+        overview_filter_active: '{visible} visible, {hidden} hidden by filter.',
+        overview_chip_mic_ready: 'MIC READY',
+        overview_chip_mic_muted: 'MIC MUTED',
+        overview_chip_mic_listening: 'MIC LISTENING',
+        overview_chip_voice_ready: 'VOICE READY',
+        overview_chip_voice_deafened: 'VOICE DEAFENED',
+        overview_chip_voice_speaking: 'VOICE SPEAKING',
+        overview_chip_camera_on: 'CAMERA ON',
+        overview_chip_camera_off: 'CAMERA OFF',
+        overview_chip_pending_on: 'CONFIRM NEEDED',
+        overview_chip_pending_off: 'NO PENDING',
+        overview_chip_stream_live: 'STREAM LIVE',
+        overview_chip_stream_recording: 'STREAM REC',
+        overview_chip_stream_live_recording: 'LIVE + REC',
+        overview_chip_stream_idle: 'STREAM STANDBY',
+        panel_expand: 'Expand',
+        panel_collapse: 'Collapse',
+        voice_status_mic_muted: 'Microphone muted',
+        voice_button_muted: 'Mic Muted',
+        command_suggestions_empty: 'No suggestions',
+        shortcut_help_text: 'Local shortcuts: /help, /scanqr, /mood, /golive, /endlive, /record on, /record off, /scene live, /scene brb, /scene game, /marker, /stream on, /stream off, /stream help, /audit status, /audit report, /audit schedule, /mute, /unmute, /deafen, /undeafen, /camera on, /camera off, /clear, /lang',
+        shortcut_unknown: 'Unknown shortcut. Type /help for options.',
         history_empty: 'No recent commands yet.',
     },
 };
@@ -396,6 +787,11 @@ const THREAT_KEYWORDS = {
         'automate',
         'script',
         'macro',
+        'stream ',
+        'obs',
+        'go live',
+        'recording',
+        'scene ',
         'click',
         'type ',
         'press ',
@@ -826,6 +1222,551 @@ function renderLatestScreenshotPanel(payload = {}) {
     mobileOpenScreenshotBtn.disabled = !beschikbaar;
 }
 
+function normaliseerWebsiteAuditFrequency(waarde) {
+    const raw = String(waarde || '').trim().toLowerCase();
+    return raw === 'weekly' ? 'weekly' : 'daily';
+}
+
+function normaliseerWebsiteAuditTijd(waarde) {
+    const raw = String(waarde || '').trim();
+    const match = raw.match(/^(\d{1,2}):(\d{1,2})$/);
+    if (!match) {
+        return '04:30';
+    }
+
+    const uur = Number.parseInt(match[1], 10);
+    const minuut = Number.parseInt(match[2], 10);
+    if (!Number.isInteger(uur) || !Number.isInteger(minuut) || uur < 0 || uur > 23 || minuut < 0 || minuut > 59) {
+        return '04:30';
+    }
+
+    return `${String(uur).padStart(2, '0')}:${String(minuut).padStart(2, '0')}`;
+}
+
+function normaliseerWebsiteAuditSnapshot(payload = {}) {
+    const bron = payload && typeof payload === 'object' ? payload : {};
+    const vorige = appState.websiteAuditSnapshot && typeof appState.websiteAuditSnapshot === 'object'
+        ? appState.websiteAuditSnapshot
+        : {};
+
+    const parseIntSafe = (waarde, fallback = 0) => {
+        const nummer = Number(waarde);
+        if (!Number.isFinite(nummer)) {
+            return fallback;
+        }
+        return Math.max(0, Math.round(nummer));
+    };
+
+    const severityBron = bron.severity_totals && typeof bron.severity_totals === 'object'
+        ? bron.severity_totals
+        : (vorige.severity_totals && typeof vorige.severity_totals === 'object' ? vorige.severity_totals : {});
+
+    const findingsBron = Array.isArray(bron.findings_top)
+        ? bron.findings_top
+        : (Array.isArray(vorige.findings_top) ? vorige.findings_top : []);
+
+    const remediationBron = Array.isArray(bron.remediation_top)
+        ? bron.remediation_top
+        : (Array.isArray(vorige.remediation_top) ? vorige.remediation_top : []);
+
+    const logsBron = Array.isArray(bron.recent_logs)
+        ? bron.recent_logs
+        : (Array.isArray(vorige.recent_logs) ? vorige.recent_logs : []);
+
+    const downloadPathsBron = bron.download_paths && typeof bron.download_paths === 'object'
+        ? bron.download_paths
+        : (vorige.download_paths && typeof vorige.download_paths === 'object' ? vorige.download_paths : {});
+
+    return {
+        ...vorige,
+        running: parseerBoolWaarde(bron.running, parseerBoolWaarde(vorige.running, false)),
+        state: String(bron.state || vorige.state || 'idle').trim().toLowerCase() || 'idle',
+        scan_id: String(bron.scan_id || vorige.scan_id || '').trim().toLowerCase(),
+        stage: String(bron.stage || vorige.stage || '').trim(),
+        progress_percent: parseIntSafe(
+            Object.prototype.hasOwnProperty.call(bron, 'progress_percent') ? bron.progress_percent : vorige.progress_percent,
+            0
+        ),
+        profile: String(bron.profile || vorige.profile || 'standard').trim().toLowerCase() || 'standard',
+        target_url: String(bron.target_url || vorige.target_url || '').trim(),
+        target_host: String(bron.target_host || vorige.target_host || '').trim(),
+        score: parseIntSafe(Object.prototype.hasOwnProperty.call(bron, 'score') ? bron.score : vorige.score, 0),
+        grade: String(bron.grade || vorige.grade || '').trim(),
+        exposure_level: String(bron.exposure_level || vorige.exposure_level || '').trim(),
+        checks_total: parseIntSafe(Object.prototype.hasOwnProperty.call(bron, 'checks_total') ? bron.checks_total : vorige.checks_total, 0),
+        checks_passed: parseIntSafe(Object.prototype.hasOwnProperty.call(bron, 'checks_passed') ? bron.checks_passed : vorige.checks_passed, 0),
+        checks_warn: parseIntSafe(Object.prototype.hasOwnProperty.call(bron, 'checks_warn') ? bron.checks_warn : vorige.checks_warn, 0),
+        checks_failed: parseIntSafe(Object.prototype.hasOwnProperty.call(bron, 'checks_failed') ? bron.checks_failed : vorige.checks_failed, 0),
+        findings_total: parseIntSafe(Object.prototype.hasOwnProperty.call(bron, 'findings_total') ? bron.findings_total : vorige.findings_total, 0),
+        findings_top: findingsBron
+            .filter((item) => item && typeof item === 'object')
+            .slice(0, 8)
+            .map((item) => ({ ...item })),
+        remediation_top: remediationBron
+            .filter((item) => item && typeof item === 'object')
+            .slice(0, 8)
+            .map((item) => ({ ...item })),
+        recent_logs: logsBron
+            .filter((item) => item && typeof item === 'object')
+            .slice(-25)
+            .map((item) => ({
+                message: String(item.message || '').trim(),
+                at: Number(item.at || 0) || 0,
+            }))
+            .filter((item) => item.message),
+        severity_totals: {
+            critical: parseIntSafe(severityBron.critical, 0),
+            high: parseIntSafe(severityBron.high, 0),
+            medium: parseIntSafe(severityBron.medium, 0),
+            low: parseIntSafe(severityBron.low, 0),
+        },
+        last_result: String(bron.last_result || vorige.last_result || '').trim(),
+        last_error: String(bron.last_error || vorige.last_error || '').trim(),
+        last_report_json: String(bron.last_report_json || vorige.last_report_json || '').trim(),
+        last_report_markdown: String(bron.last_report_markdown || vorige.last_report_markdown || '').trim(),
+        last_report_pdf: String(bron.last_report_pdf || vorige.last_report_pdf || '').trim(),
+        pdf_available: parseerBoolWaarde(
+            Object.prototype.hasOwnProperty.call(bron, 'pdf_available') ? bron.pdf_available : vorige.pdf_available,
+            false
+        ),
+        download_paths: {
+            json: String(downloadPathsBron.json || '').trim(),
+            markdown: String(downloadPathsBron.markdown || '').trim(),
+            pdf: String(downloadPathsBron.pdf || '').trim(),
+        },
+    };
+}
+
+function normaliseerWebsiteAuditScheduleSnapshot(payload = {}) {
+    const bron = payload && typeof payload === 'object' ? payload : {};
+    const vorige = appState.websiteAuditScheduleSnapshot && typeof appState.websiteAuditScheduleSnapshot === 'object'
+        ? appState.websiteAuditScheduleSnapshot
+        : {};
+
+    const parseIntSafe = (waarde, fallback = 0, minimum = 0, maximum = 9999) => {
+        const nummer = Number(waarde);
+        if (!Number.isFinite(nummer)) {
+            return fallback;
+        }
+        return Math.min(maximum, Math.max(minimum, Math.round(nummer)));
+    };
+
+    return {
+        ...vorige,
+        enabled: parseerBoolWaarde(bron.enabled, parseerBoolWaarde(vorige.enabled, false)),
+        frequency: normaliseerWebsiteAuditFrequency(bron.frequency || vorige.frequency || 'daily'),
+        scheduled_time: normaliseerWebsiteAuditTijd(bron.scheduled_time || vorige.scheduled_time || '04:30'),
+        target_url: String(bron.target_url || vorige.target_url || '').trim(),
+        profile: String(bron.profile || vorige.profile || 'standard').trim().toLowerCase() || 'standard',
+        next_run_at: Number(bron.next_run_at || vorige.next_run_at || 0) || 0,
+        next_run_label: String(bron.next_run_label || vorige.next_run_label || '').trim(),
+        monitor_running: parseerBoolWaarde(bron.monitor_running, parseerBoolWaarde(vorige.monitor_running, false)),
+        alert_score_drop: parseIntSafe(bron.alert_score_drop || vorige.alert_score_drop, 12, 0, 60),
+        alert_on_critical: parseerBoolWaarde(bron.alert_on_critical, parseerBoolWaarde(vorige.alert_on_critical, true)),
+        alert_webhook_configured: parseerBoolWaarde(
+            bron.alert_webhook_configured,
+            parseerBoolWaarde(vorige.alert_webhook_configured, false)
+        ),
+        alert_webhook: String(bron.alert_webhook || vorige.alert_webhook || '').trim(),
+        last_alert_result: String(bron.last_alert_result || vorige.last_alert_result || '').trim(),
+        last_alert_at: Number(bron.last_alert_at || vorige.last_alert_at || 0) || 0,
+        last_completed_scan_id: String(bron.last_completed_scan_id || vorige.last_completed_scan_id || '').trim(),
+        last_completed_score: parseIntSafe(bron.last_completed_score || vorige.last_completed_score, 0, 0, 100),
+        updated_at: Number(bron.updated_at || vorige.updated_at || 0) || 0,
+    };
+}
+
+function normaliseerWebsiteAuditSeverity(waarde) {
+    const severity = String(waarde || '').trim().toLowerCase();
+    if (severity === 'critical' || severity === 'high' || severity === 'medium' || severity === 'low') {
+        return severity;
+    }
+    return 'low';
+}
+
+function websiteAuditFrequencyLabel(frequentie) {
+    const sleutel = 'website_audit_frequency_' + normaliseerWebsiteAuditFrequency(frequentie);
+    return uiTekst(sleutel);
+}
+
+function normaliseerWebsiteAuditDownloadFormaat(formaat) {
+    const waarde = String(formaat || '').trim().toLowerCase();
+    if (waarde === 'md' || waarde === 'markdown') {
+        return 'markdown';
+    }
+    if (waarde === 'pdf') {
+        return 'pdf';
+    }
+    return 'json';
+}
+
+function resolveWebsiteAuditDownloadPad(formaat, snapshot = appState.websiteAuditSnapshot) {
+    const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const norm = normaliseerWebsiteAuditDownloadFormaat(formaat);
+    const paths = data.download_paths && typeof data.download_paths === 'object' ? data.download_paths : {};
+    const explicietPad = String(paths[norm] || '').trim();
+    if (explicietPad) {
+        return explicietPad;
+    }
+
+    const scanId = String(data.scan_id || '').trim().toLowerCase();
+    if (scanId) {
+        return `/api/website-audit/report/${scanId}/download/${norm}`;
+    }
+    return `/api/website-audit/report/latest/download/${norm}`;
+}
+
+function resolveWebsiteAuditDownloadUrl(formaat, snapshot = appState.websiteAuditSnapshot) {
+    const pad = resolveWebsiteAuditDownloadPad(formaat, snapshot);
+    if (!pad) {
+        return '';
+    }
+
+    if (pad.startsWith('http://') || pad.startsWith('https://')) {
+        return pad;
+    }
+
+    const basis = normaliseerApiBaseUrl(appState.apiBaseUrl)
+        || (isHttpPaginaContext() ? normaliseerApiBaseUrl(window.location.origin) : '');
+    return combineerApiUrl(pad, basis);
+}
+
+function heeftWebsiteAuditRapport(snapshot = appState.websiteAuditSnapshot) {
+    const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    return Boolean(
+        data.scan_id
+        || data.last_report_json
+        || data.last_report_markdown
+        || data.last_report_pdf
+        || data.state === 'completed'
+    );
+}
+
+function updateWebsiteAuditDownloadButtons(snapshot = appState.websiteAuditSnapshot) {
+    const rapportBeschikbaar = heeftWebsiteAuditRapport(snapshot);
+    if (websiteAuditDownloadJsonBtn) {
+        websiteAuditDownloadJsonBtn.disabled = !rapportBeschikbaar;
+    }
+    if (websiteAuditDownloadMdBtn) {
+        websiteAuditDownloadMdBtn.disabled = !rapportBeschikbaar;
+    }
+    if (websiteAuditDownloadPdfBtn) {
+        const pdfMogelijk = rapportBeschikbaar && (parseerBoolWaarde(snapshot.pdf_available, false) || Boolean(snapshot.last_report_pdf));
+        websiteAuditDownloadPdfBtn.disabled = !pdfMogelijk;
+    }
+}
+
+function downloadWebsiteAuditReport(formaat) {
+    const url = resolveWebsiteAuditDownloadUrl(formaat);
+    if (!url) {
+        setCommandStatus(uiTekst('website_audit_download_unavailable'));
+        triggerHapticFeedback([90, 35, 90]);
+        return false;
+    }
+
+    try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.rel = 'noopener';
+        link.target = '_blank';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        setCommandStatus(uiTekst('website_audit_download_started', {
+            format: normaliseerWebsiteAuditDownloadFormaat(formaat).toUpperCase(),
+        }));
+        triggerHapticFeedback(45);
+        return true;
+    } catch (_error) {
+        setCommandStatus(uiTekst('website_audit_download_unavailable'));
+        triggerHapticFeedback([90, 35, 90]);
+        return false;
+    }
+}
+
+function formatteerWebsiteAuditLogTijd(unixSeconden) {
+    const waarde = Number(unixSeconden || 0);
+    if (!Number.isFinite(waarde) || waarde <= 0) {
+        return '';
+    }
+
+    try {
+        const taal = isNederlandsActief() ? 'nl-NL' : 'en-US';
+        return new Date(waarde * 1000).toLocaleTimeString(taal, {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+        });
+    } catch (_error) {
+        return '';
+    }
+}
+
+function renderWebsiteAuditRecommendations(snapshot) {
+    if (!websiteAuditRecommendations) {
+        return;
+    }
+
+    websiteAuditRecommendations.innerHTML = '';
+    const aanbevelingen = Array.isArray(snapshot.remediation_top) ? snapshot.remediation_top : [];
+
+    if (!aanbevelingen.length) {
+        const empty = document.createElement('p');
+        empty.className = 'website-audit-list-empty';
+        empty.textContent = uiTekst('website_audit_recommendations_empty');
+        websiteAuditRecommendations.appendChild(empty);
+        return;
+    }
+
+    aanbevelingen.slice(0, 3).forEach((item, index) => {
+        const title = String(item.title || item.action || '').trim() || `Action ${index + 1}`;
+        const rationale = String(item.rationale || item.reason || '').trim();
+        const effort = String(item.effort || '').trim();
+
+        const blok = document.createElement('article');
+        blok.className = 'website-audit-recommendation';
+
+        const titelEl = document.createElement('p');
+        titelEl.className = 'website-audit-recommendation__title';
+        titelEl.textContent = `${index + 1}. ${title}`;
+        blok.appendChild(titelEl);
+
+        if (rationale) {
+            const detailEl = document.createElement('p');
+            detailEl.textContent = rationale;
+            blok.appendChild(detailEl);
+        }
+
+        if (effort) {
+            const effortEl = document.createElement('p');
+            effortEl.textContent = `Effort: ${effort}`;
+            blok.appendChild(effortEl);
+        }
+
+        websiteAuditRecommendations.appendChild(blok);
+    });
+}
+
+function renderWebsiteAuditLogs(snapshot) {
+    if (!websiteAuditLogs) {
+        return;
+    }
+
+    websiteAuditLogs.innerHTML = '';
+    const logs = Array.isArray(snapshot.recent_logs) ? snapshot.recent_logs : [];
+
+    if (!logs.length) {
+        const empty = document.createElement('p');
+        empty.className = 'website-audit-list-empty';
+        empty.textContent = uiTekst('website_audit_logs_empty');
+        websiteAuditLogs.appendChild(empty);
+        return;
+    }
+
+    logs.slice(-8).reverse().forEach((item) => {
+        const regel = document.createElement('article');
+        regel.className = 'website-audit-log';
+
+        const tijd = formatteerWebsiteAuditLogTijd(item.at);
+        if (tijd) {
+            const tijdEl = document.createElement('span');
+            tijdEl.className = 'website-audit-log__time';
+            tijdEl.textContent = `[${tijd}]`;
+            regel.appendChild(tijdEl);
+        }
+
+        const tekstEl = document.createElement('span');
+        tekstEl.textContent = String(item.message || '').trim();
+        regel.appendChild(tekstEl);
+
+        websiteAuditLogs.appendChild(regel);
+    });
+}
+
+function renderWebsiteAuditFindings(snapshot) {
+    if (!websiteAuditFindings) {
+        return;
+    }
+
+    websiteAuditFindings.innerHTML = '';
+    const findings = Array.isArray(snapshot.findings_top) ? snapshot.findings_top : [];
+
+    if (!findings.length) {
+        const empty = document.createElement('p');
+        empty.className = 'website-audit-findings-empty';
+        empty.textContent = uiTekst('website_audit_findings_empty');
+        websiteAuditFindings.appendChild(empty);
+        return;
+    }
+
+    findings.slice(0, 5).forEach((finding) => {
+        const severity = normaliseerWebsiteAuditSeverity(finding.severity);
+        const status = String(finding.status || '').trim().toUpperCase() || 'INFO';
+        const title = String(finding.title || finding.check_id || 'Finding').trim();
+        const detail = String(finding.detail || '').trim();
+        const recommendation = String(finding.recommendation || '').trim();
+        const category = String(finding.category || '').trim();
+
+        const item = document.createElement('article');
+        item.className = 'website-audit-finding';
+        item.dataset.severity = severity;
+
+        const titleEl = document.createElement('p');
+        titleEl.className = 'website-audit-finding__title';
+        titleEl.textContent = `${status} | ${severity.toUpperCase()}${category ? ` | ${category.toUpperCase()}` : ''} | ${title}`;
+        item.appendChild(titleEl);
+
+        if (detail) {
+            const detailEl = document.createElement('p');
+            detailEl.className = 'website-audit-finding__detail';
+            detailEl.textContent = detail;
+            item.appendChild(detailEl);
+        }
+
+        if (recommendation) {
+            const recEl = document.createElement('p');
+            recEl.className = 'website-audit-finding__recommendation';
+            recEl.textContent = recommendation;
+            item.appendChild(recEl);
+        }
+
+        websiteAuditFindings.appendChild(item);
+    });
+}
+
+function renderWebsiteAuditSchedulePanel(payload = {}, options = {}) {
+    const snapshot = normaliseerWebsiteAuditScheduleSnapshot(payload);
+    appState.websiteAuditScheduleSnapshot = snapshot;
+
+    const frequentieLabel = websiteAuditFrequencyLabel(snapshot.frequency);
+    const volgende = String(snapshot.next_run_label || '').trim() || formatteerLocaleDatumTijd(snapshot.next_run_at) || '-';
+
+    if (websiteAuditScheduleState) {
+        if (!snapshot.enabled) {
+            websiteAuditScheduleState.textContent = uiTekst('website_audit_schedule_state_off');
+        } else if (!snapshot.target_url) {
+            websiteAuditScheduleState.textContent = uiTekst('website_audit_schedule_state_no_target', {
+                frequency: frequentieLabel,
+                time: snapshot.scheduled_time,
+            });
+        } else {
+            websiteAuditScheduleState.textContent = uiTekst('website_audit_schedule_state_on', {
+                frequency: frequentieLabel,
+                time: snapshot.scheduled_time,
+                next: volgende,
+            });
+        }
+
+        if (snapshot.last_alert_result) {
+            websiteAuditScheduleState.textContent += ` | ${snapshot.last_alert_result}`;
+        }
+    }
+
+    if (options.syncForm === false) {
+        return;
+    }
+
+    const veiligZetWaarde = (element, waarde) => {
+        if (!element || document.activeElement === element) {
+            return;
+        }
+        const tekst = String(waarde || '');
+        if (String(element.value || '') !== tekst) {
+            element.value = tekst;
+        }
+    };
+
+    veiligZetWaarde(websiteAuditFrequencySelect, snapshot.frequency);
+    veiligZetWaarde(websiteAuditTimeInput, snapshot.scheduled_time);
+    veiligZetWaarde(websiteAuditScheduleUrlInput, snapshot.target_url);
+    veiligZetWaarde(websiteAuditScheduleProfileSelect, snapshot.profile);
+    veiligZetWaarde(websiteAuditAlertDropInput, String(snapshot.alert_score_drop));
+
+    if (websiteAuditScheduleEnabledToggle && document.activeElement !== websiteAuditScheduleEnabledToggle) {
+        websiteAuditScheduleEnabledToggle.checked = snapshot.enabled;
+    }
+    if (websiteAuditAlertCriticalToggle && document.activeElement !== websiteAuditAlertCriticalToggle) {
+        websiteAuditAlertCriticalToggle.checked = snapshot.alert_on_critical;
+    }
+
+    if (websiteAuditWebhookInput && snapshot.alert_webhook && document.activeElement !== websiteAuditWebhookInput) {
+        websiteAuditWebhookInput.value = snapshot.alert_webhook;
+    }
+}
+
+function renderWebsiteAuditPanel(payload = {}) {
+    if (!websiteAuditState || !websiteAuditScore || !websiteAuditMeta) {
+        return;
+    }
+
+    const snapshot = normaliseerWebsiteAuditSnapshot(payload);
+    appState.websiteAuditSnapshot = snapshot;
+
+    const progress = Math.max(0, Math.min(100, Number(snapshot.progress_percent || 0)));
+    const stageLabel = snapshot.stage || tekstVoorTaal('working', 'bezig');
+    const targetLabel = snapshot.target_host || snapshot.target_url || tekstVoorTaal('target website', 'doelwebsite');
+
+    if (snapshot.running) {
+        websiteAuditState.textContent = uiTekst('website_audit_running', {
+            stage: stageLabel,
+            progress: String(progress),
+        });
+    } else if (snapshot.state === 'completed') {
+        websiteAuditState.textContent = snapshot.last_result || uiTekst('website_audit_completed', { target: targetLabel });
+    } else if (snapshot.state === 'error') {
+        websiteAuditState.textContent = uiTekst('website_audit_error', {
+            message: snapshot.last_result || snapshot.last_error || '-',
+        });
+    } else {
+        websiteAuditState.textContent = uiTekst('website_audit_idle');
+    }
+
+    if (websiteAuditProgressBar) {
+        websiteAuditProgressBar.style.width = `${progress}%`;
+    }
+
+    const heeftResultaat = snapshot.checks_total > 0 || snapshot.state === 'completed' || snapshot.state === 'error';
+    if (heeftResultaat) {
+        websiteAuditScore.textContent = uiTekst('website_audit_score_line', {
+            score: String(snapshot.score || 0),
+            grade: snapshot.grade || '--',
+        });
+    } else {
+        websiteAuditScore.textContent = uiTekst('website_audit_score_pending');
+    }
+
+    websiteAuditMeta.textContent = uiTekst('website_audit_meta_line', {
+        pass: String(snapshot.checks_passed || 0),
+        warn: String(snapshot.checks_warn || 0),
+        fail: String(snapshot.checks_failed || 0),
+    });
+
+    if (websiteAuditStartBtn) {
+        websiteAuditStartBtn.disabled = snapshot.running;
+    }
+    if (websiteAuditProfileSelect) {
+        websiteAuditProfileSelect.disabled = snapshot.running;
+        if (websiteAuditProfileSelect.value !== snapshot.profile) {
+            websiteAuditProfileSelect.value = snapshot.profile;
+        }
+    }
+
+    if (websiteAuditUrlInput && !String(websiteAuditUrlInput.value || '').trim() && snapshot.target_url) {
+        websiteAuditUrlInput.value = snapshot.target_url;
+    }
+
+    if (websiteAuditScheduleSaveBtn) {
+        websiteAuditScheduleSaveBtn.disabled = snapshot.running;
+    }
+
+    updateWebsiteAuditDownloadButtons(snapshot);
+    renderWebsiteAuditFindings(snapshot);
+    renderWebsiteAuditRecommendations(snapshot);
+    renderWebsiteAuditLogs(snapshot);
+}
+
 function saveLatestScreenshotToPhone(options = {}) {
     const snapshot = normaliseerScreenshotArtifact(appState.latestScreenshotSnapshot);
     if (!snapshot.available) {
@@ -901,6 +1842,1242 @@ function maybeAutoSaveScreenshotToPhone(snapshotPayload) {
     return saveLatestScreenshotToPhone({ allowOpenFallback: true });
 }
 
+function uniekeCommandoLijst(items) {
+    const gezien = new Set();
+    const resultaat = [];
+
+    items.forEach((item) => {
+        const tekst = String(item || '').trim();
+        if (!tekst) {
+            return;
+        }
+
+        const norm = normalizeText(tekst);
+        if (!norm || gezien.has(norm)) {
+            return;
+        }
+
+        gezien.add(norm);
+        resultaat.push(tekst);
+    });
+
+    return resultaat;
+}
+
+function zetOverviewChip(chip, tekst, state = 'idle') {
+    if (!chip) {
+        return;
+    }
+
+    chip.textContent = String(tekst || '').trim();
+    chip.dataset.state = state;
+}
+
+function renderCommandCenterStatus() {
+    const pendingActief = Boolean(pendingConfirm && !pendingConfirm.classList.contains('is-hidden'));
+    const micStateKey = appState.micMuted
+        ? 'overview_chip_mic_muted'
+        : (appState.listeningActive ? 'overview_chip_mic_listening' : 'overview_chip_mic_ready');
+    const micChipState = appState.micMuted ? 'warn' : (appState.listeningActive ? 'active' : 'idle');
+
+    const voiceStateKey = appState.deafenEnabled
+        ? 'overview_chip_voice_deafened'
+        : (appState.speakingActive ? 'overview_chip_voice_speaking' : 'overview_chip_voice_ready');
+    const voiceChipState = appState.deafenEnabled ? 'warn' : (appState.speakingActive ? 'active' : 'idle');
+
+    const cameraActief = Boolean(appState.cameraStream);
+    const cameraStateKey = cameraActief ? 'overview_chip_camera_on' : 'overview_chip_camera_off';
+
+    let streamStateKey = 'overview_chip_stream_idle';
+    if (appState.streamLive && appState.streamRecording) {
+        streamStateKey = 'overview_chip_stream_live_recording';
+    } else if (appState.streamLive) {
+        streamStateKey = 'overview_chip_stream_live';
+    } else if (appState.streamRecording) {
+        streamStateKey = 'overview_chip_stream_recording';
+    }
+
+    zetOverviewChip(overviewMicChip, uiTekst(micStateKey), micChipState);
+    zetOverviewChip(overviewVoiceChip, uiTekst(voiceStateKey), voiceChipState);
+    zetOverviewChip(overviewCameraChip, uiTekst(cameraStateKey), cameraActief ? 'active' : 'idle');
+    zetOverviewChip(
+        overviewPendingChip,
+        uiTekst(pendingActief ? 'overview_chip_pending_on' : 'overview_chip_pending_off'),
+        pendingActief ? 'warn' : 'idle'
+    );
+    zetOverviewChip(overviewStreamChip, uiTekst(streamStateKey), streamStateKey === 'overview_chip_stream_idle' ? 'idle' : 'active');
+}
+
+function syncStreamStatusUitContext(commandText, serverMessage = '') {
+    const combined = normalizeText(`${String(commandText || '')} ${String(serverMessage || '')}`);
+    if (!combined) {
+        return;
+    }
+
+    if (
+        combined.includes('stream mode off')
+        || combined.includes('stream-modus uit')
+        || combined.includes('stream mode disabled')
+    ) {
+        appState.streamLive = false;
+        appState.streamRecording = false;
+    }
+
+    if (
+        combined.includes('stream recording stop')
+        || combined.includes('stop recording')
+        || combined.includes('recording stop')
+        || combined.includes('opname stoppen')
+    ) {
+        appState.streamRecording = false;
+    }
+
+    if (
+        combined.includes('stream stop')
+        || combined.includes('stop stream')
+        || combined.includes('stop live')
+        || combined.includes('stream stoppen')
+    ) {
+        appState.streamLive = false;
+    }
+
+    if (
+        combined.includes('stream recording start')
+        || combined.includes('start recording')
+        || combined.includes('recording start')
+        || combined.includes('opname starten')
+    ) {
+        appState.streamRecording = true;
+    }
+
+    if (
+        combined.includes('stream start')
+        || combined.includes('go live')
+        || combined.includes('ga live')
+        || combined.includes('stream starten')
+    ) {
+        appState.streamLive = true;
+    }
+
+    renderCommandCenterStatus();
+}
+
+function actieFilterTekstVoorKnop(button) {
+    const label = String(button && button.textContent ? button.textContent : '').trim();
+    const commando = String(button && button.dataset ? (button.dataset.command || '') : '').trim();
+    const fillCommand = String(button && button.dataset ? (button.dataset.fillCommand || '') : '').trim();
+    return normalizeText(`${label} ${commando} ${fillCommand}`);
+}
+
+function applyActionFilter() {
+    if (!actionFilterInput) {
+        return;
+    }
+
+    const query = String(actionFilterInput.value || '').trim();
+    appState.actionFilterQuery = query;
+    const queryNorm = normalizeText(query);
+
+    const collapsibleBlokken = Array.from(document.querySelectorAll('.panel-block.is-collapsible'));
+    if (queryNorm) {
+        collapsibleBlokken.forEach((blok) => {
+            if (blok.classList.contains('is-collapsed')) {
+                blok.dataset.filterExpanded = '1';
+                setPanelIngeklapt(blok, false, { persist: false });
+            }
+        });
+    } else {
+        const opslag = leesPanelCollapseOpslag();
+        collapsibleBlokken.forEach((blok) => {
+            if (blok.dataset.filterExpanded !== '1') {
+                return;
+            }
+
+            delete blok.dataset.filterExpanded;
+            const sleutel = String(blok.dataset.panelKey || '').trim();
+            const opgeslagenWaarde = sleutel ? opslag[sleutel] : undefined;
+            const heeftOpgeslagenWaarde = typeof opgeslagenWaarde === 'boolean';
+            const gewensteInklapStatus = heeftOpgeslagenWaarde ? opgeslagenWaarde : isStandaardIngeklapt(blok);
+            setPanelIngeklapt(blok, gewensteInklapStatus, { persist: false });
+        });
+    }
+
+    let zichtbaar = 0;
+    let verborgen = 0;
+    const actieKnoppen = Array.from(document.querySelectorAll(ACTION_FILTER_BUTTON_SELECTOR));
+
+    actieKnoppen.forEach((button) => {
+        const filterTekst = actieFilterTekstVoorKnop(button);
+        const zichtbaarNu = !queryNorm || filterTekst.includes(queryNorm);
+        button.classList.toggle('is-filter-hidden', !zichtbaarNu);
+        if (zichtbaarNu) {
+            zichtbaar += 1;
+        } else {
+            verborgen += 1;
+        }
+    });
+
+    const panelBlokken = Array.from(document.querySelectorAll('.hud-panel .panel-block'));
+    panelBlokken.forEach((blok) => {
+        if (blok.id === 'commandCenterPanel') {
+            return;
+        }
+
+        const knopElementen = Array.from(blok.querySelectorAll(ACTION_FILTER_BUTTON_SELECTOR));
+        if (!knopElementen.length) {
+            blok.classList.remove('is-filter-empty');
+            return;
+        }
+
+        const heeftZichtbaar = knopElementen.some((element) => !element.classList.contains('is-filter-hidden'));
+        blok.classList.toggle('is-filter-empty', Boolean(queryNorm) && !heeftZichtbaar);
+    });
+
+    if (actionFilterHint) {
+        actionFilterHint.textContent = queryNorm
+            ? uiTekst('overview_filter_active', { visible: String(zichtbaar), hidden: String(verborgen) })
+            : uiTekst('overview_filter_hint');
+    }
+}
+
+function leesPanelCollapseOpslag() {
+    try {
+        const raw = localStorage.getItem(PANEL_COLLAPSE_STORAGE_KEY);
+        if (!raw) {
+            return {};
+        }
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_error) {
+        return {};
+    }
+}
+
+function schrijfPanelCollapseOpslag(waarde) {
+    try {
+        localStorage.setItem(PANEL_COLLAPSE_STORAGE_KEY, JSON.stringify(waarde));
+    } catch (_error) {
+        // Ignore storage errors (private mode, quota).
+    }
+}
+
+function panelSleutelVoorBlok(blok, index) {
+    const metId = String(blok.id || '').trim();
+    if (metId) {
+        return metId;
+    }
+
+    const kicker = blok.querySelector('.panel-kicker');
+    const kickerSleutel = normalizeText(kicker ? kicker.textContent : '').replace(/\s+/g, '-').slice(0, 36);
+    return kickerSleutel ? `panel-${kickerSleutel}` : `panel-${index + 1}`;
+}
+
+function isStandaardIngeklapt(blok) {
+    return STANDAARD_INGEKLAPTE_PANEL_IDS.includes(String(blok.id || '').trim());
+}
+
+function setPanelIngeklapt(blok, ingeklapt, opties = {}) {
+    const collapsed = Boolean(ingeklapt);
+    blok.classList.toggle('is-collapsed', collapsed);
+
+    const toggle = blok.querySelector('.panel-collapse-toggle');
+    if (toggle) {
+        toggle.textContent = collapsed ? '+' : '-';
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        toggle.setAttribute('title', uiTekst(collapsed ? 'panel_expand' : 'panel_collapse'));
+        toggle.setAttribute('aria-label', uiTekst(collapsed ? 'panel_expand' : 'panel_collapse'));
+    }
+
+    if (opties.persist !== false) {
+        const opslag = leesPanelCollapseOpslag();
+        const sleutel = String(blok.dataset.panelKey || '').trim();
+        if (sleutel) {
+            opslag[sleutel] = collapsed;
+            schrijfPanelCollapseOpslag(opslag);
+        }
+    }
+}
+
+function updatePanelCollapseToggleLabels() {
+    const blokken = Array.from(document.querySelectorAll('.panel-block.is-collapsible'));
+    blokken.forEach((blok) => {
+        const isCollapsed = blok.classList.contains('is-collapsed');
+        const toggle = blok.querySelector('.panel-collapse-toggle');
+        if (!toggle) {
+            return;
+        }
+        toggle.setAttribute('title', uiTekst(isCollapsed ? 'panel_expand' : 'panel_collapse'));
+        toggle.setAttribute('aria-label', uiTekst(isCollapsed ? 'panel_expand' : 'panel_collapse'));
+    });
+}
+
+function initPanelCollapseControls() {
+    const blokken = Array.from(document.querySelectorAll('.hud-panel .panel-block'));
+    const opslag = leesPanelCollapseOpslag();
+
+    blokken.forEach((blok, index) => {
+        if (blok.dataset.collapseReady === '1') {
+            return;
+        }
+
+        if (blok.id === 'commandCenterPanel' || blok.id === 'pendingConfirm' || blok.classList.contains('aux-actions')) {
+            return;
+        }
+
+        const kicker = blok.querySelector('.panel-kicker');
+        if (!kicker) {
+            return;
+        }
+
+        const sleutel = panelSleutelVoorBlok(blok, index);
+        blok.dataset.panelKey = sleutel;
+        blok.dataset.collapseReady = '1';
+        blok.classList.add('is-collapsible');
+
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'panel-collapse-toggle';
+        toggle.addEventListener('click', () => {
+            const nieuweState = !blok.classList.contains('is-collapsed');
+            setPanelIngeklapt(blok, nieuweState, { persist: true });
+            renderCommandCenterStatus();
+        });
+        blok.appendChild(toggle);
+
+        const opgeslagenWaarde = opslag[sleutel];
+        const heeftOpgeslagenWaarde = typeof opgeslagenWaarde === 'boolean';
+        const startIngeklapt = heeftOpgeslagenWaarde ? opgeslagenWaarde : isStandaardIngeklapt(blok);
+        setPanelIngeklapt(blok, startIngeklapt, { persist: false });
+    });
+
+    updatePanelCollapseToggleLabels();
+}
+
+function verzamelPaneelCommandoSuggesties() {
+    const knoppen = [...quickButtons, ...routineButtons];
+    const suggesties = [];
+
+    knoppen.forEach((button) => {
+        const command = String(button && button.dataset ? (button.dataset.command || '') : '').trim();
+        if (command) {
+            suggesties.push(command);
+        }
+
+        const fillCommand = String(button && button.dataset ? (button.dataset.fillCommand || '') : '').trim();
+        if (fillCommand) {
+            suggesties.push(fillCommand + '...');
+        }
+    });
+
+    return uniekeCommandoLijst(suggesties);
+}
+
+function scoreSuggestie(zoekNorm, suggestieTekst) {
+    const suggestieNorm = normalizeText(suggestieTekst);
+    if (!zoekNorm) {
+        return 0;
+    }
+
+    if (suggestieNorm === zoekNorm) {
+        return 120;
+    }
+    if (suggestieNorm.startsWith(zoekNorm)) {
+        return 90;
+    }
+    if (suggestieNorm.includes(zoekNorm)) {
+        return 50;
+    }
+    return -1;
+}
+
+function buildCommandSuggestions(invoer) {
+    const query = String(invoer || '').trim();
+    if (!query) {
+        return [];
+    }
+
+    const queryNorm = normalizeText(query).replace(/^\//, '');
+    if (!queryNorm) {
+        return [];
+    }
+
+    const bronnen = uniekeCommandoLijst([
+        ...LOCAL_SLASH_SUGGESTIONS,
+        ...appState.commandHistory,
+        ...verzamelPaneelCommandoSuggesties(),
+    ]);
+
+    const ranked = bronnen
+        .map((suggestie) => ({
+            text: suggestie,
+            score: scoreSuggestie(queryNorm, suggestie),
+        }))
+        .filter((item) => item.score >= 0)
+        .sort((a, b) => {
+            if (b.score !== a.score) {
+                return b.score - a.score;
+            }
+            return a.text.length - b.text.length;
+        })
+        .slice(0, MAX_COMMAND_SUGGESTIONS);
+
+    return ranked.map((item) => item.text);
+}
+
+function renderCommandSuggestions(suggesties, options = {}) {
+    if (!commandSuggestions) {
+        return;
+    }
+
+    const lijst = Array.isArray(suggesties) ? suggesties : [];
+    appState.visibleCommandSuggestions = lijst;
+
+    if (!lijst.length) {
+        appState.selectedSuggestionIndex = -1;
+        commandSuggestions.innerHTML = '';
+        if (options.showEmpty) {
+            const empty = document.createElement('p');
+            empty.className = 'command-suggestions-empty';
+            empty.textContent = uiTekst('command_suggestions_empty');
+            commandSuggestions.appendChild(empty);
+        }
+        return;
+    }
+
+    if (appState.selectedSuggestionIndex >= lijst.length) {
+        appState.selectedSuggestionIndex = 0;
+    }
+
+    commandSuggestions.innerHTML = '';
+
+    lijst.forEach((suggestie, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'command-suggestion';
+        if (index === appState.selectedSuggestionIndex) {
+            button.classList.add('is-active');
+        }
+        button.textContent = suggestie;
+        button.title = suggestie;
+        button.addEventListener('click', () => {
+            setCommandDraft(suggestie);
+            appState.selectedSuggestionIndex = index;
+            renderCommandSuggestions(lijst);
+        });
+        commandSuggestions.appendChild(button);
+    });
+}
+
+function refreshCommandSuggestionsFromInput() {
+    const waarde = String(commandInput ? commandInput.value : '').trim();
+    if (!waarde) {
+        renderCommandSuggestions([]);
+        return;
+    }
+
+    const suggesties = buildCommandSuggestions(waarde);
+    appState.selectedSuggestionIndex = suggesties.length ? 0 : -1;
+    renderCommandSuggestions(suggesties, { showEmpty: waarde.startsWith('/') });
+}
+
+function kiesActieveSuggestie() {
+    const lijst = appState.visibleCommandSuggestions;
+    if (!Array.isArray(lijst) || !lijst.length) {
+        return false;
+    }
+
+    const index = appState.selectedSuggestionIndex >= 0 ? appState.selectedSuggestionIndex : 0;
+    const gekozen = String(lijst[index] || '').trim();
+    if (!gekozen) {
+        return false;
+    }
+
+    setCommandDraft(gekozen);
+    refreshCommandSuggestionsFromInput();
+    return true;
+}
+
+function navigeerSuggesties(richting) {
+    const lijst = appState.visibleCommandSuggestions;
+    if (!Array.isArray(lijst) || !lijst.length) {
+        return false;
+    }
+
+    if (appState.selectedSuggestionIndex < 0) {
+        appState.selectedSuggestionIndex = 0;
+    } else {
+        const volgende = appState.selectedSuggestionIndex + richting;
+        if (volgende < 0) {
+            appState.selectedSuggestionIndex = lijst.length - 1;
+        } else if (volgende >= lijst.length) {
+            appState.selectedSuggestionIndex = 0;
+        } else {
+            appState.selectedSuggestionIndex = volgende;
+        }
+    }
+
+    renderCommandSuggestions(lijst);
+    return true;
+}
+
+function hideCommandSuggestions() {
+    renderCommandSuggestions([]);
+}
+
+async function handelLokaleSnelkoppelingAf(commandText, source = 'text') {
+    const commando = String(commandText || '').trim();
+    if (!commando.startsWith('/')) {
+        return false;
+    }
+
+    if (source !== 'system') {
+        addMessage('user', commando);
+    }
+
+    const inhoud = commando.slice(1).trim().toLowerCase();
+
+    if (inhoud === 'help') {
+        const melding = uiTekst('shortcut_help_text');
+        addMessage('ai', melding);
+        setCommandStatus(melding);
+        const gesproken = await speakText(melding, { profile: 'status' });
+        if (!gesproken) {
+            pulseSpeaking(900);
+        }
+        return true;
+    }
+
+    if (inhoud === 'scanqr') {
+        await voerQrScanUit();
+        return true;
+    }
+
+    if (inhoud === 'mood') {
+        await voerMoodCheckUit();
+        return true;
+    }
+
+    if (inhoud === 'golive') {
+        await sendCommand('stream start', 'system');
+        return true;
+    }
+
+    if (inhoud === 'endlive') {
+        await sendCommand('stream stop', 'system');
+        return true;
+    }
+
+    if (inhoud === 'record on') {
+        await sendCommand('stream recording start', 'system');
+        return true;
+    }
+
+    if (inhoud === 'record off') {
+        await sendCommand('stream recording stop', 'system');
+        return true;
+    }
+
+    if (inhoud === 'scene live') {
+        await sendCommand('stream scene live', 'system');
+        return true;
+    }
+
+    if (inhoud === 'scene brb') {
+        await sendCommand('stream scene brb', 'system');
+        return true;
+    }
+
+    if (inhoud === 'scene game') {
+        await sendCommand('stream scene game', 'system');
+        return true;
+    }
+
+    if (inhoud === 'marker') {
+        await sendCommand('stream marker', 'system');
+        return true;
+    }
+
+    if (inhoud === 'stream on') {
+        await sendCommand('stream mode on', 'system');
+        return true;
+    }
+
+    if (inhoud === 'stream off') {
+        await sendCommand('stream mode off', 'system');
+        return true;
+    }
+
+    if (inhoud === 'stream help') {
+        await sendCommand('stream help', 'system');
+        return true;
+    }
+
+    if (inhoud === 'audit status') {
+        await sendCommand('website audit status', 'system');
+        return true;
+    }
+
+    if (inhoud === 'audit report') {
+        await sendCommand('website audit report latest', 'system');
+        return true;
+    }
+
+    if (inhoud === 'audit schedule') {
+        await sendCommand('website audit schedule status', 'system');
+        return true;
+    }
+
+    if (inhoud === 'mute') {
+        setMicMuted(true);
+        return true;
+    }
+
+    if (inhoud === 'unmute') {
+        setMicMuted(false);
+        return true;
+    }
+
+    if (inhoud === 'deafen') {
+        setDeafenEnabled(true);
+        return true;
+    }
+
+    if (inhoud === 'undeafen') {
+        setDeafenEnabled(false);
+        return true;
+    }
+
+    if (inhoud === 'camera on') {
+        await voerCameraTaakUit(async () => {
+            const gestart = await startCameraStream();
+            if (gestart) {
+                triggerHapticFeedback(40);
+            }
+            return gestart;
+        });
+        return true;
+    }
+
+    if (inhoud === 'camera off') {
+        stopCameraStream();
+        zetCameraInsightTekst(uiTekst('camera_insight_idle'));
+        setCommandStatus(uiTekst('camera_state_off'));
+        renderCameraPanel();
+        triggerHapticFeedback(30);
+        return true;
+    }
+
+    if (inhoud === 'clear') {
+        clearFeed();
+        setCommandStatus(uiTekst('feed_cleared'));
+        triggerHapticFeedback(35);
+        return true;
+    }
+
+    if (inhoud === 'lang') {
+        await toggleAppLanguage();
+        return true;
+    }
+
+    const onbekend = uiTekst('shortcut_unknown');
+    addMessage('error', onbekend);
+    setCommandStatus(onbekend);
+    triggerHapticFeedback([80, 28, 80]);
+    return true;
+}
+
+function cameraIsBeschikbaar() {
+    return Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function');
+}
+
+function qrDetectieBeschikbaar() {
+    return typeof window.BarcodeDetector === 'function';
+}
+
+function gezichtDetectieBeschikbaar() {
+    return typeof window.FaceDetector === 'function';
+}
+
+function zetCameraInsightTekst(tekst) {
+    if (cameraInsight) {
+        cameraInsight.textContent = String(tekst || '').trim();
+    }
+}
+
+function zetCameraOverlayTekst(tekst) {
+    if (cameraPreviewOverlay) {
+        cameraPreviewOverlay.textContent = String(tekst || '').trim();
+    }
+}
+
+function renderCameraPanel() {
+    const cameraActief = Boolean(appState.cameraStream);
+    const cameraBeschikbaar = cameraIsBeschikbaar();
+    const previewShell = cameraPreview ? cameraPreview.closest('.camera-preview-shell') : null;
+
+    if (previewShell) {
+        previewShell.classList.toggle('is-live', cameraActief);
+    }
+
+    if (cameraState) {
+        if (!cameraBeschikbaar) {
+            cameraState.textContent = uiTekst('camera_state_unavailable');
+        } else if (cameraActief) {
+            cameraState.textContent = uiTekst('camera_state_ready');
+        } else if (appState.cameraPermission === 'denied') {
+            cameraState.textContent = uiTekst('camera_state_denied');
+        } else if (appState.cameraBusy) {
+            cameraState.textContent = uiTekst('camera_busy');
+        } else {
+            cameraState.textContent = uiTekst('camera_state_off');
+        }
+    }
+
+    if (!cameraActief) {
+        if (!cameraBeschikbaar) {
+            zetCameraOverlayTekst(uiTekst('camera_state_unavailable'));
+        } else if (appState.cameraPermission === 'denied') {
+            zetCameraOverlayTekst(uiTekst('camera_state_denied'));
+        } else if (appState.cameraBusy) {
+            zetCameraOverlayTekst(uiTekst('camera_busy'));
+        } else {
+            zetCameraOverlayTekst(uiTekst('camera_state_off'));
+        }
+    } else if (appState.cameraBusy) {
+        zetCameraOverlayTekst(uiTekst('camera_busy'));
+    } else {
+        zetCameraOverlayTekst(uiTekst('camera_state_ready'));
+    }
+
+    if (cameraStartBtn) {
+        cameraStartBtn.disabled = !cameraBeschikbaar || cameraActief || appState.cameraBusy;
+    }
+    if (cameraStopBtn) {
+        cameraStopBtn.disabled = !cameraActief || appState.cameraBusy;
+    }
+    if (cameraScanQrBtn) {
+        cameraScanQrBtn.disabled = !cameraBeschikbaar || appState.cameraBusy;
+    }
+    if (cameraMoodBtn) {
+        cameraMoodBtn.disabled = !cameraBeschikbaar || appState.cameraBusy;
+    }
+    if (cameraMuteBtn) {
+        cameraMuteBtn.disabled = appState.cameraBusy;
+        cameraMuteBtn.textContent = appState.micMuted
+            ? uiTekst('camera_unmute_button')
+            : uiTekst('camera_mute_button');
+    }
+    if (cameraDeafenBtn) {
+        cameraDeafenBtn.disabled = appState.cameraBusy;
+        cameraDeafenBtn.textContent = appState.deafenEnabled
+            ? uiTekst('camera_undeafen_button')
+            : uiTekst('camera_deafen_button');
+    }
+
+    if (cameraInsight && !String(cameraInsight.textContent || '').trim()) {
+        cameraInsight.textContent = uiTekst('camera_insight_idle');
+    }
+
+    renderCommandCenterStatus();
+}
+
+function setMicMuted(actief, opties = {}) {
+    const volgend = Boolean(actief);
+    if (volgend === appState.micMuted) {
+        renderCameraPanel();
+        return;
+    }
+
+    appState.micMuted = volgend;
+
+    if (volgend) {
+        appState.listeningWanted = false;
+        stopRecognition();
+        setListening(false);
+    }
+
+    const melding = uiTekst(volgend ? 'camera_mic_muted' : 'camera_mic_unmuted');
+    setCommandStatus(melding);
+    zetCameraInsightTekst(melding);
+    if (opties.feed !== false) {
+        addMessage('ai', melding);
+    }
+    triggerHapticFeedback(volgend ? [65, 28, 65] : 45);
+    updateSpeechButtonLabel();
+    renderCameraPanel();
+}
+
+function setDeafenEnabled(actief, opties = {}) {
+    const volgend = Boolean(actief);
+    if (volgend === appState.deafenEnabled) {
+        renderCameraPanel();
+        return;
+    }
+
+    appState.deafenEnabled = volgend;
+    appState.voiceOutputEnabled = volgend ? false : appState.voiceOutputUserEnabled;
+
+    if (volgend) {
+        stopActiveSpeechPlayback();
+    }
+
+    const melding = uiTekst(volgend ? 'camera_deafen_enabled' : 'camera_deafen_disabled');
+    setCommandStatus(melding);
+    zetCameraInsightTekst(melding);
+    if (opties.feed !== false) {
+        addMessage('ai', melding);
+    }
+    triggerHapticFeedback(volgend ? [65, 28, 65] : 45);
+    updateIdleVoiceStatus();
+    renderCameraPanel();
+}
+
+async function voerCameraTaakUit(taak) {
+    if (appState.cameraBusy) {
+        return false;
+    }
+
+    appState.cameraBusy = true;
+    renderCameraPanel();
+
+    try {
+        return await taak();
+    } finally {
+        appState.cameraBusy = false;
+        renderCameraPanel();
+    }
+}
+
+function stopCameraStream() {
+    if (appState.cameraStream) {
+        appState.cameraStream.getTracks().forEach((track) => {
+            try {
+                track.stop();
+            } catch (_error) {
+                // Ignore individual track stop errors.
+            }
+        });
+    }
+
+    appState.cameraStream = null;
+    if (cameraPreview) {
+        try {
+            cameraPreview.pause();
+        } catch (_error) {
+            // Ignore pause errors.
+        }
+        cameraPreview.srcObject = null;
+    }
+}
+
+async function startCameraStream() {
+    if (!cameraIsBeschikbaar()) {
+        const melding = uiTekst('camera_state_unavailable');
+        setCommandStatus(melding);
+        zetCameraInsightTekst(melding);
+        renderCameraPanel();
+        return false;
+    }
+
+    if (appState.cameraStream) {
+        renderCameraPanel();
+        return true;
+    }
+
+    if (cameraState) {
+        cameraState.textContent = uiTekst('camera_state_requesting');
+    }
+    zetCameraOverlayTekst(uiTekst('camera_state_requesting'));
+
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                facingMode: 'user',
+                width: { ideal: 960 },
+                height: { ideal: 540 },
+            },
+        });
+
+        appState.cameraStream = stream;
+        appState.cameraPermission = 'granted';
+
+        if (cameraPreview) {
+            cameraPreview.srcObject = stream;
+            try {
+                await cameraPreview.play();
+            } catch (_error) {
+                // Some browsers need a next gesture to start playback.
+            }
+        }
+
+        if (!cameraInsight || !String(cameraInsight.textContent || '').trim()) {
+            zetCameraInsightTekst(uiTekst('camera_insight_idle'));
+        }
+
+        setCommandStatus(uiTekst('camera_state_ready'));
+        renderCameraPanel();
+        return true;
+    } catch (error) {
+        const foutcode = error && typeof error === 'object' && 'name' in error ? String(error.name || '') : '';
+        appState.cameraPermission = foutcode === 'NotAllowedError' ? 'denied' : 'unknown';
+
+        const melding = appState.cameraPermission === 'denied'
+            ? uiTekst('camera_state_denied')
+            : uiTekst('camera_state_unavailable');
+        setCommandStatus(melding);
+        zetCameraInsightTekst(melding);
+        renderCameraPanel();
+        triggerHapticFeedback([90, 35, 90]);
+        return false;
+    }
+}
+
+async function wachtOpCameraFrame(timeoutMs = 2000) {
+    if (!cameraPreview) {
+        return false;
+    }
+
+    const startedAt = Date.now();
+    while ((Date.now() - startedAt) < timeoutMs) {
+        if (cameraPreview.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && cameraPreview.videoWidth > 0 && cameraPreview.videoHeight > 0) {
+            return true;
+        }
+        await sleep(90);
+    }
+    return false;
+}
+
+function veiligeHttpUrlUitTekst(waarde) {
+    const tekst = String(waarde || '').trim();
+    if (!tekst) {
+        return '';
+    }
+
+    try {
+        const parsed = new URL(tekst);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+            return parsed.toString();
+        }
+    } catch (_error) {
+        return '';
+    }
+
+    return '';
+}
+
+async function detecteerQrWaardeUitPreview() {
+    if (!cameraPreview || !qrDetectieBeschikbaar()) {
+        return '';
+    }
+
+    let detector = null;
+    try {
+        detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+    } catch (_error) {
+        try {
+            detector = new window.BarcodeDetector();
+        } catch (_innerError) {
+            return '';
+        }
+    }
+
+    for (let poging = 0; poging < CAMERA_SCAN_ATTEMPTS; poging += 1) {
+        try {
+            const resultaten = await detector.detect(cameraPreview);
+            if (Array.isArray(resultaten) && resultaten.length) {
+                const waarde = String(resultaten[0].rawValue || '').trim();
+                if (waarde) {
+                    return waarde;
+                }
+            }
+        } catch (_error) {
+            // Keep trying within the retry window.
+        }
+
+        await sleep(CAMERA_SCAN_INTERVAL_MS);
+    }
+
+    return '';
+}
+
+function puntenVoorLandmark(landmarks, typeNaam) {
+    if (!Array.isArray(landmarks)) {
+        return [];
+    }
+
+    const match = landmarks.find((item) => {
+        const type = normalizeText(item && item.type ? item.type : '');
+        return type === normalizeText(typeNaam);
+    });
+
+    if (!match || !Array.isArray(match.locations)) {
+        return [];
+    }
+
+    return match.locations.filter((punt) => punt && Number.isFinite(punt.x) && Number.isFinite(punt.y));
+}
+
+function berekenPuntenBereik(punten) {
+    if (!Array.isArray(punten) || !punten.length) {
+        return { width: 0, height: 0 };
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    punten.forEach((punt) => {
+        minX = Math.min(minX, punt.x);
+        maxX = Math.max(maxX, punt.x);
+        minY = Math.min(minY, punt.y);
+        maxY = Math.max(maxY, punt.y);
+    });
+
+    return {
+        width: Math.max(0, maxX - minX),
+        height: Math.max(0, maxY - minY),
+    };
+}
+
+function schatMoodVanGezicht(gezicht) {
+    const landmarks = Array.isArray(gezicht && gezicht.landmarks) ? gezicht.landmarks : [];
+    const mondPunten = puntenVoorLandmark(landmarks, 'mouth');
+    if (!mondPunten.length) {
+        return 'unknown';
+    }
+
+    const mondBereik = berekenPuntenBereik(mondPunten);
+    const gezichtBreedte = Number(gezicht && gezicht.boundingBox && gezicht.boundingBox.width) || 1;
+    const mondBreedteRatio = mondBereik.width / Math.max(1, gezichtBreedte);
+    const mondOpenRatio = mondBereik.height / Math.max(1, gezichtBreedte);
+
+    // Snelle heuristiek: we schatten vibe op basis van mondvorm, zonder biometrie op te slaan.
+    if (mondBreedteRatio >= 0.36 || mondOpenRatio >= 0.1) {
+        return 'happy';
+    }
+    if (mondBreedteRatio <= 0.24 && mondOpenRatio <= 0.05) {
+        return 'low';
+    }
+    return 'neutral';
+}
+
+async function detecteerMoodUitPreview() {
+    if (!cameraPreview || !gezichtDetectieBeschikbaar()) {
+        return 'unknown';
+    }
+
+    let detector = null;
+    try {
+        detector = new window.FaceDetector({
+            fastMode: true,
+            maxDetectedFaces: 1,
+        });
+    } catch (_error) {
+        return 'unknown';
+    }
+
+    for (let poging = 0; poging < CAMERA_SCAN_ATTEMPTS; poging += 1) {
+        try {
+            const gezichten = await detector.detect(cameraPreview);
+            if (Array.isArray(gezichten) && gezichten.length) {
+                return schatMoodVanGezicht(gezichten[0]);
+            }
+        } catch (_error) {
+            return 'unknown';
+        }
+
+        await sleep(CAMERA_SCAN_INTERVAL_MS);
+    }
+
+    return 'no-face';
+}
+
+function normaliseerMoodInvoer(waarde) {
+    const tekst = normalizeText(waarde);
+    if (!tekst) {
+        return '';
+    }
+
+    const lageMoodHints = ['sad', 'down', 'low', 'verdrietig', 'somber', 'moe'];
+    if (lageMoodHints.some((hint) => tekst.includes(hint))) {
+        return 'low';
+    }
+
+    const blijeMoodHints = ['happy', 'blij', 'vrolijk', 'energetic', 'energiek'];
+    if (blijeMoodHints.some((hint) => tekst.includes(hint))) {
+        return 'happy';
+    }
+
+    const neutraleMoodHints = ['neutral', 'neutraal', 'chill', 'calm', 'rustig', 'ok'];
+    if (neutraleMoodHints.some((hint) => tekst.includes(hint))) {
+        return 'neutral';
+    }
+
+    return '';
+}
+
+function muziekPlanVoorMood(mood) {
+    if (mood === 'low') {
+        return {
+            moodSleutel: 'camera_mood_low',
+            muziekSleutel: 'camera_music_low_open',
+            zoekterm: 'uplifting happy music mix',
+        };
+    }
+
+    if (mood === 'happy') {
+        return {
+            moodSleutel: 'camera_mood_happy',
+            muziekSleutel: 'camera_music_happy_open',
+            zoekterm: 'happy upbeat playlist',
+        };
+    }
+
+    return {
+        moodSleutel: 'camera_mood_neutral',
+        muziekSleutel: 'camera_music_neutral_open',
+        zoekterm: 'calm focus music mix',
+    };
+}
+
+function openYouTubeZoekresultaat(zoekterm) {
+    const query = String(zoekterm || '').trim();
+    if (!query) {
+        return false;
+    }
+
+    const doelUrl = YOUTUBE_SEARCH_BASE_URL + encodeURIComponent(query);
+    const popup = window.open(doelUrl, '_blank', 'noopener');
+    return Boolean(popup);
+}
+
+async function voerQrScanUit() {
+    return await voerCameraTaakUit(async () => {
+        setCommandStatus(uiTekst('camera_qr_scanning'));
+        zetCameraInsightTekst(uiTekst('camera_qr_scanning'));
+
+        const cameraKlaar = await startCameraStream();
+        if (!cameraKlaar) {
+            return false;
+        }
+
+        if (!qrDetectieBeschikbaar()) {
+            const melding = uiTekst('camera_qr_not_supported');
+            setCommandStatus(melding);
+            zetCameraInsightTekst(melding);
+            return false;
+        }
+
+        const frameKlaar = await wachtOpCameraFrame();
+        if (!frameKlaar) {
+            const melding = uiTekst('camera_preview_not_ready');
+            setCommandStatus(melding);
+            zetCameraInsightTekst(melding);
+            return false;
+        }
+
+        const qrWaarde = await detecteerQrWaardeUitPreview();
+        if (!qrWaarde) {
+            const melding = uiTekst('camera_qr_not_found');
+            setCommandStatus(melding);
+            zetCameraInsightTekst(melding);
+            triggerHapticFeedback([80, 30, 80]);
+            return false;
+        }
+
+        const gevondenTekst = uiTekst('camera_qr_found', { value: qrWaarde });
+        setCommandStatus(gevondenTekst);
+        zetCameraInsightTekst(gevondenTekst);
+        addMessage('ai', gevondenTekst);
+        triggerHapticFeedback([60, 35, 60]);
+
+        const qrUrl = veiligeHttpUrlUitTekst(qrWaarde);
+        if (qrUrl) {
+            const wilOpenen = window.confirm(uiTekst('camera_qr_open_link_confirm', { url: qrUrl }));
+            if (wilOpenen) {
+                window.open(qrUrl, '_blank', 'noopener');
+            }
+        }
+
+        return true;
+    });
+}
+
+async function voerMoodCheckUit() {
+    return await voerCameraTaakUit(async () => {
+        setCommandStatus(uiTekst('camera_mood_scanning'));
+        zetCameraInsightTekst(uiTekst('camera_mood_scanning'));
+
+        const cameraKlaar = await startCameraStream();
+        if (!cameraKlaar) {
+            return false;
+        }
+
+        const frameKlaar = await wachtOpCameraFrame();
+        if (!frameKlaar) {
+            const melding = uiTekst('camera_preview_not_ready');
+            setCommandStatus(melding);
+            zetCameraInsightTekst(melding);
+            return false;
+        }
+
+        let mood = await detecteerMoodUitPreview();
+        if (mood === 'no-face') {
+            const melding = uiTekst('camera_face_not_found');
+            setCommandStatus(melding);
+            zetCameraInsightTekst(melding);
+            triggerHapticFeedback([80, 30, 80]);
+            return false;
+        }
+
+        if (mood === 'unknown') {
+            const handmatigeMood = window.prompt(uiTekst('camera_mood_manual_prompt'), 'sad');
+            mood = normaliseerMoodInvoer(handmatigeMood);
+            if (!mood) {
+                const melding = uiTekst('camera_mood_manual_cancelled');
+                setCommandStatus(melding);
+                zetCameraInsightTekst(melding);
+                return false;
+            }
+        }
+
+        appState.lastDetectedMood = mood;
+
+        const wilPraten = window.confirm(uiTekst('camera_talk_check'));
+        if (!wilPraten) {
+            const melding = uiTekst('camera_talk_later');
+            setCommandStatus(melding);
+            zetCameraInsightTekst(melding);
+            addMessage('ai', melding);
+            triggerHapticFeedback(42);
+            return true;
+        }
+
+        const plan = muziekPlanVoorMood(mood);
+        const moodTekst = uiTekst(plan.moodSleutel);
+        const muziekTekst = uiTekst(plan.muziekSleutel);
+        const volledigeTekst = moodTekst + ' ' + muziekTekst;
+
+        setCommandStatus(muziekTekst);
+        zetCameraInsightTekst(volledigeTekst);
+        addMessage('ai', volledigeTekst);
+
+        const geopend = openYouTubeZoekresultaat(plan.zoekterm);
+        if (!geopend) {
+            const blokMelding = uiTekst('camera_music_popup_blocked');
+            addMessage('error', blokMelding);
+            setCommandStatus(blokMelding);
+            triggerHapticFeedback([90, 35, 90]);
+            return false;
+        }
+
+        triggerHapticFeedback([55, 30, 55]);
+        return true;
+    });
+}
+
 function triggerHapticFeedback(pattern) {
     if (!('vibrate' in navigator)) {
         return;
@@ -967,6 +3144,7 @@ function setCommandDraft(value) {
     commandInput.focus();
     const end = commandInput.value.length;
     commandInput.setSelectionRange(end, end);
+    refreshCommandSuggestionsFromInput();
 }
 
 function navigateCommandHistory(direction) {
@@ -1402,6 +3580,12 @@ async function refreshDashboardTelemetry() {
         if (payload.latest_screenshot) {
             renderLatestScreenshotPanel(payload.latest_screenshot);
         }
+        if (payload.website_audit) {
+            renderWebsiteAuditPanel(payload.website_audit);
+        }
+        if (payload.website_audit_schedule) {
+            renderWebsiteAuditSchedulePanel(payload.website_audit_schedule);
+        }
         if (payload.pending_confirmation) {
             renderPendingConfirmation(payload.pending_confirmation);
         }
@@ -1435,6 +3619,22 @@ async function refreshDashboardTelemetry() {
             }
         } catch (_innerScreenshotError) {
             // Ignore screenshot fallback errors.
+        }
+
+        try {
+            const auditFallback = await fetchEchoApi('/api/website-audit/status', {
+                method: 'GET',
+                cache: 'no-store',
+            }, 1400);
+            if (auditFallback.ok) {
+                const auditData = await auditFallback.json().catch(() => null);
+                if (auditData && typeof auditData === 'object') {
+                    renderWebsiteAuditPanel(auditData.audit || auditData);
+                    renderWebsiteAuditSchedulePanel(auditData.schedule || auditData.website_audit_schedule || {});
+                }
+            }
+        } catch (_innerAuditError) {
+            // Ignore audit fallback errors.
         }
     }
 }
@@ -2132,6 +4332,12 @@ function updateSpeechButtonLabel() {
         return;
     }
 
+    if (appState.micMuted) {
+        speechBtn.disabled = true;
+        speechBtn.textContent = uiTekst('voice_button_muted');
+        return;
+    }
+
     if (appState.voiceInputMode === 'upload') {
         speechBtn.disabled = appState.voiceUploadInFlight;
         speechBtn.textContent = appState.voiceUploadInFlight
@@ -2211,6 +4417,188 @@ function updateLocalizedUiLabels() {
         dailySecurityKicker.textContent = uiTekst('daily_security_kicker');
     }
 
+    if (cameraKicker) {
+        cameraKicker.textContent = uiTekst('camera_kicker');
+    }
+
+    if (cameraStartBtn) {
+        cameraStartBtn.textContent = uiTekst('camera_start_button');
+    }
+
+    if (cameraStopBtn) {
+        cameraStopBtn.textContent = uiTekst('camera_stop_button');
+    }
+
+    if (cameraScanQrBtn) {
+        cameraScanQrBtn.textContent = uiTekst('camera_scan_qr_button');
+    }
+
+    if (cameraMoodBtn) {
+        cameraMoodBtn.textContent = uiTekst('camera_mood_button');
+    }
+
+    if (streamKicker) {
+        streamKicker.textContent = uiTekst('stream_kicker');
+    }
+
+    if (streamStatusNote) {
+        streamStatusNote.textContent = uiTekst('stream_note');
+    }
+
+    if (streamModeBtn) {
+        streamModeBtn.textContent = uiTekst('stream_mode_button');
+    }
+
+    if (streamGoLiveBtn) {
+        streamGoLiveBtn.textContent = uiTekst('stream_go_live_button');
+    }
+
+    if (streamStopBtn) {
+        streamStopBtn.textContent = uiTekst('stream_stop_live_button');
+    }
+
+    if (streamRecStartBtn) {
+        streamRecStartBtn.textContent = uiTekst('stream_record_start_button');
+    }
+
+    if (streamRecStopBtn) {
+        streamRecStopBtn.textContent = uiTekst('stream_record_stop_button');
+    }
+
+    if (streamSceneLiveBtn) {
+        streamSceneLiveBtn.textContent = uiTekst('stream_scene_live_button');
+    }
+
+    if (streamSceneBrbBtn) {
+        streamSceneBrbBtn.textContent = uiTekst('stream_scene_brb_button');
+    }
+
+    if (streamSceneGameBtn) {
+        streamSceneGameBtn.textContent = uiTekst('stream_scene_game_button');
+    }
+
+    if (streamMarkerBtn) {
+        streamMarkerBtn.textContent = uiTekst('stream_marker_button');
+    }
+
+    if (streamMicBtn) {
+        streamMicBtn.textContent = uiTekst('stream_mic_toggle_button');
+    }
+
+    if (streamHelpBtn) {
+        streamHelpBtn.textContent = uiTekst('stream_help_button');
+    }
+
+    if (websiteAuditKicker) {
+        websiteAuditKicker.textContent = uiTekst('website_audit_kicker');
+    }
+
+    if (websiteAuditUrlInput) {
+        websiteAuditUrlInput.placeholder = uiTekst('website_audit_url_placeholder');
+    }
+
+    if (websiteAuditStartBtn) {
+        websiteAuditStartBtn.textContent = uiTekst('website_audit_start_button');
+    }
+
+    if (websiteAuditStatusBtn) {
+        websiteAuditStatusBtn.textContent = uiTekst('website_audit_status_button');
+    }
+
+    if (websiteAuditReportBtn) {
+        websiteAuditReportBtn.textContent = uiTekst('website_audit_report_button');
+    }
+
+    if (websiteAuditDownloadJsonBtn) {
+        websiteAuditDownloadJsonBtn.textContent = uiTekst('website_audit_download_json_button');
+    }
+
+    if (websiteAuditDownloadMdBtn) {
+        websiteAuditDownloadMdBtn.textContent = uiTekst('website_audit_download_md_button');
+    }
+
+    if (websiteAuditDownloadPdfBtn) {
+        websiteAuditDownloadPdfBtn.textContent = uiTekst('website_audit_download_pdf_button');
+    }
+
+    if (websiteAuditScheduleStatusBtn) {
+        websiteAuditScheduleStatusBtn.textContent = uiTekst('website_audit_schedule_status_button');
+    }
+
+    if (websiteAuditScheduleUrlInput) {
+        websiteAuditScheduleUrlInput.placeholder = uiTekst('website_audit_schedule_url_placeholder');
+    }
+
+    if (websiteAuditWebhookInput) {
+        websiteAuditWebhookInput.placeholder = uiTekst('website_audit_schedule_webhook_placeholder');
+    }
+
+    if (websiteAuditScheduleEnabledToggle) {
+        const label = websiteAuditScheduleEnabledToggle.closest('label');
+        const tekst = label ? label.querySelector('span') : null;
+        if (tekst) {
+            tekst.textContent = uiTekst('website_audit_schedule_enabled_label');
+        }
+    }
+
+    if (websiteAuditAlertCriticalToggle) {
+        const label = websiteAuditAlertCriticalToggle.closest('label');
+        const tekst = label ? label.querySelector('span') : null;
+        if (tekst) {
+            tekst.textContent = uiTekst('website_audit_schedule_alert_critical_label');
+        }
+    }
+
+    if (websiteAuditScheduleSaveBtn) {
+        websiteAuditScheduleSaveBtn.textContent = uiTekst('website_audit_schedule_save_button');
+    }
+
+    if (websiteAuditProfileSelect) {
+        Array.from(websiteAuditProfileSelect.options || []).forEach((optie) => {
+            const waarde = String(optie.value || '').trim().toLowerCase();
+            if (!waarde) {
+                return;
+            }
+            optie.textContent = uiTekst('website_audit_profile_' + waarde);
+        });
+    }
+
+    if (websiteAuditScheduleProfileSelect) {
+        Array.from(websiteAuditScheduleProfileSelect.options || []).forEach((optie) => {
+            const waarde = String(optie.value || '').trim().toLowerCase();
+            if (!waarde) {
+                return;
+            }
+            optie.textContent = uiTekst('website_audit_profile_' + waarde);
+        });
+    }
+
+    if (websiteAuditFrequencySelect) {
+        Array.from(websiteAuditFrequencySelect.options || []).forEach((optie) => {
+            const waarde = normaliseerWebsiteAuditFrequency(optie.value);
+            optie.textContent = uiTekst('website_audit_frequency_' + waarde);
+        });
+    }
+
+    if (overviewKicker) {
+        overviewKicker.textContent = uiTekst('overview_kicker');
+    }
+
+    if (actionFilterLabel) {
+        actionFilterLabel.textContent = uiTekst('overview_filter_label');
+    }
+
+    if (actionFilterInput) {
+        actionFilterInput.placeholder = uiTekst('overview_filter_placeholder');
+        if (actionFilterInput.value !== appState.actionFilterQuery) {
+            actionFilterInput.value = appState.actionFilterQuery;
+        }
+    }
+
+    if (actionFilterHint && !normalizeText(appState.actionFilterQuery)) {
+        actionFilterHint.textContent = uiTekst('overview_filter_hint');
+    }
+
     if (!pendingConfirm || pendingConfirm.classList.contains('is-hidden')) {
         resetPendingCommandsDefaults();
     }
@@ -2218,7 +4606,14 @@ function updateLocalizedUiLabels() {
     renderDailySecurityPanel(appState.dailySecuritySnapshot);
     renderMobileAccessPanel(appState.mobileAccessSnapshot);
     renderLatestScreenshotPanel(appState.latestScreenshotSnapshot);
+    renderWebsiteAuditPanel(appState.websiteAuditSnapshot);
+    renderWebsiteAuditSchedulePanel(appState.websiteAuditScheduleSnapshot);
+    renderCameraPanel();
     renderCommandHistory();
+    refreshCommandSuggestionsFromInput();
+    updatePanelCollapseToggleLabels();
+    applyActionFilter();
+    renderCommandCenterStatus();
 
     setMode(appState.dashboardActive);
     updateWakeGateStatus();
@@ -2335,31 +4730,24 @@ function refreshCoreStateClasses() {
 }
 
 function updateIdleVoiceStatus() {
+    let statusTekst = uiTekst('voice_standby');
+
     if (appState.speakingActive) {
-        setVoiceStatus(uiTekst('voice_speaking'));
-        return;
+        statusTekst = uiTekst('voice_speaking');
+    } else if (appState.voiceUploadInFlight) {
+        statusTekst = uiTekst('voice_upload_processing');
+    } else if (appState.micMuted) {
+        statusTekst = uiTekst('voice_status_mic_muted');
+    } else if (appState.listeningActive) {
+        statusTekst = appState.wakeArmed
+            ? uiTekst('voice_wake_confirmed')
+            : uiTekst('voice_listening_for_wake', { wakeWord: appState.wakeWord });
+    } else if (appState.voiceInputMode === 'upload') {
+        statusTekst = uiTekst('voice_manual_mobile_hint');
     }
 
-    if (appState.voiceUploadInFlight) {
-        setVoiceStatus(uiTekst('voice_upload_processing'));
-        return;
-    }
-
-    if (appState.listeningActive) {
-        if (appState.wakeArmed) {
-            setVoiceStatus(uiTekst('voice_wake_confirmed'));
-        } else {
-            setVoiceStatus(uiTekst('voice_listening_for_wake', { wakeWord: appState.wakeWord }));
-        }
-        return;
-    }
-
-    if (appState.voiceInputMode === 'upload') {
-        setVoiceStatus(uiTekst('voice_manual_mobile_hint'));
-        return;
-    }
-
-    setVoiceStatus(uiTekst('voice_standby'));
+    setVoiceStatus(statusTekst);
+    renderCommandCenterStatus();
 }
 
 function setSpeaking(active) {
@@ -2478,6 +4866,7 @@ function renderPendingConfirmation(payload) {
         pendingConfirm.classList.add('is-hidden');
         pendingConfirmText.textContent = '';
         resetPendingCommandsDefaults();
+        renderCommandCenterStatus();
         return;
     }
 
@@ -2492,11 +4881,19 @@ function renderPendingConfirmation(payload) {
 
     appState.pendingCommands.confirm = String(payload.confirm_command || uiTekst('pending_confirm_command')).trim() || uiTekst('pending_confirm_command');
     appState.pendingCommands.cancel = String(payload.cancel_command || uiTekst('pending_cancel_command')).trim() || uiTekst('pending_cancel_command');
+    renderCommandCenterStatus();
 }
 
 async function sendCommand(command, source = 'text') {
     const commandText = String(command || '').trim();
+    const commandNormalized = normalizeText(commandText);
     if (!commandText) {
+        return;
+    }
+
+    hideCommandSuggestions();
+
+    if (await handelLokaleSnelkoppelingAf(commandText, source)) {
         return;
     }
 
@@ -2594,6 +4991,9 @@ async function sendCommand(command, source = 'text') {
             ? tekstVoorTaal('Done.', 'Klaar.')
             : tekstVoorTaal('Command failed.', 'Opdracht mislukt.'));
         const hasPendingConfirmation = Boolean(data.pending_confirmation && data.pending_confirmation.pending);
+        if (ok && !hasPendingConfirmation && !data.duplicate_ignored) {
+            syncStreamStatusUitContext(commandText, message);
+        }
         const screenshotArtifact = normaliseerScreenshotArtifact(data.artifacts && data.artifacts.screenshot);
         if (screenshotArtifact.available) {
             renderLatestScreenshotPanel(screenshotArtifact);
@@ -2647,6 +5047,10 @@ async function sendCommand(command, source = 'text') {
         }
 
         renderPendingConfirmation(data.pending_confirmation);
+
+        if (ok && commandNormalized.startsWith('website audit')) {
+            void refreshDashboardTelemetry();
+        }
 
         if (screenshotArtifact.available) {
             maybeAutoSaveScreenshotToPhone(screenshotArtifact);
@@ -2883,6 +5287,15 @@ function toggleListening() {
         return;
     }
 
+    if (appState.micMuted) {
+        const melding = uiTekst('camera_mic_blocked');
+        setVoiceStatus(uiTekst('voice_status_mic_muted'));
+        setCommandStatus(melding);
+        zetCameraInsightTekst(melding);
+        triggerHapticFeedback([80, 30, 80]);
+        return;
+    }
+
     if (appState.voiceInputMode === 'upload') {
         openVoiceUploadCapturePicker();
         return;
@@ -3033,6 +5446,10 @@ async function loadSettings() {
 
         appState.aiName = String(settings.naam || 'Echo');
         appState.voiceOutputEnabled = settings.spraak_uitgang !== false;
+        appState.voiceOutputUserEnabled = appState.voiceOutputEnabled;
+        if (appState.deafenEnabled) {
+            appState.voiceOutputEnabled = false;
+        }
 
         appState.wakeWord = String(settings.wake_word || 'hey echo').trim() || 'hey echo';
         appState.browserVoicePreference = String(settings.browser_stem || '').trim();
@@ -3047,6 +5464,15 @@ async function loadSettings() {
         renderDailySecurityPanel({
             enabled: parseerBoolWaarde(settings.security_scan_daily_enabled, false),
             scheduled_time: String(settings.security_scan_daily_time || '03:00').trim() || '03:00',
+        });
+        renderWebsiteAuditSchedulePanel({
+            enabled: parseerBoolWaarde(settings.website_audit_schedule_enabled, false),
+            frequency: String(settings.website_audit_schedule_frequency || 'daily').trim().toLowerCase(),
+            scheduled_time: String(settings.website_audit_schedule_time || '04:30').trim() || '04:30',
+            target_url: String(settings.website_audit_schedule_target_url || '').trim(),
+            profile: String(settings.website_audit_schedule_profile || 'standard').trim().toLowerCase(),
+            alert_score_drop: Number(settings.website_audit_alert_score_drop || 12),
+            alert_on_critical: parseerBoolWaarde(settings.website_audit_alert_on_critical, true),
         });
         renderMobileAccessPanel(appState.mobileAccessSnapshot);
 
@@ -3111,8 +5537,8 @@ function wireEvents() {
     if (commandForm) {
         commandForm.addEventListener('submit', (event) => {
             event.preventDefault();
-            const value = commandInput ? commandInput.value : '';
-            if (!String(value || '').trim()) {
+            const value = String(commandInput ? commandInput.value : '').trim();
+            if (!value) {
                 return;
             }
             void sendCommand(value, 'text');
@@ -3120,18 +5546,237 @@ function wireEvents() {
                 commandInput.value = '';
                 commandInput.focus();
             }
+            hideCommandSuggestions();
+        });
+    }
+
+    if (websiteAuditForm) {
+        websiteAuditForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const doelUrl = String(websiteAuditUrlInput ? websiteAuditUrlInput.value : '').trim();
+            const profiel = String(websiteAuditProfileSelect ? websiteAuditProfileSelect.value : 'standard').trim().toLowerCase() || 'standard';
+            if (!doelUrl) {
+                setCommandStatus(uiTekst('website_audit_start_missing_url'));
+                triggerHapticFeedback([90, 35, 90]);
+                if (websiteAuditUrlInput) {
+                    websiteAuditUrlInput.focus();
+                }
+                return;
+            }
+
+            if (websiteAuditStartBtn) {
+                websiteAuditStartBtn.disabled = true;
+            }
+
+            try {
+                const response = await fetchEchoApi('/api/website-audit/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url: doelUrl,
+                        profile: profiel,
+                    }),
+                }, 12000);
+
+                const data = await response.json().catch(() => ({
+                    status: 'error',
+                    message: uiTekst('invalid_server_response'),
+                }));
+
+                const ok = response.ok && data.status === 'success';
+                const melding = String(data.message || '').trim() || (ok
+                    ? tekstVoorTaal('Website audit started.', 'Website-audit gestart.')
+                    : tekstVoorTaal('Website audit could not start.', 'Website-audit kon niet starten.'));
+
+                if (ok) {
+                    addMessage('ai', melding);
+                    setCommandStatus(melding);
+                    triggerHapticFeedback(55);
+                } else {
+                    addMessage('error', melding);
+                    setCommandStatus(melding);
+                    triggerHapticFeedback([90, 35, 90]);
+                }
+
+                if (data && typeof data === 'object' && data.audit) {
+                    renderWebsiteAuditPanel(data.audit);
+                }
+                void refreshDashboardTelemetry();
+            } catch (error) {
+                const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+                const melding = rawMessage || uiTekst('request_failed');
+                addMessage('error', melding);
+                setCommandStatus(melding);
+                triggerHapticFeedback([90, 35, 90]);
+            } finally {
+                renderWebsiteAuditPanel(appState.websiteAuditSnapshot);
+            }
+        });
+    }
+
+    if (websiteAuditScheduleForm) {
+        websiteAuditScheduleForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const enabled = Boolean(websiteAuditScheduleEnabledToggle && websiteAuditScheduleEnabledToggle.checked);
+            const frequency = normaliseerWebsiteAuditFrequency(
+                websiteAuditFrequencySelect ? websiteAuditFrequencySelect.value : 'daily'
+            );
+            const scheduledTime = normaliseerWebsiteAuditTijd(
+                websiteAuditTimeInput ? websiteAuditTimeInput.value : '04:30'
+            );
+            const targetUrl = String(
+                (websiteAuditScheduleUrlInput && websiteAuditScheduleUrlInput.value)
+                || (websiteAuditUrlInput && websiteAuditUrlInput.value)
+                || ''
+            ).trim();
+            const profile = String(
+                (websiteAuditScheduleProfileSelect && websiteAuditScheduleProfileSelect.value)
+                || (websiteAuditProfileSelect && websiteAuditProfileSelect.value)
+                || 'standard'
+            ).trim().toLowerCase() || 'standard';
+            const alertWebhook = String(websiteAuditWebhookInput ? websiteAuditWebhookInput.value : '').trim();
+            const alertScoreDrop = Number(websiteAuditAlertDropInput ? websiteAuditAlertDropInput.value : 12);
+            const alertOnCritical = Boolean(websiteAuditAlertCriticalToggle && websiteAuditAlertCriticalToggle.checked);
+
+            if (websiteAuditScheduleSaveBtn) {
+                websiteAuditScheduleSaveBtn.disabled = true;
+            }
+
+            try {
+                const response = await fetchEchoApi('/api/website-audit/schedule', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        enabled,
+                        frequency,
+                        scheduled_time: scheduledTime,
+                        target_url: targetUrl,
+                        profile,
+                        alert_webhook: alertWebhook,
+                        alert_score_drop: Number.isFinite(alertScoreDrop) ? Math.round(alertScoreDrop) : 12,
+                        alert_on_critical: alertOnCritical,
+                    }),
+                }, 12000);
+
+                const data = await response.json().catch(() => ({
+                    status: 'error',
+                    message: uiTekst('invalid_server_response'),
+                }));
+
+                const ok = response.ok && data.status === 'success';
+                const melding = String(data.message || '').trim() || (ok
+                    ? uiTekst('website_audit_schedule_save_success')
+                    : uiTekst('website_audit_schedule_save_failed'));
+
+                if (ok) {
+                    addMessage('ai', melding);
+                    setCommandStatus(melding);
+                    triggerHapticFeedback(45);
+                } else {
+                    addMessage('error', melding);
+                    setCommandStatus(melding);
+                    triggerHapticFeedback([90, 35, 90]);
+                }
+
+                if (data && typeof data === 'object' && data.schedule) {
+                    renderWebsiteAuditSchedulePanel(data.schedule);
+                }
+                void refreshDashboardTelemetry();
+            } catch (error) {
+                const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+                const melding = rawMessage || uiTekst('website_audit_schedule_save_failed');
+                addMessage('error', melding);
+                setCommandStatus(melding);
+                triggerHapticFeedback([90, 35, 90]);
+            } finally {
+                if (websiteAuditScheduleSaveBtn) {
+                    websiteAuditScheduleSaveBtn.disabled = false;
+                }
+            }
+        });
+    }
+
+    if (websiteAuditDownloadJsonBtn) {
+        websiteAuditDownloadJsonBtn.addEventListener('click', () => {
+            downloadWebsiteAuditReport('json');
+        });
+    }
+
+    if (websiteAuditDownloadMdBtn) {
+        websiteAuditDownloadMdBtn.addEventListener('click', () => {
+            downloadWebsiteAuditReport('markdown');
+        });
+    }
+
+    if (websiteAuditDownloadPdfBtn) {
+        websiteAuditDownloadPdfBtn.addEventListener('click', () => {
+            downloadWebsiteAuditReport('pdf');
         });
     }
 
     if (commandInput) {
+        commandInput.addEventListener('input', () => {
+            refreshCommandSuggestionsFromInput();
+        });
+
         commandInput.addEventListener('keydown', (event) => {
             if (event.key === 'ArrowUp') {
                 event.preventDefault();
-                navigateCommandHistory(-1);
+                const hadSuggestions = navigeerSuggesties(-1);
+                if (!hadSuggestions) {
+                    navigateCommandHistory(-1);
+                }
             } else if (event.key === 'ArrowDown') {
                 event.preventDefault();
-                navigateCommandHistory(1);
+                const hadSuggestions = navigeerSuggesties(1);
+                if (!hadSuggestions) {
+                    navigateCommandHistory(1);
+                }
+            } else if (event.key === 'Tab') {
+                if (kiesActieveSuggestie()) {
+                    event.preventDefault();
+                }
+            } else if (event.key === 'Escape') {
+                hideCommandSuggestions();
             }
+        });
+
+        commandInput.addEventListener('blur', () => {
+            window.setTimeout(() => {
+                hideCommandSuggestions();
+            }, 120);
+        });
+
+        commandInput.addEventListener('focus', () => {
+            refreshCommandSuggestionsFromInput();
+        });
+    }
+
+    if (actionFilterInput) {
+        actionFilterInput.addEventListener('input', () => {
+            applyActionFilter();
+        });
+
+        actionFilterInput.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') {
+                return;
+            }
+
+            const heeftWaarde = Boolean(String(actionFilterInput.value || '').trim());
+            if (heeftWaarde) {
+                actionFilterInput.value = '';
+                applyActionFilter();
+                event.preventDefault();
+                return;
+            }
+
+            actionFilterInput.blur();
         });
     }
 
@@ -3210,6 +5855,61 @@ function wireEvents() {
     if (mobileOpenScreenshotBtn) {
         mobileOpenScreenshotBtn.addEventListener('click', () => {
             openLatestScreenshotInBrowser();
+        });
+    }
+
+    if (cameraStartBtn) {
+        cameraStartBtn.addEventListener('click', () => {
+            void voerCameraTaakUit(async () => {
+                const gestart = await startCameraStream();
+                if (gestart) {
+                    triggerHapticFeedback(40);
+                }
+                return gestart;
+            });
+        });
+    }
+
+    if (cameraStopBtn) {
+        cameraStopBtn.addEventListener('click', () => {
+            if (appState.cameraBusy) {
+                return;
+            }
+            stopCameraStream();
+            zetCameraInsightTekst(uiTekst('camera_insight_idle'));
+            setCommandStatus(uiTekst('camera_state_off'));
+            renderCameraPanel();
+            triggerHapticFeedback(30);
+        });
+    }
+
+    if (cameraScanQrBtn) {
+        cameraScanQrBtn.addEventListener('click', () => {
+            void voerQrScanUit();
+        });
+    }
+
+    if (cameraMoodBtn) {
+        cameraMoodBtn.addEventListener('click', () => {
+            void voerMoodCheckUit();
+        });
+    }
+
+    if (cameraMuteBtn) {
+        cameraMuteBtn.addEventListener('click', () => {
+            if (appState.cameraBusy) {
+                return;
+            }
+            setMicMuted(!appState.micMuted);
+        });
+    }
+
+    if (cameraDeafenBtn) {
+        cameraDeafenBtn.addEventListener('click', () => {
+            if (appState.cameraBusy) {
+                return;
+            }
+            setDeafenEnabled(!appState.deafenEnabled);
         });
     }
 
@@ -3307,9 +6007,13 @@ async function init() {
     setWakeArmed(false);
     setSpeaking(false);
     renderPendingConfirmation(null);
+    initPanelCollapseControls();
     updateLocalizedUiLabels();
     renderMobileAccessPanel({});
     renderLatestScreenshotPanel({});
+    renderWebsiteAuditPanel({});
+    renderWebsiteAuditSchedulePanel({});
+    renderCameraPanel();
     loadCommandHistory();
     updateViewportModeClass();
 
@@ -3333,6 +6037,7 @@ window.addEventListener('load', () => {
 });
 
 window.addEventListener('beforeunload', () => {
+    stopCameraStream();
     stopDashboardWatcher();
     stopRuntimeVersionWatcher();
 });

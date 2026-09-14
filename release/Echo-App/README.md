@@ -28,6 +28,11 @@ Snelle commando's:
 - `phone status` - toont of mobiele toegang actief is
 - `phone link` - geeft direct de testlink
 
+Screenshots op je telefoon opslaan:
+- Gebruik `take screenshot`.
+- In **Phone Lab** verschijnt automatisch de laatste screenshot.
+- Op je telefoon start Echo direct een download; handmatig kan ook via **Save Last Screenshot**.
+
 ### Samsung voice fallback
 Als je Samsung-browser geen ingebouwde Web Speech API heeft, schakelt Echo automatisch naar **Quick voice capture**:
 
@@ -168,6 +173,8 @@ Dit artifact bevat `Echo-App-Portable.zip` zodat clients direct kunnen reviewen.
 - `read this page`, `summarize this page`, `summarize https://example.com` - Leest of vat webpagina's samen
 - `fill form with Jan, jan@example.com, hallo`, `submit form` - Vult browserformulieren in via automation-modus
 - `switch window`, `next tab`, `copy`, `paste`, `save` - Extra computerbesturing
+- `denk mee over mijn planning`, `think with me about this` - Echo denkt actief met je mee in concrete stappen
+- `vraag door over mijn project`, `ask follow-up questions about my code` - Echo stelt eerst gerichte vervolgvragen (alleen als jij dat vraagt)
 
 ## Instellingen (in HTML)
 

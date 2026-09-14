@@ -1,6 +1,7 @@
 import pytest
 import datetime
 import io
+import copy
 
 import server
 
@@ -30,7 +31,17 @@ def reset_pending_confirmation_state():
     origineel_automatisering_actief_tot = server.GESPREK_CONTEXT.get("automatisering_actief_tot", 0.0)
     originele_daily_enabled = server.instellingen.get("security_scan_daily_enabled")
     originele_daily_time = server.instellingen.get("security_scan_daily_time")
+    originele_website_schedule_enabled = server.instellingen.get("website_audit_schedule_enabled")
+    originele_website_schedule_frequency = server.instellingen.get("website_audit_schedule_frequency")
+    originele_website_schedule_time = server.instellingen.get("website_audit_schedule_time")
+    originele_website_schedule_target_url = server.instellingen.get("website_audit_schedule_target_url")
+    originele_website_schedule_profile = server.instellingen.get("website_audit_schedule_profile")
+    originele_website_schedule_alert_webhook = server.instellingen.get("website_audit_alert_webhook")
+    originele_website_schedule_alert_score_drop = server.instellingen.get("website_audit_alert_score_drop")
+    originele_website_schedule_alert_on_critical = server.instellingen.get("website_audit_alert_on_critical")
     originele_daily_state = dict(server.DAILY_SECURITY_SCAN_STATE)
+    originele_website_audit_state = copy.deepcopy(server.WEBSITE_AUDIT_STATE)
+    originele_website_audit_schedule_state = dict(server.WEBSITE_AUDIT_SCHEDULE_STATE)
     server.GESPREK_CONTEXT["wacht_op_bevestiging"] = ""
     try:
         yield
@@ -47,9 +58,23 @@ def reset_pending_confirmation_state():
         server.GESPREK_CONTEXT["automatisering_actief_tot"] = origineel_automatisering_actief_tot
         server.instellingen["security_scan_daily_enabled"] = originele_daily_enabled
         server.instellingen["security_scan_daily_time"] = originele_daily_time
+        server.instellingen["website_audit_schedule_enabled"] = originele_website_schedule_enabled
+        server.instellingen["website_audit_schedule_frequency"] = originele_website_schedule_frequency
+        server.instellingen["website_audit_schedule_time"] = originele_website_schedule_time
+        server.instellingen["website_audit_schedule_target_url"] = originele_website_schedule_target_url
+        server.instellingen["website_audit_schedule_profile"] = originele_website_schedule_profile
+        server.instellingen["website_audit_alert_webhook"] = originele_website_schedule_alert_webhook
+        server.instellingen["website_audit_alert_score_drop"] = originele_website_schedule_alert_score_drop
+        server.instellingen["website_audit_alert_on_critical"] = originele_website_schedule_alert_on_critical
         with server.DAILY_SECURITY_SCAN_LOCK:
             server.DAILY_SECURITY_SCAN_STATE.clear()
             server.DAILY_SECURITY_SCAN_STATE.update(originele_daily_state)
+        with server.WEBSITE_AUDIT_LOCK:
+            server.WEBSITE_AUDIT_STATE.clear()
+            server.WEBSITE_AUDIT_STATE.update(copy.deepcopy(originele_website_audit_state))
+        with server.WEBSITE_AUDIT_SCHEDULE_LOCK:
+            server.WEBSITE_AUDIT_SCHEDULE_STATE.clear()
+            server.WEBSITE_AUDIT_SCHEDULE_STATE.update(dict(originele_website_audit_schedule_state))
 
 
 def test_index_route_returns_html(client):
@@ -238,6 +263,262 @@ def test_dashboard_exposes_mobile_access_structure(client):
         "primary_network_url",
         "same_network_required",
     }.issubset(set(mobile_access.keys()))
+
+
+def test_dashboard_exposes_website_audit_structure(client):
+    response = client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    audit = payload["website_audit"]
+    assert isinstance(audit, dict)
+    assert {
+        "running",
+        "state",
+        "progress_percent",
+        "profile",
+        "target_url",
+        "score",
+        "grade",
+        "checks_passed",
+        "checks_warn",
+        "checks_failed",
+        "findings_top",
+        "severity_totals",
+    }.issubset(set(audit.keys()))
+
+
+def test_dashboard_exposes_website_audit_schedule_structure(client):
+    response = client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    schedule = payload["website_audit_schedule"]
+    assert isinstance(schedule, dict)
+    assert {
+        "enabled",
+        "frequency",
+        "scheduled_time",
+        "target_url",
+        "profile",
+        "next_run_at",
+        "next_run_label",
+        "monitor_running",
+        "alert_score_drop",
+        "alert_on_critical",
+    }.issubset(set(schedule.keys()))
+
+
+def test_website_audit_status_endpoint_returns_expected_structure(client):
+    response = client.get("/api/website-audit/status")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert isinstance(payload.get("message"), str)
+    assert isinstance(payload.get("audit"), dict)
+    assert isinstance(payload.get("schedule"), dict)
+
+
+def test_website_audit_schedule_endpoint_returns_expected_structure(client):
+    response = client.get("/api/website-audit/schedule")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert isinstance(payload.get("message"), str)
+    assert isinstance(payload.get("schedule"), dict)
+
+
+def test_website_audit_schedule_update_endpoint_rejects_invalid_json_shape(client):
+    response = client.post("/api/website-audit/schedule", data="[]", content_type="application/json")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_website_audit_schedule_update_endpoint_persists_values(client, monkeypatch):
+    monkeypatch.setattr(server, "sla_instellingen_op", lambda _instellingen: None)
+
+    response = client.post("/api/website-audit/schedule", json={
+        "enabled": True,
+        "frequency": "weekly",
+        "scheduled_time": "7:5",
+        "target_url": "https://example.com",
+        "profile": "security",
+        "alert_webhook": "https://hooks.example.com/echo",
+        "alert_score_drop": 18,
+        "alert_on_critical": False,
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    schema = payload["schedule"]
+    assert schema["enabled"] is True
+    assert schema["frequency"] == "weekly"
+    assert schema["scheduled_time"] == "07:05"
+    assert schema["target_url"] == "https://example.com"
+    assert schema["profile"] == "security"
+    assert schema["alert_score_drop"] == 18
+    assert schema["alert_on_critical"] is False
+
+
+def test_website_audit_start_endpoint_rejects_invalid_json_shape(client):
+    response = client.post("/api/website-audit/start", data="[]", content_type="application/json")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_website_audit_start_endpoint_starts_scan(client, monkeypatch):
+    waargenomen = {}
+
+    def fake_start(url, profiel="standard"):
+        waargenomen["url"] = url
+        waargenomen["profile"] = profiel
+        return True, "Website audit started"
+
+    monkeypatch.setattr(server, "start_website_audit", fake_start)
+    monkeypatch.setattr(server, "huidige_website_audit_payload", lambda: {"running": True, "state": "running"})
+
+    response = client.post("/api/website-audit/start", json={
+        "url": "https://example.com",
+        "profile": "security",
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert waargenomen["url"] == "https://example.com"
+    assert waargenomen["profile"] == "security"
+    assert payload["audit"]["running"] is True
+
+
+def test_website_audit_report_latest_endpoint_returns_404_without_report(client, monkeypatch):
+    monkeypatch.setattr(server, "laad_laatste_website_audit_rapport", lambda: None)
+
+    response = client.get("/api/website-audit/report/latest")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_website_audit_report_latest_endpoint_returns_report(client, monkeypatch):
+    rapport = {
+        "scan_id": "audit-abc123",
+        "summary": {
+            "score": 88,
+            "grade": "B",
+            "checks_failed": 1,
+            "checks_warn": 2,
+        },
+    }
+    monkeypatch.setattr(server, "laad_laatste_website_audit_rapport", lambda: rapport)
+    monkeypatch.setattr(server, "website_audit_rapport_bericht", lambda scan_id="latest": f"report {scan_id}")
+
+    response = client.get("/api/website-audit/report/latest")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["report"]["scan_id"] == "audit-abc123"
+    assert payload["report"]["download_paths"]["json"].endswith("/api/website-audit/report/audit-abc123/download/json")
+    assert payload["report"]["download_paths"]["markdown"].endswith("/api/website-audit/report/audit-abc123/download/markdown")
+    assert payload["report"]["download_paths"]["pdf"].endswith("/api/website-audit/report/audit-abc123/download/pdf")
+
+
+def test_website_audit_report_by_id_endpoint_returns_404_without_report(client, monkeypatch):
+    monkeypatch.setattr(server, "laad_website_audit_rapport", lambda _scan_id: None)
+
+    response = client.get("/api/website-audit/report/audit-missing")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
+    assert payload["scan_id"] == "audit-missing"
+
+
+def test_website_audit_report_by_id_endpoint_returns_report(client, monkeypatch):
+    rapport = {
+        "scan_id": "audit-xyz789",
+        "summary": {
+            "score": 74,
+            "grade": "C",
+            "checks_failed": 3,
+            "checks_warn": 1,
+        },
+    }
+    monkeypatch.setattr(server, "laad_website_audit_rapport", lambda _scan_id: rapport)
+    monkeypatch.setattr(server, "website_audit_rapport_bericht", lambda scan_id="latest": f"report {scan_id}")
+
+    response = client.get("/api/website-audit/report/audit-xyz789")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["report"]["scan_id"] == "audit-xyz789"
+    assert payload["report"]["download_paths"]["json"].endswith("/api/website-audit/report/audit-xyz789/download/json")
+
+
+def test_website_audit_latest_download_endpoint_returns_report_file(client, monkeypatch, tmp_path):
+    report_dir = tmp_path / "website-audits"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    json_pad = report_dir / "audit-abc123.json"
+    json_pad.write_text('{"ok": true}', encoding="utf-8")
+
+    monkeypatch.setattr(server, "WEBSITE_AUDIT_REPORT_DIR", report_dir)
+    monkeypatch.setattr(server, "laad_laatste_website_audit_rapport", lambda: {
+        "scan_id": "audit-abc123",
+        "report_files": {
+            "json": str(json_pad),
+        },
+    })
+
+    response = client.get("/api/website-audit/report/latest/download/json")
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type", "").startswith("application/json")
+    assert b'"ok": true' in response.data
+
+
+def test_website_audit_scan_download_endpoint_returns_markdown_file(client, monkeypatch, tmp_path):
+    report_dir = tmp_path / "website-audits"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    md_pad = report_dir / "audit-xyz789.md"
+    md_pad.write_text("# Demo report", encoding="utf-8")
+
+    monkeypatch.setattr(server, "WEBSITE_AUDIT_REPORT_DIR", report_dir)
+    monkeypatch.setattr(server, "laad_website_audit_rapport", lambda _scan_id: {
+        "scan_id": "audit-xyz789",
+        "report_files": {
+            "markdown": str(md_pad),
+        },
+    })
+
+    response = client.get("/api/website-audit/report/audit-xyz789/download/markdown")
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type", "").startswith("text/markdown")
+    assert b"Demo report" in response.data
+
+
+def test_website_audit_download_endpoint_returns_404_for_missing_format(client, monkeypatch):
+    monkeypatch.setattr(server, "laad_laatste_website_audit_rapport", lambda: {
+        "scan_id": "audit-no-files",
+        "report_files": {},
+    })
+
+    response = client.get("/api/website-audit/report/latest/download/pdf")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
 
 
 def test_latest_screenshot_endpoint_returns_unavailable_without_files(client, monkeypatch, tmp_path):
@@ -555,7 +836,6 @@ def test_normaliseer_actie_parses_whatsapp_voice_call_phrase():
     actie = server.normaliseer_actie("start een voice call met max op whatsapp")
     assert actie == "whatsapp call::voice||max"
 
-
 def test_normaliseer_actie_parses_whatsapp_video_call_phrase():
     actie = server.normaliseer_actie("start een video call met max op whatsapp")
     assert actie == "whatsapp call::video||max"
@@ -567,6 +847,72 @@ def test_normaliseer_actie_parses_whatsapp_open_phrase_app_first():
 
 def test_normaliseer_actie_parses_open_whatsapp_phrase():
     assert server.normaliseer_actie("open whatsapp") == "open app whatsapp"
+
+
+def test_normaliseer_actie_parses_stream_start_phrase():
+    assert server.normaliseer_actie("ga live op obs") == "stream start"
+
+
+def test_normaliseer_actie_parses_stream_stop_phrase():
+    assert server.normaliseer_actie("stop stream") == "stream stop"
+
+
+def test_normaliseer_actie_parses_stream_recording_phrase():
+    assert server.normaliseer_actie("start recording op obs") == "stream recording start"
+
+
+def test_normaliseer_actie_parses_stream_scene_brb_phrase():
+    assert server.normaliseer_actie("wissel scene naar brb") == "stream scene brb"
+
+
+def test_normaliseer_actie_parses_stream_marker_phrase():
+    assert server.normaliseer_actie("maak clip marker in obs") == "stream marker"
+
+
+def test_normaliseer_actie_parses_stream_help_phrase():
+    assert server.normaliseer_actie("stream help") == "stream help"
+
+
+def test_normaliseer_actie_parses_website_audit_scan_phrase():
+    actie = server.normaliseer_actie("scan website https://example.com op security")
+    assert actie == "website audit start::security||https://example.com"
+
+
+def test_normaliseer_actie_parses_website_audit_status_phrase():
+    assert server.normaliseer_actie("website audit status") == "website audit status"
+
+
+def test_normaliseer_actie_parses_website_audit_report_phrase():
+    assert server.normaliseer_actie("website audit report") == "website audit report latest"
+
+
+def test_normaliseer_actie_parses_website_audit_schedule_status_phrase():
+    assert server.normaliseer_actie("website audit schedule status") == "website audit schedule status"
+
+
+def test_voer_enkele_actie_uit_dispatches_website_audit_start(monkeypatch):
+    waargenomen = {}
+
+    def fake_start(url, profiel="standard"):
+        waargenomen["url"] = url
+        waargenomen["profile"] = profiel
+        return True, "Website audit started"
+
+    monkeypatch.setattr(server, "start_website_audit", fake_start)
+
+    resultaat = server.voer_enkele_actie_uit("website audit start::full||https://example.com")
+
+    assert resultaat == "Website audit started"
+    assert waargenomen["url"] == "https://example.com"
+    assert waargenomen["profile"] == "full"
+
+
+def test_voer_enkele_actie_uit_dispatches_website_audit_schedule_status(monkeypatch):
+    monkeypatch.setattr(server, "website_audit_schedule_status_bericht", lambda: "schedule active")
+
+    resultaat = server.voer_enkele_actie_uit("website audit schedule status")
+
+    assert resultaat == "schedule active"
 
 
 def test_verwijder_directe_herhaling_uit_antwoord_schoont_tekst_op():
@@ -665,6 +1011,78 @@ def test_verwerk_dagelijkse_security_scan_runs_once_per_day(monkeypatch):
     assert server.verwerk_dagelijkse_security_scan(nu_timestamp=zelfde_dag_later) is False
     assert server.verwerk_dagelijkse_security_scan(nu_timestamp=volgende_dag) is True
     assert calls["count"] == 2
+
+
+def test_evalueer_website_audit_alerts_triggert_bij_critical_en_score_drop(monkeypatch):
+    with server.WEBSITE_AUDIT_SCHEDULE_LOCK:
+        server.WEBSITE_AUDIT_SCHEDULE_STATE.clear()
+        server.WEBSITE_AUDIT_SCHEDULE_STATE.update(server.standaard_website_audit_scheduler_data())
+        server.WEBSITE_AUDIT_SCHEDULE_STATE["last_completed_score"] = 93
+
+    monkeypatch.setitem(server.instellingen, "website_audit_alert_score_drop", 10)
+    monkeypatch.setitem(server.instellingen, "website_audit_alert_on_critical", True)
+    monkeypatch.setitem(server.instellingen, "website_audit_alert_webhook", "https://hooks.example.com/echo")
+
+    webhook_calls = {}
+
+    def fake_webhook(payload, url):
+        webhook_calls["payload"] = payload
+        webhook_calls["url"] = url
+        return True, "ok"
+
+    monkeypatch.setattr(server, "verstuur_website_audit_alert_webhook", fake_webhook)
+    monkeypatch.setattr(server, "registreer_notificatie", lambda _melding: None)
+
+    resultaat = server.evalueer_website_audit_alerts({
+        "scan_id": "audit-alert-1",
+        "target_url": "https://example.com",
+        "profile": "security",
+        "summary": {
+            "score": 72,
+            "grade": "C",
+            "exposure_level": "high",
+            "checks_failed": 4,
+            "checks_warn": 2,
+            "severity_totals": {
+                "critical": 1,
+            },
+        },
+    }, trigger_source="scheduled")
+
+    assert resultaat["triggered"] is True
+    assert resultaat["sent"] is True
+    assert resultaat["score_drop"] == 21
+    assert resultaat["critical"] == 1
+    assert webhook_calls["url"] == "https://hooks.example.com/echo"
+    assert webhook_calls["payload"]["scan_id"] == "audit-alert-1"
+    assert webhook_calls["payload"]["trigger_source"] == "scheduled"
+
+
+def test_evalueer_website_audit_alerts_blijft_stil_zonder_triggers(monkeypatch):
+    with server.WEBSITE_AUDIT_SCHEDULE_LOCK:
+        server.WEBSITE_AUDIT_SCHEDULE_STATE.clear()
+        server.WEBSITE_AUDIT_SCHEDULE_STATE.update(server.standaard_website_audit_scheduler_data())
+        server.WEBSITE_AUDIT_SCHEDULE_STATE["last_completed_score"] = 80
+
+    monkeypatch.setitem(server.instellingen, "website_audit_alert_score_drop", 20)
+    monkeypatch.setitem(server.instellingen, "website_audit_alert_on_critical", True)
+    monkeypatch.setitem(server.instellingen, "website_audit_alert_webhook", "")
+    monkeypatch.setattr(server, "registreer_notificatie", lambda _melding: None)
+
+    resultaat = server.evalueer_website_audit_alerts({
+        "scan_id": "audit-alert-2",
+        "target_url": "https://example.com",
+        "summary": {
+            "score": 79,
+            "severity_totals": {
+                "critical": 0,
+            },
+        },
+    })
+
+    assert resultaat["triggered"] is False
+    assert resultaat["sent"] is False
+    assert resultaat["score_drop"] == 1
 
 
 # Security-cleanup confirm-flow moet pending state correct beheren.

@@ -4,3 +4,4 @@ PyAudioWPatch
 pyttsx3
 PyAutoGUI
 faster-whisper
+fpdf2
