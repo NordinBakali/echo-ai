@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#00060a">
+    <title>{{ instellingen.naam }} | Quick Checker</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ build_id }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='quick-checker.css') }}?v={{ build_id }}">
+</head>
+<body class="quick-checker-body" data-threat="nominal">
+    <div class="atmo-layer" aria-hidden="true"></div>
+    <div class="hud-grid" aria-hidden="true"></div>
+    <div class="hud-noise" aria-hidden="true"></div>
+
+    <main class="quick-checker-shell">
+        <header class="panel-block quick-checker-header">
+            <div>
+                <p class="panel-kicker">Echo Quick Checker</p>
+                <h1 class="quick-checker-title">Website Scan Console</h1>
+                <p class="panel-note">
+                    Gebruik jouw quickscan engine direct in Echo. Start een quickscan of hardscan en bekijk direct de prioriteiten.
+                </p>
+            </div>
+            <div class="quick-checker-header__actions">
+                <button id="quickCheckerOpenPopupBtn" type="button" class="panel-action">Open Popup</button>
+                <button id="quickCheckerBackToEchoBtn" type="button" class="panel-action">Terug naar Echo</button>
+            </div>
+        </header>
+
+        <section class="quick-checker-layout">
+            <article class="panel-block quick-checker-control">
+                <p class="panel-kicker">Scan Starten</p>
+                <form id="quickCheckerForm" autocomplete="off" class="quick-checker-form">
+                    <label class="overview-filter-label" for="quickCheckerUrlInput">Website URL</label>
+                    <input id="quickCheckerUrlInput" type="text" placeholder="bijv: bedrijf.nl of https://bedrijf.nl" inputmode="url" spellcheck="false">
+
+                    <div class="quick-checker-mode-row">
+                        <button id="quickCheckerModeQuick" type="button" class="panel-action quick-checker-mode-btn is-active" data-mode="quick">Quickscan</button>
+                        <button id="quickCheckerModeHard" type="button" class="panel-action quick-checker-mode-btn" data-mode="hard">Hardscan</button>
+                    </div>
+
+                    <button id="quickCheckerStartBtn" type="submit" class="panel-action quick-checker-start-btn">Start Scan</button>
+                </form>
+
+                <p class="panel-note quick-checker-status" id="quickCheckerStatus" data-tone="idle">
+                    Stand-by. Vul een URL in en start de scan.
+                </p>
+
+                <div class="website-audit-progress" aria-hidden="true">
+                    <div class="website-audit-progress__fill" id="quickCheckerProgressFill"></div>
+                </div>
+                <div class="quick-checker-progress-meta">
+                    <span id="quickCheckerProgressPercent">0%</span>
+                    <span id="quickCheckerDuration">Tijd: --</span>
+                </div>
+
+                <div class="quick-checker-live-block">
+                    <p class="panel-kicker quick-checker-subtitle">Live Scanstatus</p>
+                    <ol class="quick-checker-stage-list" id="quickCheckerLiveStages">
+                        <li data-stage="queued"><span>Queue</span><small>Wacht op scanstart.</small></li>
+                        <li data-stage="module_load"><span>Module</span><small>Scanner wordt geladen.</small></li>
+                        <li data-stage="scan_running"><span>Scan</span><small>Website wordt geanalyseerd.</small></li>
+                        <li data-stage="report_build"><span>Rapport</span><small>Samenvatting wordt opgebouwd.</small></li>
+                        <li data-stage="cache_store"><span>Cache</span><small>Resultaat wordt opgeslagen.</small></li>
+                        <li data-stage="completed"><span>Klaar</span><small>Output is gereed voor export.</small></li>
+                    </ol>
+                </div>
+            </article>
+
+            <article class="panel-block quick-checker-summary">
+                <p class="panel-kicker">Scan Snapshot</p>
+
+                <div class="quick-checker-score-grid">
+                    <div class="quick-checker-metric">
+                        <p class="quick-checker-metric__label">Overall</p>
+                        <p class="quick-checker-metric__value" id="quickCheckerOverallScore">--</p>
+                    </div>
+                    <div class="quick-checker-metric">
+                        <p class="quick-checker-metric__label">Grade</p>
+                        <p class="quick-checker-metric__value" id="quickCheckerGrade">--</p>
+                    </div>
+                    <div class="quick-checker-metric">
+                        <p class="quick-checker-metric__label">Risk</p>
+                        <p class="quick-checker-metric__value" id="quickCheckerRisk">--</p>
+                    </div>
+                    <div class="quick-checker-metric">
+                        <p class="quick-checker-metric__label">Findings</p>
+                        <p class="quick-checker-metric__value" id="quickCheckerFindingsCount">--</p>
+                    </div>
+                </div>
+
+                <div class="quick-checker-rating-grid" id="quickCheckerRatings"></div>
+
+                <p class="panel-kicker quick-checker-subtitle">Publieke Contactpunten</p>
+                <div class="website-audit-logs" id="quickCheckerAdminContacts"></div>
+            </article>
+        </section>
+
+        <section class="quick-checker-output-layout">
+            <article class="panel-block quick-checker-priority-block">
+                <p class="panel-kicker">AI Actieplan</p>
+                <div class="website-audit-recommendations" id="quickCheckerActionPlan"></div>
+
+                <p class="panel-kicker quick-checker-subtitle">Top Prioriteiten</p>
+                <div class="quick-checker-priority-legend" id="quickCheckerPriorityLegend"></div>
+                <div class="website-audit-findings" id="quickCheckerTopPriorities"></div>
+            </article>
+
+            <article class="panel-block quick-checker-findings-block">
+                <div class="quick-checker-findings-header">
+                    <p class="panel-kicker">Alle Bevindingen</p>
+                    <div class="quick-checker-export-actions">
+                        <button id="quickCheckerDownloadJsonBtn" type="button" class="panel-action">Export JSON</button>
+                        <button id="quickCheckerDownloadTxtBtn" type="button" class="panel-action">Export TXT</button>
+                        <button id="quickCheckerDownloadBriefBtn" type="button" class="panel-action">Client TXT</button>
+                        <button id="quickCheckerCopyPrioritiesBtn" type="button" class="panel-action">Kopieer Prioriteiten</button>
+                    </div>
+                </div>
+                <div class="website-audit-findings" id="quickCheckerFindingsList"></div>
+            </article>
+        </section>
+
+        <section class="panel-block quick-checker-client-block">
+            <div class="quick-checker-client-header">
+                <p class="panel-kicker">Klant Bericht</p>
+                <button id="quickCheckerCopyClientBtn" type="button" class="panel-action">Kopieer Bericht</button>
+            </div>
+            <textarea id="quickCheckerClientMessage" class="quick-checker-client-message" readonly>
+Nog geen klantbericht. Start eerst een scan.
+            </textarea>
+            <details class="quick-checker-raw-report">
+                <summary>Toon kladblok rapport</summary>
+                <pre id="quickCheckerTextReport">Nog geen rapport.</pre>
+            </details>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='quick-checker.js') }}?v={{ build_id }}"></script>
+</body>
+</html>

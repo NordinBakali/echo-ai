@@ -829,6 +829,20 @@ body[data-threat='critical'] .threat-protocol__level {
     gap: 8px;
 }
 
+.website-audit-panel.quick-checker-only > :not(#websiteAuditKicker):not(#websiteQuickCheckerPopupWrap) {
+    display: none !important;
+}
+
+.website-audit-panel.quick-checker-only #websiteQuickCheckerPopupWrap {
+    grid-template-columns: 1fr;
+}
+
+.website-audit-panel.quick-checker-only #websiteQuickCheckerPopupBtn {
+    min-height: 48px;
+    font-size: 0.74rem;
+    letter-spacing: 0.12em;
+}
+
 .website-audit-progress {
     width: 100%;
     height: 7px;
@@ -851,8 +865,229 @@ body[data-threat='critical'] .threat-protocol__level {
     gap: 7px;
 }
 
+.settings-profile-panel {
+    gap: 8px;
+    transition: border-color 0.28s ease, box-shadow 0.28s ease, background 0.28s ease;
+}
+
+.settings-profile-panel[data-applied="true"] {
+    border-color: rgba(47, 247, 171, 0.88);
+    box-shadow: 0 0 0 1px rgba(47, 247, 171, 0.35), 0 0 18px rgba(47, 247, 171, 0.24);
+    background: linear-gradient(160deg, rgba(7, 28, 20, 0.9), rgba(8, 24, 32, 0.84));
+    animation: settingsProfileAppliedPulse 1.1s ease-out;
+}
+
+@keyframes settingsProfileAppliedPulse {
+    0% {
+        box-shadow: 0 0 0 1px rgba(47, 247, 171, 0), 0 0 0 rgba(47, 247, 171, 0);
+    }
+    55% {
+        box-shadow: 0 0 0 1px rgba(47, 247, 171, 0.45), 0 0 22px rgba(47, 247, 171, 0.34);
+    }
+    100% {
+        box-shadow: 0 0 0 1px rgba(47, 247, 171, 0.35), 0 0 18px rgba(47, 247, 171, 0.24);
+    }
+}
+
+.settings-profile-form {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 7px;
+}
+
+.settings-profile-form-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.settings-profile-summary {
+    font-size: 0.67rem;
+    line-height: 1.4;
+}
+
+.settings-profile-effects {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.settings-profile-effect {
+    border: 1px solid rgba(0, 240, 255, 0.18);
+    background: rgba(0, 11, 16, 0.58);
+    padding: 6px 8px;
+    display: grid;
+    gap: 2px;
+}
+
+.settings-profile-effect__label {
+    font-size: 0.57rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(194, 236, 255, 0.86);
+}
+
+.settings-profile-effect__value {
+    font-size: 0.67rem;
+    letter-spacing: 0.03em;
+}
+
+.settings-profile-effect__value[data-state="on"] {
+    color: rgba(94, 252, 193, 0.96);
+}
+
+.settings-profile-effect__value[data-state="off"] {
+    color: rgba(255, 149, 149, 0.95);
+}
+
+.settings-profile-effect__value[data-state="accent"] {
+    color: rgba(0, 240, 255, 0.94);
+}
+
+.settings-profile-actions-title {
+    margin-top: 2px;
+}
+
+.settings-profile-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.settings-profile-router-state {
+    margin-top: 2px;
+}
+
+.settings-profile-router-form {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 7px;
+    align-items: stretch;
+}
+
+.settings-profile-thresholds {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.settings-profile-toggle {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(0, 240, 255, 0.24);
+    background: rgba(0, 11, 16, 0.52);
+    min-height: 40px;
+    padding: 6px 8px;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+
+.settings-profile-toggle span {
+    line-height: 1.3;
+}
+
+.settings-profile-toggle input {
+    accent-color: rgba(0, 240, 255, 0.9);
+}
+
+.settings-profile-threshold {
+    display: grid;
+    gap: 3px;
+    font-size: 0.57rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+
+.settings-profile-threshold span {
+    color: rgba(194, 236, 255, 0.86);
+}
+
+.settings-profile-threshold input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid rgba(0, 240, 255, 0.34);
+    background: rgba(0, 8, 12, 0.66);
+    color: var(--hud-white);
+    font-family: var(--font-data);
+    font-size: 0.68rem;
+    padding: 7px 8px;
+    outline: none;
+}
+
+.settings-profile-threshold input:focus {
+    border-color: rgba(0, 240, 255, 0.82);
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.32);
+}
+
+.settings-profile-actions-editor-label {
+    margin-top: 2px;
+}
+
+.settings-profile-actions-editor {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid rgba(0, 240, 255, 0.34);
+    background: rgba(0, 8, 12, 0.66);
+    color: var(--hud-white);
+    font-family: var(--font-data);
+    font-size: 0.69rem;
+    line-height: 1.35;
+    padding: 8px 10px;
+    resize: vertical;
+    outline: none;
+}
+
+.settings-profile-actions-editor:focus {
+    border-color: rgba(0, 240, 255, 0.82);
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.32);
+}
+
+.settings-profile-actions-editor-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.settings-profile-form .panel-action,
+.settings-profile-router-form .panel-action,
+.settings-profile-actions-editor-controls .panel-action {
+    line-height: 1.25;
+    text-align: center;
+    white-space: normal;
+}
+
+.settings-profile-action {
+    justify-content: flex-start;
+    text-align: left;
+    min-height: 40px;
+    padding-inline: 10px;
+}
+
+.settings-profile-router-save {
+    min-height: 42px;
+}
+
+.settings-profile-panel[data-launching="true"] .settings-profile-action,
+.settings-profile-panel[data-applying="true"] .settings-profile-action,
+.settings-profile-panel[data-applying="true"] .settings-profile-actions-editor,
+.settings-profile-panel[data-applying="true"] .settings-profile-threshold input,
+.settings-profile-panel[data-applying="true"] .settings-profile-toggle,
+.settings-profile-panel[data-launching="true"] .settings-profile-actions-editor,
+.settings-profile-panel[data-launching="true"] .settings-profile-threshold input,
+.settings-profile-panel[data-launching="true"] .settings-profile-toggle,
+.settings-profile-panel[data-router-saving="true"] .settings-profile-action,
+.settings-profile-panel[data-router-saving="true"] .settings-profile-actions-editor,
+.settings-profile-panel[data-router-saving="true"] .settings-profile-threshold input,
+.settings-profile-panel[data-router-saving="true"] .settings-profile-toggle {
+    opacity: 0.76;
+}
+
 #websiteAuditUrlInput,
 #websiteAuditProfileSelect,
+#settingsProfileSelect,
 #websiteAuditScheduleUrlInput,
 #websiteAuditScheduleProfileSelect,
 #websiteAuditFrequencySelect,
@@ -872,6 +1107,7 @@ body[data-threat='critical'] .threat-protocol__level {
 
 #websiteAuditUrlInput:focus,
 #websiteAuditProfileSelect:focus,
+#settingsProfileSelect:focus,
 #websiteAuditScheduleUrlInput:focus,
 #websiteAuditScheduleProfileSelect:focus,
 #websiteAuditFrequencySelect:focus,
@@ -883,6 +1119,7 @@ body[data-threat='critical'] .threat-protocol__level {
 }
 
 #websiteAuditProfileSelect,
+#settingsProfileSelect,
 #websiteAuditScheduleProfileSelect,
 #websiteAuditFrequencySelect {
     min-width: 132px;
@@ -1380,13 +1617,20 @@ body.touch-optimized .overview-filter-input {
 
 body.touch-optimized #websiteAuditUrlInput,
 body.touch-optimized #websiteAuditProfileSelect,
+body.touch-optimized #settingsProfileSelect,
+body.touch-optimized #settingsProfileSuggestThresholdInput,
+body.touch-optimized #settingsProfileAutoThresholdInput,
 body.touch-optimized #websiteAuditScheduleUrlInput,
 body.touch-optimized #websiteAuditScheduleProfileSelect,
 body.touch-optimized #websiteAuditFrequencySelect,
 body.touch-optimized #websiteAuditTimeInput,
 body.touch-optimized #websiteAuditAlertDropInput,
 body.touch-optimized #websiteAuditWebhookInput,
-body.touch-optimized #websiteAuditScheduleSaveBtn {
+body.touch-optimized #websiteAuditScheduleSaveBtn,
+body.touch-optimized #settingsProfileActionsEditor,
+body.touch-optimized #settingsProfileRouterSaveBtn,
+body.touch-optimized #settingsProfileActionsSaveBtn,
+body.touch-optimized #settingsProfileActionsResetBtn {
     min-height: 40px;
 }
 
@@ -1406,6 +1650,25 @@ body.touch-optimized #websiteAuditScheduleSaveBtn {
     }
 
     .website-audit-form {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-profile-form {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-profile-form-actions,
+    .settings-profile-thresholds {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-profile-router-form {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-profile-effects,
+    .settings-profile-actions,
+    .settings-profile-actions-editor-controls {
         grid-template-columns: 1fr;
     }
 
@@ -1467,6 +1730,7 @@ body.touch-optimized #websiteAuditScheduleSaveBtn {
     }
 
     #websiteAuditProfileSelect,
+    #settingsProfileSelect,
     #websiteAuditScheduleProfileSelect,
     #websiteAuditFrequencySelect {
         min-width: 0;

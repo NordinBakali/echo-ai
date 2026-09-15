@@ -16,6 +16,7 @@ $syncMutex = New-Object System.Threading.Mutex($false, $syncMutexName)
 $itemsToCopy = @(
     'server.py',
     'ai_core.py',
+    'quick-check.py',
     'README.md',
     'requirements.txt',
     'pytest.ini',

@@ -39,10 +39,27 @@ def reset_pending_confirmation_state():
     originele_website_schedule_alert_webhook = server.instellingen.get("website_audit_alert_webhook")
     originele_website_schedule_alert_score_drop = server.instellingen.get("website_audit_alert_score_drop")
     originele_website_schedule_alert_on_critical = server.instellingen.get("website_audit_alert_on_critical")
+    origineel_instellingen_profiel = server.instellingen.get("instellingen_profiel")
+    originele_instellingen_profielen = copy.deepcopy(server.instellingen.get("instellingen_profielen", {}))
     originele_daily_state = dict(server.DAILY_SECURITY_SCAN_STATE)
     originele_website_audit_state = copy.deepcopy(server.WEBSITE_AUDIT_STATE)
     originele_website_audit_schedule_state = dict(server.WEBSITE_AUDIT_SCHEDULE_STATE)
+    origineel_quick_checker_module = server.QUICK_CHECKER_MODULE
+    originele_quick_check_cache = copy.deepcopy(server.QUICK_CHECK_CACHE)
+    originele_quick_check_client_requests = copy.deepcopy(server.QUICK_CHECK_CLIENT_REQUESTS)
+    originele_quick_check_tasks = copy.deepcopy(server.QUICK_CHECK_TASKS)
+    originele_quick_check_task_order = list(server.QUICK_CHECK_TASK_ORDER)
+    originele_quick_check_client_latest = dict(server.QUICK_CHECK_CLIENT_LATEST_TASK)
     server.GESPREK_CONTEXT["wacht_op_bevestiging"] = ""
+    with server.QUICK_CHECK_CACHE_LOCK:
+        server.QUICK_CHECK_CACHE.clear()
+    with server.QUICK_CHECK_RATE_LIMIT_LOCK:
+        server.QUICK_CHECK_CLIENT_REQUESTS.clear()
+    with server.QUICK_CHECK_TASK_LOCK:
+        server.QUICK_CHECK_TASKS.clear()
+        server.QUICK_CHECK_TASK_ORDER.clear()
+        server.QUICK_CHECK_CLIENT_LATEST_TASK.clear()
+    server.QUICK_CHECKER_MODULE = None
     try:
         yield
     finally:
@@ -66,6 +83,8 @@ def reset_pending_confirmation_state():
         server.instellingen["website_audit_alert_webhook"] = originele_website_schedule_alert_webhook
         server.instellingen["website_audit_alert_score_drop"] = originele_website_schedule_alert_score_drop
         server.instellingen["website_audit_alert_on_critical"] = originele_website_schedule_alert_on_critical
+        server.instellingen["instellingen_profiel"] = origineel_instellingen_profiel
+        server.instellingen["instellingen_profielen"] = copy.deepcopy(originele_instellingen_profielen)
         with server.DAILY_SECURITY_SCAN_LOCK:
             server.DAILY_SECURITY_SCAN_STATE.clear()
             server.DAILY_SECURITY_SCAN_STATE.update(originele_daily_state)
@@ -75,6 +94,20 @@ def reset_pending_confirmation_state():
         with server.WEBSITE_AUDIT_SCHEDULE_LOCK:
             server.WEBSITE_AUDIT_SCHEDULE_STATE.clear()
             server.WEBSITE_AUDIT_SCHEDULE_STATE.update(dict(originele_website_audit_schedule_state))
+        with server.QUICK_CHECK_CACHE_LOCK:
+            server.QUICK_CHECK_CACHE.clear()
+            server.QUICK_CHECK_CACHE.update(copy.deepcopy(originele_quick_check_cache))
+        with server.QUICK_CHECK_RATE_LIMIT_LOCK:
+            server.QUICK_CHECK_CLIENT_REQUESTS.clear()
+            server.QUICK_CHECK_CLIENT_REQUESTS.update(copy.deepcopy(originele_quick_check_client_requests))
+        with server.QUICK_CHECK_TASK_LOCK:
+            server.QUICK_CHECK_TASKS.clear()
+            server.QUICK_CHECK_TASKS.update(copy.deepcopy(originele_quick_check_tasks))
+            server.QUICK_CHECK_TASK_ORDER.clear()
+            server.QUICK_CHECK_TASK_ORDER.extend(list(originele_quick_check_task_order))
+            server.QUICK_CHECK_CLIENT_LATEST_TASK.clear()
+            server.QUICK_CHECK_CLIENT_LATEST_TASK.update(dict(originele_quick_check_client_latest))
+        server.QUICK_CHECKER_MODULE = origineel_quick_checker_module
 
 
 def test_index_route_returns_html(client):
@@ -98,6 +131,16 @@ def test_execute_command_rejects_empty_command(client):
     response = client.post("/api/commando", json={"commando": ""})
 
     assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_execute_command_rejects_too_long_command(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_COMMAND_TEXT_CHARS", 12)
+
+    response = client.post("/api/commando", json={"commando": "x" * 13})
+
+    assert response.status_code == 413
     payload = response.get_json()
     assert payload["status"] == "error"
 
@@ -186,6 +229,42 @@ def test_update_settings_rejects_invalid_json_shape(client):
     payload = response.get_json()
     assert payload["status"] == "error"
     assert "payload" in payload["message"].lower()
+
+
+def test_update_settings_applies_named_profile(client, monkeypatch):
+    monkeypatch.setattr(server, "sla_instellingen_op", lambda _instellingen: None)
+
+    response = client.post("/api/instellingen", json={
+        "instellingen_profiel": "streaming",
+        "apply_profile": True,
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["settings_profile"] == "streaming"
+    assert payload["profile_applied"] is True
+    assert "streaming" in payload["settings_profiles"]
+    assert server.instellingen["computerbesturing_toestaan"] is True
+    assert server.instellingen["spraak_uitgang"] is False
+    assert server.instellingen["spraak_input_provider"] == "whisper"
+
+
+def test_update_settings_can_skip_profile_apply(client, monkeypatch):
+    monkeypatch.setattr(server, "sla_instellingen_op", lambda _instellingen: None)
+    server.instellingen["computerbesturing_toestaan"] = False
+
+    response = client.post("/api/instellingen", json={
+        "instellingen_profiel": "streaming",
+        "apply_profile": False,
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["settings_profile"] == "streaming"
+    assert payload["profile_applied"] is False
+    assert server.instellingen["computerbesturing_toestaan"] is False
 
 
 def test_dashboard_route_returns_expected_structure(client):
@@ -395,6 +474,171 @@ def test_website_audit_start_endpoint_starts_scan(client, monkeypatch):
     assert waargenomen["url"] == "https://example.com"
     assert waargenomen["profile"] == "security"
     assert payload["audit"]["running"] is True
+
+
+def test_quick_check_run_rejects_invalid_json_shape(client):
+    response = client.post("/api/quick-check/run", data="[]", content_type="application/json")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_quick_check_run_rejects_invalid_url(client):
+    response = client.post("/api/quick-check/run", json={"url": "https://example.com/\nmalformed"})
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_quick_check_run_returns_cached_result_on_repeat(client, monkeypatch):
+    calls = {"count": 0}
+
+    class DummyQuickChecker:
+        @staticmethod
+        def run_scan(url, mode):
+            calls["count"] += 1
+            return {
+                "summary": {
+                    "score": 91,
+                },
+                "target_url": url,
+                "mode": mode,
+            }
+
+        @staticmethod
+        def report_to_text(report):
+            return f"score={report.get('summary', {}).get('score', 0)}"
+
+        @staticmethod
+        def build_client_message(report):
+            return f"Audit score {report.get('summary', {}).get('score', 0)}"
+
+    monkeypatch.setattr(server, "laad_quick_checker_module", lambda: DummyQuickChecker)
+
+    eerste = client.post("/api/quick-check/run", json={"url": "https://example.com", "mode": "quick"})
+    tweede = client.post("/api/quick-check/run", json={"url": "https://example.com", "mode": "quick"})
+
+    assert eerste.status_code == 200
+    eerste_payload = eerste.get_json()
+    assert eerste_payload["status"] == "success"
+    assert eerste_payload["from_cache"] is False
+
+    assert tweede.status_code == 200
+    tweede_payload = tweede.get_json()
+    assert tweede_payload["status"] == "success"
+    assert tweede_payload["from_cache"] is True
+    assert isinstance(tweede_payload.get("cache_age_seconds"), int)
+    assert calls["count"] == 1
+
+
+def test_quick_check_run_enforces_rate_limit(client, monkeypatch):
+    class DummyQuickChecker:
+        @staticmethod
+        def run_scan(url, mode):
+            return {
+                "summary": {
+                    "score": 88,
+                },
+                "target_url": url,
+                "mode": mode,
+            }
+
+    monkeypatch.setattr(server, "laad_quick_checker_module", lambda: DummyQuickChecker)
+    monkeypatch.setattr(server, "QUICK_CHECK_RATE_LIMIT_MAX_REQUESTS", 1)
+    monkeypatch.setattr(server, "QUICK_CHECK_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    eerste = client.post("/api/quick-check/run", json={"url": "https://example.com"})
+    tweede = client.post("/api/quick-check/run", json={"url": "https://example.com"})
+
+    assert eerste.status_code == 200
+    assert tweede.status_code == 429
+    payload = tweede.get_json()
+    assert payload["status"] == "error"
+    assert isinstance(payload.get("retry_after_seconds"), int)
+    assert tweede.headers.get("Retry-After")
+
+
+def test_quick_check_run_returns_timeout_error(client, monkeypatch):
+    monkeypatch.setattr(server, "laad_quick_checker_module", lambda: object())
+
+    def fake_timeout(_module, _url, _mode):
+        raise TimeoutError("timeout")
+
+    monkeypatch.setattr(server, "voer_quick_checker_scan_met_timeout", fake_timeout)
+
+    response = client.post("/api/quick-check/run", json={"url": "https://example.com"})
+
+    assert response.status_code == 504
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_quick_check_start_rejects_invalid_json_shape(client):
+    response = client.post("/api/quick-check/start", data="[]", content_type="application/json")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_quick_check_start_returns_task_payload(client, monkeypatch):
+    fake_task = server.standaard_quick_check_task_data("quick-check-test-1", "https://example.com", "quick", "127.0.0.1")
+    fake_task.update({
+        "status": "running",
+        "running": True,
+        "stage": "queued",
+        "progress_percent": 4,
+        "message": "Quick checker gestart",
+    })
+
+    monkeypatch.setattr(server, "start_quick_checker_scan_taak", lambda _url, _mode, _client: fake_task)
+
+    response = client.post("/api/quick-check/start", json={"url": "https://example.com", "mode": "quick"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["task"]["id"] == "quick-check-test-1"
+    assert payload["task"]["running"] is True
+    assert payload["task"]["status"] == "running"
+
+
+def test_quick_check_status_endpoint_returns_completed_task_with_result(client):
+    task_data = server.standaard_quick_check_task_data("quick-check-test-2", "https://example.com", "quick", "127.0.0.1")
+    task_data.update({
+        "status": "completed",
+        "running": False,
+        "stage": "completed",
+        "progress_percent": 100,
+        "message": "Quick checker scan afgerond.",
+        "payload": {
+            "report": {
+                "target": "https://example.com",
+                "scan_type": "quick",
+            },
+            "text_report": "ok",
+            "client_message": "done",
+        },
+    })
+    server.registreer_quick_check_taak(task_data)
+
+    response = client.get("/api/quick-check/status/quick-check-test-2")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["task"]["status"] == "completed"
+    assert payload["task"]["result"]["report"]["target"] == "https://example.com"
+
+
+def test_quick_check_status_endpoint_returns_404_for_unknown_task(client):
+    response = client.get("/api/quick-check/status/quick-check-missing")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
 
 
 def test_website_audit_report_latest_endpoint_returns_404_without_report(client, monkeypatch):
@@ -946,6 +1190,27 @@ def test_normaliseer_actie_parses_browser_click_link_phrase():
     assert server.normaliseer_actie("klik link met tekst echo docs") == "browser click link::text||echo docs"
 
 
+def test_analyseer_verzoek_routering_returns_scores_and_confidence():
+    routering = server.analyseer_verzoek_routering("open youtube")
+
+    assert routering["intent"] == "action"
+    assert routering["tool"] == "local_plan"
+    assert isinstance(routering.get("scores"), dict)
+    assert {"action", "answer", "hybrid"}.issubset(set(routering["scores"].keys()))
+    assert isinstance(routering.get("confidence"), float)
+    assert 0.0 <= routering["confidence"] <= 1.0
+    assert isinstance(routering.get("fallback_order"), list)
+
+
+def test_analyseer_verzoek_routering_classifies_hybrid_question_action_mix():
+    routering = server.analyseer_verzoek_routering("open youtube en leg uit waarom deze video handig is")
+
+    assert routering["intent"] == "hybrid"
+    assert routering["question_like"] is True
+    assert routering["action_like"] is True
+    assert routering["tool"] in {"local_plan", "builtin_answer", "online_action_planner"}
+
+
 def test_synchroniseer_taalinstellingen_normalizes_daily_security_scan_values():
     instellingen = dict(server.DEFAULT_SETTINGS)
     instellingen["security_scan_daily_enabled"] = "ja"
@@ -955,6 +1220,28 @@ def test_synchroniseer_taalinstellingen_normalizes_daily_security_scan_values():
 
     assert gesynchroniseerd["security_scan_daily_enabled"] is True
     assert gesynchroniseerd["security_scan_daily_time"] == "07:05"
+
+
+def test_synchroniseer_taalinstellingen_normalizes_settings_profiles():
+    instellingen = dict(server.DEFAULT_SETTINGS)
+    instellingen["instellingen_profiel"] = "onbekend"
+    instellingen["instellingen_profielen"] = {
+        "Security": {
+            "online_ai_modus": "nee",
+            "computerbesturing_toestaan": "ja",
+            "spraak_input_provider": "whisper",
+            "website_audit_schedule_profile": "SECURITY",
+        },
+    }
+
+    gesynchroniseerd = server.synchroniseer_taalinstellingen(instellingen)
+
+    assert gesynchroniseerd["instellingen_profiel"] == "normal"
+    assert {"normal", "streaming", "security"}.issubset(set(gesynchroniseerd["instellingen_profielen"].keys()))
+    assert gesynchroniseerd["instellingen_profielen"]["security"]["online_ai_modus"] is False
+    assert gesynchroniseerd["instellingen_profielen"]["security"]["computerbesturing_toestaan"] is True
+    assert gesynchroniseerd["instellingen_profielen"]["security"]["spraak_input_provider"] == "whisper"
+    assert gesynchroniseerd["instellingen_profielen"]["security"]["website_audit_schedule_profile"] == "security"
 
 
 def test_synchroniseer_taalinstellingen_falls_back_for_invalid_daily_scan_time():

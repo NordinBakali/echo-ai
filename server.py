@@ -1,10 +1,12 @@
 from flask import Flask, render_template, request, jsonify, send_file
 import ast
 import base64
+import copy
 import ctypes
 import datetime
 from difflib import SequenceMatcher
 import html
+import importlib.util
 import io
 import math
 import os
@@ -99,6 +101,13 @@ MAX_NOTIFICATIES = 20
 MAX_DOCUMENT_SNIPPETS = 3
 MAX_DOCUMENT_BESTANDSGROOTTE = 200_000
 MAX_AUDIO_UPLOAD_BYTES = 12 * 1024 * 1024
+MAX_COMMAND_TEXT_CHARS = 1600
+MAX_QUICK_CHECK_URL_CHARS = 2048
+QUICK_CHECK_SCAN_TIMEOUT_SECONDS = 180
+QUICK_CHECK_CACHE_TTL_SECONDS = 180
+QUICK_CHECK_CACHE_MAX_ITEMS = 40
+QUICK_CHECK_RATE_LIMIT_WINDOW_SECONDS = 60
+QUICK_CHECK_RATE_LIMIT_MAX_REQUESTS = 5
 SCREENSHOT_BESTANDSNAAM_REGEX = re.compile(r"^echo-screenshot-\d{8}-\d{6}\.png$")
 DOCUMENT_CONTEXT_EXTENSIES = {".md", ".txt", ".json", ".py", ".html", ".js", ".css"}
 DOCUMENT_CONTEXT_GENEGEERDE_MAPNAMEN = {".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
@@ -149,6 +158,109 @@ laad_env_variabelen()
 
 # Standaard instellingen
 # Deze defaults worden gebruikt als het instellingenbestand velden mist.
+INSTELLINGEN_PROFIEL_SLEUTELS = (
+    "agent_modus",
+    "geheugen_modus",
+    "prioriteit_modus",
+    "computerbesturing_toestaan",
+    "online_ai_modus",
+    "ai_agent_primair",
+    "spraak_ingang",
+    "spraak_uitgang",
+    "spraak_input_provider",
+    "spraak_provider",
+    "security_scan_daily_enabled",
+    "website_audit_schedule_profile",
+    "stream_auto_focus_obs",
+)
+
+INSTELLINGEN_PROFIEL_BOOL_SLEUTELS = {
+    "agent_modus",
+    "geheugen_modus",
+    "prioriteit_modus",
+    "computerbesturing_toestaan",
+    "online_ai_modus",
+    "ai_agent_primair",
+    "spraak_ingang",
+    "spraak_uitgang",
+    "security_scan_daily_enabled",
+    "stream_auto_focus_obs",
+}
+
+
+def standaard_instellingen_profielen():
+    return {
+        "normal": {
+            "agent_modus": True,
+            "geheugen_modus": True,
+            "prioriteit_modus": True,
+            "computerbesturing_toestaan": False,
+            "online_ai_modus": True,
+            "ai_agent_primair": True,
+            "spraak_ingang": False,
+            "spraak_uitgang": True,
+            "spraak_input_provider": "google",
+            "spraak_provider": "local",
+            "security_scan_daily_enabled": False,
+            "website_audit_schedule_profile": "standard",
+            "stream_auto_focus_obs": True,
+        },
+        "streaming": {
+            "agent_modus": True,
+            "geheugen_modus": True,
+            "prioriteit_modus": False,
+            "computerbesturing_toestaan": True,
+            "online_ai_modus": True,
+            "ai_agent_primair": True,
+            "spraak_ingang": True,
+            "spraak_uitgang": False,
+            "spraak_input_provider": "whisper",
+            "spraak_provider": "local",
+            "security_scan_daily_enabled": False,
+            "website_audit_schedule_profile": "quick",
+            "stream_auto_focus_obs": True,
+        },
+        "security": {
+            "agent_modus": True,
+            "geheugen_modus": True,
+            "prioriteit_modus": True,
+            "computerbesturing_toestaan": False,
+            "online_ai_modus": False,
+            "ai_agent_primair": False,
+            "spraak_ingang": False,
+            "spraak_uitgang": True,
+            "spraak_input_provider": "google",
+            "spraak_provider": "local",
+            "security_scan_daily_enabled": True,
+            "website_audit_schedule_profile": "security",
+            "stream_auto_focus_obs": False,
+        },
+    }
+
+
+def standaard_instellingen_profiel_acties():
+    return {
+        "normal": [
+            {"command": "system info and show agenda and show tasks", "label": "Daily Briefing"},
+            {"command": "show tasks", "label": "Task Radar"},
+            {"command": "phone status", "label": "Phone Link Status"},
+            {"command": "take screenshot", "label": "Take Screenshot"},
+        ],
+        "streaming": [
+            {"command": "stream mode on", "label": "Stream Mode"},
+            {"command": "stream start", "label": "Go Live"},
+            {"command": "stream recording start", "label": "Start Recording"},
+            {"command": "stream help", "label": "Stream Help"},
+        ],
+        "security": [
+            {"command": "website audit status", "label": "Audit Status"},
+            {"command": "website audit report latest", "label": "Latest Audit Report"},
+            {"command": "website audit schedule status", "label": "Audit Schedule"},
+            {"command": "enable automation mode", "label": "Enable Automation"},
+        ],
+    }
+
+
 DEFAULT_SETTINGS = {
     "naam": "Echo",
     "client_naam": "",
@@ -174,6 +286,12 @@ DEFAULT_SETTINGS = {
     "wake_word": "wake up",
     "browser_stem": "",
     "premium_tts_voice_id": "",
+    "instellingen_profiel": "normal",
+    "instellingen_profielen": standaard_instellingen_profielen(),
+    "instellingen_profiel_acties": standaard_instellingen_profiel_acties(),
+    "profiel_auto_router_enabled": True,
+    "profiel_auto_router_suggest_threshold": 62,
+    "profiel_auto_router_auto_threshold": 86,
     "agent_modus": True,
     "geheugen_modus": True,
     "prioriteit_modus": True,
@@ -395,10 +513,191 @@ def normaliseer_whisper_compute_type(compute_type):
     return compute_type
 
 
+def normaliseer_instellingen_profiel_naam(waarde):
+    profiel = str(waarde or "").strip().lower()
+    if profiel not in {"normal", "streaming", "security"}:
+        return "normal"
+    return profiel
+
+
+def normaliseer_profiel_website_audit_profiel(waarde):
+    profiel = str(waarde or "").strip().lower()
+    if profiel not in {"quick", "standard", "security", "full"}:
+        return "standard"
+    return profiel
+
+
+def normaliseer_instellingen_profiel_config(naam, profiel_config):
+    basis_profielen = standaard_instellingen_profielen()
+    profiel_naam = normaliseer_instellingen_profiel_naam(naam)
+    basis = dict(basis_profielen.get(profiel_naam, basis_profielen["normal"]))
+    bron = profiel_config if isinstance(profiel_config, dict) else {}
+
+    resultaat = {}
+    for sleutel in INSTELLINGEN_PROFIEL_SLEUTELS:
+        waarde = bron.get(sleutel, basis.get(sleutel))
+
+        if sleutel in INSTELLINGEN_PROFIEL_BOOL_SLEUTELS:
+            resultaat[sleutel] = parseer_bool_waarde(waarde, standaard=basis.get(sleutel, False))
+        elif sleutel == "spraak_input_provider":
+            resultaat[sleutel] = normaliseer_spraak_input_provider(waarde)
+        elif sleutel == "spraak_provider":
+            resultaat[sleutel] = normaliseer_spraak_provider(waarde)
+        elif sleutel == "website_audit_schedule_profile":
+            resultaat[sleutel] = normaliseer_profiel_website_audit_profiel(waarde)
+        else:
+            resultaat[sleutel] = waarde
+
+    return resultaat
+
+
+def normaliseer_instellingen_profielen(waarde):
+    basis_profielen = standaard_instellingen_profielen()
+    profielen = {
+        naam: normaliseer_instellingen_profiel_config(naam, config)
+        for naam, config in basis_profielen.items()
+    }
+
+    if isinstance(waarde, dict):
+        for naam, config in waarde.items():
+            profiel_naam = normaliseer_instellingen_profiel_naam(naam)
+            profielen[profiel_naam] = normaliseer_instellingen_profiel_config(profiel_naam, config)
+
+    return profielen
+
+
+def normaliseer_instellingen_profiel_actie_item(actie):
+    if isinstance(actie, dict):
+        commando = str(actie.get("command", "") or "").strip()
+        label = str(actie.get("label", "") or "").strip()
+    else:
+        commando = str(actie or "").strip()
+        label = ""
+
+    commando = re.sub(r"\s+", " ", commando).strip()
+    label = re.sub(r"\s+", " ", label).strip()
+
+    if not commando:
+        return None
+
+    if len(commando) > 180:
+        commando = commando[:180].strip()
+    if len(label) > 64:
+        label = label[:64].strip()
+
+    payload = {"command": commando}
+    if label:
+        payload["label"] = label
+    return payload
+
+
+def normaliseer_instellingen_profiel_acties_lijst(waarde, fallback):
+    bron = waarde if isinstance(waarde, list) else fallback
+    acties = []
+
+    for item in bron:
+        if len(acties) >= 10:
+            break
+        genormaliseerd = normaliseer_instellingen_profiel_actie_item(item)
+        if genormaliseerd:
+            acties.append(genormaliseerd)
+
+    if acties:
+        return acties
+
+    fallback_lijst = fallback if isinstance(fallback, list) else []
+    veilige_fallback = []
+    for item in fallback_lijst:
+        if len(veilige_fallback) >= 10:
+            break
+        genormaliseerd = normaliseer_instellingen_profiel_actie_item(item)
+        if genormaliseerd:
+            veilige_fallback.append(genormaliseerd)
+    return veilige_fallback
+
+
+def normaliseer_instellingen_profiel_acties(waarde):
+    basis = standaard_instellingen_profiel_acties()
+    acties = {
+        naam: normaliseer_instellingen_profiel_acties_lijst(config, basis.get(naam, []))
+        for naam, config in basis.items()
+    }
+
+    if isinstance(waarde, dict):
+        for naam, lijst in waarde.items():
+            profiel_naam = normaliseer_instellingen_profiel_naam(naam)
+            acties[profiel_naam] = normaliseer_instellingen_profiel_acties_lijst(
+                lijst,
+                basis.get(profiel_naam, basis["normal"]),
+            )
+
+    return acties
+
+
+def pas_instellingen_profiel_toe(configuratie, profiel_naam=None):
+    configuratie["instellingen_profielen"] = normaliseer_instellingen_profielen(
+        configuratie.get("instellingen_profielen", DEFAULT_SETTINGS["instellingen_profielen"])
+    )
+
+    gekozen_profiel = normaliseer_instellingen_profiel_naam(
+        profiel_naam if profiel_naam is not None else configuratie.get("instellingen_profiel", "normal")
+    )
+    configuratie["instellingen_profiel"] = gekozen_profiel
+
+    profiel_config = configuratie["instellingen_profielen"].get(gekozen_profiel, {})
+    for sleutel, waarde in profiel_config.items():
+        configuratie[sleutel] = copy.deepcopy(waarde)
+
+    return gekozen_profiel
+
+
 # Synchroniseer en valideer alle instellingen op één centrale plek.
 def synchroniseer_taalinstellingen(configuratie):
+    configuratie["instellingen_profielen"] = normaliseer_instellingen_profielen(
+        configuratie.get("instellingen_profielen", DEFAULT_SETTINGS["instellingen_profielen"])
+    )
+    configuratie["instellingen_profiel"] = normaliseer_instellingen_profiel_naam(
+        configuratie.get("instellingen_profiel", DEFAULT_SETTINGS["instellingen_profiel"])
+    )
+    configuratie["instellingen_profiel_acties"] = normaliseer_instellingen_profiel_acties(
+        configuratie.get("instellingen_profiel_acties", DEFAULT_SETTINGS["instellingen_profiel_acties"])
+    )
+    configuratie["profiel_auto_router_enabled"] = parseer_bool_waarde(
+        configuratie.get("profiel_auto_router_enabled", DEFAULT_SETTINGS["profiel_auto_router_enabled"]),
+        standaard=True,
+    )
+    configuratie["profiel_auto_router_suggest_threshold"] = begrens_int_waarde(
+        configuratie.get(
+            "profiel_auto_router_suggest_threshold",
+            DEFAULT_SETTINGS["profiel_auto_router_suggest_threshold"],
+        ),
+        standaard=62,
+        minimum=35,
+        maximum=95,
+    )
+    configuratie["profiel_auto_router_auto_threshold"] = begrens_int_waarde(
+        configuratie.get(
+            "profiel_auto_router_auto_threshold",
+            DEFAULT_SETTINGS["profiel_auto_router_auto_threshold"],
+        ),
+        standaard=86,
+        minimum=45,
+        maximum=99,
+    )
+    minimale_auto_threshold = min(99, configuratie["profiel_auto_router_suggest_threshold"] + 5)
+    if configuratie["profiel_auto_router_auto_threshold"] < minimale_auto_threshold:
+        configuratie["profiel_auto_router_auto_threshold"] = minimale_auto_threshold
+
     configuratie["taal"] = normaliseer_taalwaarde(configuratie.get("taal", DEFAULT_SETTINGS["taal"]))
     configuratie["spraak_taal"] = standaard_spraak_taal(configuratie["taal"])
+    configuratie["spraak_ingang"] = parseer_bool_waarde(
+        configuratie.get("spraak_ingang", DEFAULT_SETTINGS["spraak_ingang"]),
+        standaard=False,
+    )
+    configuratie["spraak_uitgang"] = parseer_bool_waarde(
+        configuratie.get("spraak_uitgang", DEFAULT_SETTINGS["spraak_uitgang"]),
+        standaard=True,
+    )
     configuratie["spraak_input_provider"] = normaliseer_spraak_input_provider(
         configuratie.get("spraak_input_provider", DEFAULT_SETTINGS["spraak_input_provider"])
     )
@@ -495,6 +794,34 @@ def synchroniseer_taalinstellingen(configuratie):
     configuratie["discord_dm_vriend_aliases"] = normaliseer_discord_dm_aliases(
         configuratie.get("discord_dm_vriend_aliases", DEFAULT_SETTINGS["discord_dm_vriend_aliases"])
     )
+    configuratie["agent_modus"] = parseer_bool_waarde(
+        configuratie.get("agent_modus", DEFAULT_SETTINGS["agent_modus"]),
+        standaard=True,
+    )
+    configuratie["geheugen_modus"] = parseer_bool_waarde(
+        configuratie.get("geheugen_modus", DEFAULT_SETTINGS["geheugen_modus"]),
+        standaard=True,
+    )
+    configuratie["prioriteit_modus"] = parseer_bool_waarde(
+        configuratie.get("prioriteit_modus", DEFAULT_SETTINGS["prioriteit_modus"]),
+        standaard=True,
+    )
+    configuratie["computerbesturing_toestaan"] = parseer_bool_waarde(
+        configuratie.get("computerbesturing_toestaan", DEFAULT_SETTINGS["computerbesturing_toestaan"]),
+        standaard=False,
+    )
+    configuratie["online_ai_modus"] = parseer_bool_waarde(
+        configuratie.get("online_ai_modus", DEFAULT_SETTINGS["online_ai_modus"]),
+        standaard=True,
+    )
+    configuratie["ai_agent_primair"] = parseer_bool_waarde(
+        configuratie.get("ai_agent_primair", DEFAULT_SETTINGS["ai_agent_primair"]),
+        standaard=True,
+    )
+    configuratie["stream_auto_focus_obs"] = parseer_bool_waarde(
+        configuratie.get("stream_auto_focus_obs", DEFAULT_SETTINGS["stream_auto_focus_obs"]),
+        standaard=True,
+    )
 
     if not str(configuratie.get("wake_word", "")).strip():
         configuratie["wake_word"] = "hee echo" if configuratie["taal"] == "Nederlands" else "hey echo"
@@ -508,9 +835,9 @@ def laad_instellingen():
             instellingen = json.load(f)
             for key, value in DEFAULT_SETTINGS.items():
                 if key not in instellingen:
-                    instellingen[key] = value
+                    instellingen[key] = copy.deepcopy(value)
             return synchroniseer_taalinstellingen(instellingen)
-    return synchroniseer_taalinstellingen(DEFAULT_SETTINGS.copy())
+    return synchroniseer_taalinstellingen(copy.deepcopy(DEFAULT_SETTINGS))
 
 def sla_instellingen_op(instellingen):
     """Sla instellingen op"""
@@ -654,6 +981,9 @@ ACHTERGROND_PREFIXEN = (
     "draai op achtergrond ",
     "voer uit op achtergrond ",
 )
+ROUTER_SCORE_TIE_MARGIN = 0.1
+ROUTER_SCORE_ACTION_ANSWER_HYBRID_MARGIN = 0.12
+ROUTER_SCORE_MIN_CONFIDENCE = 0.18
 
 
 def gebruik_nederlands():
@@ -664,20 +994,27 @@ def tekst_voor_taal(engels, nederlands):
     return nederlands if gebruik_nederlands() else engels
 
 
-def update_routering_context(intent="", tool="", categorie="", fase="", notitie=""):
+def update_routering_context(intent="", tool="", categorie="", fase="", notitie="", metrics=None):
     GESPREK_CONTEXT["laatste_routering"] = {
         "intent": str(intent or "").strip(),
         "tool": str(tool or "").strip(),
         "category": str(categorie or "").strip(),
         "phase": str(fase or "").strip(),
         "note": str(notitie or "").strip(),
+        "metrics": metrics if isinstance(metrics, dict) else {},
         "at": time.time(),
     }
 
 
 def huidige_routering_context():
     routering = GESPREK_CONTEXT.get("laatste_routering")
-    return routering if isinstance(routering, dict) else {}
+    if not isinstance(routering, dict):
+        return {}
+
+    if not isinstance(routering.get("metrics"), dict):
+        routering = dict(routering)
+        routering["metrics"] = {}
+    return routering
 
 
 def opschonen_korte_tekst(tekst, max_lengte=240):
@@ -1452,6 +1789,18 @@ def standaard_website_audit_scheduler_data():
 
 WEBSITE_AUDIT_SCHEDULE_STATE = standaard_website_audit_scheduler_data()
 
+QUICK_CHECKER_MODULE_LOCK = threading.Lock()
+QUICK_CHECKER_MODULE = None
+QUICK_CHECK_CACHE_LOCK = threading.Lock()
+QUICK_CHECK_CACHE = {}
+QUICK_CHECK_RATE_LIMIT_LOCK = threading.Lock()
+QUICK_CHECK_CLIENT_REQUESTS = {}
+QUICK_CHECK_TASK_LOCK = threading.Lock()
+QUICK_CHECK_TASKS = {}
+QUICK_CHECK_TASK_ORDER = []
+QUICK_CHECK_TASK_MAX_ITEMS = 40
+QUICK_CHECK_CLIENT_LATEST_TASK = {}
+
 
 # Dagelijkse scheduler-state voor één-run-per-dag gedrag.
 DAILY_SECURITY_SCAN_LOCK = threading.Lock()
@@ -1466,7 +1815,6 @@ def standaard_dagelijkse_security_scan_data():
         "last_trigger_result": "",
         "updated_at": 0.0,
     }
-
 
 DAILY_SECURITY_SCAN_STATE = standaard_dagelijkse_security_scan_data()
 
@@ -5798,6 +6146,13 @@ def maak_dashboard_payload():
             "automation_active": automatisering_actief(),
             "automation_seconds_left": automation_seconden,
             "automation_label": formatteer_duur_compact(automation_seconden) if automation_seconden else "0s",
+            "settings_profile": str(instellingen.get("instellingen_profiel", "normal") or "normal").strip().lower(),
+            "settings_profiles": sorted(list((instellingen.get("instellingen_profielen") or {}).keys())),
+            "settings_profile_configs": copy.deepcopy(instellingen.get("instellingen_profielen") or {}),
+            "settings_profile_actions": copy.deepcopy(instellingen.get("instellingen_profiel_acties") or {}),
+            "profile_auto_router_enabled": bool(instellingen.get("profiel_auto_router_enabled", True)),
+            "profile_auto_router_suggest_threshold": int(instellingen.get("profiel_auto_router_suggest_threshold", 62) or 62),
+            "profile_auto_router_auto_threshold": int(instellingen.get("profiel_auto_router_auto_threshold", 86) or 86),
         },
         "ai": model_status,
         "memory": {
@@ -8519,6 +8874,121 @@ def tekst_lijkt_actiegericht(tekst):
     return any(re.search(patroon, tekst) for patroon in patronen)
 
 
+def begrens_router_score(waarde):
+    return max(0.0, min(1.0, float(waarde or 0.0)))
+
+
+def bevat_router_vraag_anker(tekst):
+    tekst = str(tekst or "").strip().lower()
+    if not tekst:
+        return False
+
+    if "?" in tekst:
+        return True
+
+    return bool(re.search(r"\b(?:why|what|how|where|when|kun\s+je|kan\s+je|leg\s+uit|waarom|wat|hoe|waar|wanneer|explain|compare|vergelijk)\b", tekst))
+
+
+def bereken_router_intent_scores(tekst, uitvoerbare_acties, vraagachtig, actieachtig):
+    tekst_norm = re.sub(r"\s+", " ", str(tekst or "").strip().lower())
+    actie_aantal = len(uitvoerbare_acties)
+    vraag_anker = bevat_router_vraag_anker(tekst_norm)
+
+    actie_score = 0.05
+    if actieachtig:
+        actie_score += 0.38
+    if actie_aantal:
+        actie_score += min(0.42, 0.18 + (actie_aantal * 0.12))
+    if vraag_anker and actie_score > 0.12:
+        actie_score -= 0.08
+
+    antwoord_score = 0.05
+    if vraagachtig:
+        antwoord_score += 0.48
+    if vraag_anker:
+        antwoord_score += 0.24
+    if actieachtig:
+        antwoord_score -= 0.06
+    if actie_aantal:
+        antwoord_score -= 0.06
+
+    hybride_score = 0.04
+    if actieachtig and vraagachtig:
+        hybride_score += 0.42
+    if actie_aantal and vraagachtig:
+        hybride_score += 0.20
+    if vraag_anker and actie_aantal:
+        hybride_score += 0.08
+    if not actieachtig or not vraagachtig:
+        hybride_score -= 0.12
+
+    return {
+        "action": round(begrens_router_score(actie_score), 3),
+        "answer": round(begrens_router_score(antwoord_score), 3),
+        "hybrid": round(begrens_router_score(hybride_score), 3),
+    }
+
+
+def kies_router_intent_en_confidence(scores):
+    scores = scores if isinstance(scores, dict) else {}
+    kandidaten = {
+        "action": begrens_router_score(scores.get("action", 0.0)),
+        "answer": begrens_router_score(scores.get("answer", 0.0)),
+        "hybrid": begrens_router_score(scores.get("hybrid", 0.0)),
+    }
+    gesorteerd = sorted(kandidaten.items(), key=lambda item: item[1], reverse=True)
+    beste_intent, beste_score = gesorteerd[0]
+    tweede_intent, tweede_score = gesorteerd[1]
+
+    if abs(beste_score - tweede_score) <= ROUTER_SCORE_ACTION_ANSWER_HYBRID_MARGIN:
+        if {beste_intent, tweede_intent} == {"action", "answer"}:
+            beste_intent = "hybrid"
+
+    confidence = (beste_score - tweede_score) / max(0.001, beste_score)
+    confidence = begrens_router_score(confidence)
+    if beste_intent == "hybrid":
+        confidence = min(confidence, 0.72)
+
+    return beste_intent, round(confidence, 3)
+
+
+def bepaal_router_fallback_volgorde(intent, uitvoerbare_acties, confidence):
+    ai_planner_beschikbaar = bool(online_ai_beschikbaar() and instellingen.get("ai_agent_primair", True))
+
+    if intent == "answer":
+        volgorde = ["builtin_answer"]
+        if ai_planner_beschikbaar:
+            volgorde.append("online_action_planner")
+        volgorde.append("fallback")
+        return "answer-first", volgorde
+
+    if uitvoerbare_acties:
+        if intent == "hybrid":
+            volgorde = ["local_plan", "builtin_answer"]
+            if ai_planner_beschikbaar:
+                volgorde.append("online_action_planner")
+            volgorde.append("fallback")
+            return "hybrid-local-first", volgorde
+
+        volgorde = ["local_plan"]
+        if ai_planner_beschikbaar:
+            volgorde.append("online_action_planner")
+        volgorde.extend(["builtin_answer", "fallback"])
+        return "local-first", volgorde
+
+    if confidence < ROUTER_SCORE_MIN_CONFIDENCE or intent == "hybrid":
+        volgorde = ["builtin_answer"]
+        if ai_planner_beschikbaar:
+            volgorde.append("online_action_planner")
+        volgorde.append("fallback")
+        return "clarify-first", volgorde
+
+    if ai_planner_beschikbaar:
+        return "online-first", ["online_action_planner", "builtin_answer", "fallback"]
+
+    return "fallback", ["builtin_answer", "fallback"]
+
+
 def analyseer_verzoek_routering(tekst):
     # Bepaalt intent, categorie en toolstrategie voor elk gebruikersverzoek.
     ruwe_plan = maak_actie_plan(tekst)
@@ -8533,23 +9003,11 @@ def analyseer_verzoek_routering(tekst):
 
     vraagachtig = bool(is_inhoudelijke_vraag(tekst) or is_meedenk_vraag(tekst) or is_doorvraag_verzoek(tekst))
     actieachtig = bool(uitvoerbare_acties or tekst_lijkt_actiegericht(tekst))
+    scores = bereken_router_intent_scores(tekst, uitvoerbare_acties, vraagachtig, actieachtig)
+    intent, confidence = kies_router_intent_en_confidence(scores)
     categorie = categoriseer_actie(uitvoerbare_acties[0]) if uitvoerbare_acties else categoriseer_verzoek_tekst(tekst)
-
-    if actieachtig and vraagachtig:
-        intent = "hybrid"
-    elif actieachtig:
-        intent = "action"
-    else:
-        intent = "answer"
-
-    if intent == "answer":
-        voorkeur_tool = "builtin_answer"
-    elif uitvoerbare_acties:
-        voorkeur_tool = "local_plan"
-    elif online_ai_beschikbaar() and instellingen.get("ai_agent_primair", True):
-        voorkeur_tool = "online_action_planner"
-    else:
-        voorkeur_tool = "fallback"
+    fallback_mode, fallback_order = bepaal_router_fallback_volgorde(intent, uitvoerbare_acties, confidence)
+    voorkeur_tool = fallback_order[0] if fallback_order else "fallback"
 
     return {
         "intent": intent,
@@ -8558,6 +9016,10 @@ def analyseer_verzoek_routering(tekst):
         "plan": uitvoerbare_acties,
         "question_like": vraagachtig,
         "action_like": actieachtig,
+        "scores": scores,
+        "confidence": confidence,
+        "fallback_mode": fallback_mode,
+        "fallback_order": fallback_order,
     }
 
 
@@ -16256,23 +16718,51 @@ def voer_commando_uit(tekst, spreek_hardop=True):
         return finaliseer_commando_antwoord(tekst, geheugen_bericht, spreek_hardop)
 
     routering = analyseer_verzoek_routering(tekst)
-    update_routering_context(routering["intent"], routering["tool"], routering["category"], "routing")
+    router_metrics = {
+        "confidence": float(routering.get("confidence", 0.0) or 0.0),
+        "scores": dict(routering.get("scores", {})) if isinstance(routering.get("scores"), dict) else {},
+        "fallback_mode": str(routering.get("fallback_mode", "") or "").strip(),
+        "fallback_order": list(routering.get("fallback_order", [])) if isinstance(routering.get("fallback_order"), list) else [],
+    }
+    router_notitie = f"confidence={router_metrics['confidence']:.2f};fallback={router_metrics['fallback_mode']}"
+    update_routering_context(routering["intent"], routering["tool"], routering["category"], "routing", router_notitie, metrics=router_metrics)
 
     if routering["intent"] == "answer":
         antwoord_tool, antwoord_bericht = maak_best_mogelijke_antwoordtekst(tekst)
         if antwoord_bericht:
             bericht = antwoord_bericht
-            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered")
+            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered", metrics=router_metrics)
         else:
             bericht = kan_niet_oproepen_bericht(tekst)
-            update_routering_context(routering["intent"], "fallback", routering["category"], "fallback")
+            update_routering_context(routering["intent"], "fallback", routering["category"], "fallback", metrics=router_metrics)
 
         return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
 
     plan = list(routering.get("plan", []))
 
+    if not plan and routering.get("tool") == "builtin_answer":
+        antwoord_tool, antwoord_bericht = maak_best_mogelijke_antwoordtekst(tekst)
+        if antwoord_bericht:
+            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered", metrics=router_metrics)
+            return finaliseer_commando_antwoord(tekst, antwoord_bericht, spreek_hardop)
+
+        bericht = tekst_voor_taal(
+            "I need a clearer command. Tell me one concrete action or one clear question.",
+            "Ik heb een duidelijkere opdracht nodig. Geef één concrete actie of één heldere vraag."
+        )
+        update_routering_context(routering["intent"], "fallback", routering["category"], "fallback", "clarify request", metrics=router_metrics)
+        return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
+
+    if not plan and routering.get("tool") == "fallback":
+        bericht = tekst_voor_taal(
+            "I am not fully sure what to execute. Give one short action first, then I can continue.",
+            "Ik weet nog niet zeker wat ik moet uitvoeren. Geef eerst één korte actie, dan ga ik verder."
+        )
+        update_routering_context(routering["intent"], "fallback", routering["category"], "fallback", "low-confidence fallback", metrics=router_metrics)
+        return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
+
     if not plan and routering.get("tool") == "online_action_planner":
-        update_routering_context(routering["intent"], routering["tool"], routering["category"], "tool_planning")
+        update_routering_context(routering["intent"], routering["tool"], routering["category"], "tool_planning", metrics=router_metrics)
         agent_resultaat = probeer_online_ai_agent(tekst, routering)
         if agent_resultaat:
             if agent_resultaat.get("plan"):
@@ -16283,11 +16773,11 @@ def voer_commando_uit(tekst, spreek_hardop=True):
                 antwoord_tool, antwoord_bericht = maak_best_mogelijke_antwoordtekst(tekst, agent_resultaat.get("resultaten", []))
                 if antwoord_bericht:
                     bericht = antwoord_bericht
-                    update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered")
+                    update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered", metrics=router_metrics)
                 else:
-                    update_routering_context(routering["intent"], "online_action_planner", routering["category"], "completed")
+                    update_routering_context(routering["intent"], "online_action_planner", routering["category"], "completed", metrics=router_metrics)
             else:
-                update_routering_context(routering["intent"], "online_action_planner", routering["category"], "completed")
+                update_routering_context(routering["intent"], "online_action_planner", routering["category"], "completed", metrics=router_metrics)
 
             return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
 
@@ -16302,30 +16792,489 @@ def voer_commando_uit(tekst, spreek_hardop=True):
         antwoord_tool, antwoord_bericht = maak_best_mogelijke_antwoordtekst(tekst, plan_resultaat["bekende_resultaten"])
         if antwoord_bericht:
             bericht = antwoord_bericht
-            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered")
+            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered", metrics=router_metrics)
         elif plan_resultaat["bekende_stappen"]:
-            update_routering_context(routering["intent"], "local_plan", routering["category"], "completed")
+            update_routering_context(routering["intent"], "local_plan", routering["category"], "completed", metrics=router_metrics)
         else:
             bericht = tekst_voor_taal(
                 "I can't call that task cleanly right now. Split the action from the question, and I'll try again in two smaller steps.",
                 "Ik kan die taak nu niet netjes oproepen. Splits de actie en de vraag even op, dan probeer ik het opnieuw in twee kleinere stappen."
             )
-            update_routering_context(routering["intent"], "fallback", routering["category"], "fallback")
+            update_routering_context(routering["intent"], "fallback", routering["category"], "fallback", metrics=router_metrics)
     elif plan_resultaat["heeft_onbekende_stap"]:
         antwoord_tool, antwoord_bericht = maak_best_mogelijke_antwoordtekst(tekst, plan_resultaat["bekende_resultaten"])
         if antwoord_bericht:
             bericht = antwoord_bericht
             if plan_resultaat["bekende_stappen"]:
                 update_gesprek_context(plan_resultaat["bekende_stappen"], plan_resultaat["bekende_resultaten"])
-            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered")
+            update_routering_context(routering["intent"], antwoord_tool, routering["category"], "answered", metrics=router_metrics)
         else:
             bericht = kan_niet_oproepen_bericht(tekst)
-            update_routering_context(routering["intent"], "fallback", routering["category"], "fallback")
+            update_routering_context(routering["intent"], "fallback", routering["category"], "fallback", metrics=router_metrics)
     else:
         update_gesprek_context(plan, plan_resultaat["resultaten"])
-        update_routering_context(routering["intent"], "local_plan", routering["category"], "completed")
+        update_routering_context(routering["intent"], "local_plan", routering["category"], "completed", metrics=router_metrics)
 
     return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
+
+
+def vind_quick_checker_module_pad():
+    script_pad = Path(__file__).resolve()
+    kandidaten = [
+        script_pad.with_name("quick-check.py"),
+        Path.cwd() / "quick-check.py",
+    ]
+
+    if len(script_pad.parents) >= 3:
+        kandidaten.append(script_pad.parents[2] / "quick-check.py")
+
+    gezien = set()
+    for kandidaat in kandidaten:
+        try:
+            pad = kandidaat.resolve()
+        except Exception:
+            continue
+
+        sleutel = str(pad).strip().lower()
+        if not sleutel or sleutel in gezien:
+            continue
+        gezien.add(sleutel)
+
+        if pad.exists() and pad.is_file():
+            return pad
+
+    return None
+
+def laad_quick_checker_module():
+    global QUICK_CHECKER_MODULE
+
+    if QUICK_CHECKER_MODULE is not None:
+        return QUICK_CHECKER_MODULE
+
+    with QUICK_CHECKER_MODULE_LOCK:
+        if QUICK_CHECKER_MODULE is not None:
+            return QUICK_CHECKER_MODULE
+
+        module_pad = vind_quick_checker_module_pad()
+        if module_pad is None:
+            raise FileNotFoundError("quick-check.py is niet gevonden voor de quick checker scan.")
+
+        module_spec = importlib.util.spec_from_file_location("echo_quick_checker_runtime", str(module_pad))
+        if module_spec is None or module_spec.loader is None:
+            raise RuntimeError("Kon quick-check.py module niet laden.")
+
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+
+        if not hasattr(module, "run_scan"):
+            raise RuntimeError("quick-check.py mist verplichte functie run_scan.")
+
+        QUICK_CHECKER_MODULE = module
+        return QUICK_CHECKER_MODULE
+
+
+def normaliseer_quick_checker_scan_mode(waarde):
+    return "hard" if str(waarde or "").strip().lower() == "hard" else "quick"
+
+
+def normaliseer_quick_checker_url(waarde):
+    url = str(waarde or "").strip()
+    if not url:
+        return ""
+    if len(url) > MAX_QUICK_CHECK_URL_CHARS:
+        return ""
+    if any(teken in url for teken in ("\n", "\r", "\t")):
+        return ""
+    return url
+
+
+def quick_checker_client_sleutel():
+    forwarded_for = str(request.headers.get("X-Forwarded-For", "") or "").strip()
+    if forwarded_for:
+        eerste_hop = forwarded_for.split(",", 1)[0].strip()
+        if eerste_hop:
+            return eerste_hop[:120]
+
+    remote = str(request.remote_addr or "unknown").strip()
+    return (remote or "unknown")[:120]
+
+
+def registreer_quick_checker_verzoek_en_check_limit(client_sleutel):
+    nu = time.time()
+    ondergrens = nu - QUICK_CHECK_RATE_LIMIT_WINDOW_SECONDS
+
+    with QUICK_CHECK_RATE_LIMIT_LOCK:
+        tijdstempels = [
+            ts
+            for ts in QUICK_CHECK_CLIENT_REQUESTS.get(client_sleutel, [])
+            if float(ts) >= ondergrens
+        ]
+
+        if len(tijdstempels) >= QUICK_CHECK_RATE_LIMIT_MAX_REQUESTS:
+            retry_after = max(1, int(round(QUICK_CHECK_RATE_LIMIT_WINDOW_SECONDS - (nu - tijdstempels[0]))))
+            QUICK_CHECK_CLIENT_REQUESTS[client_sleutel] = tijdstempels
+            return True, retry_after
+
+        tijdstempels.append(nu)
+        QUICK_CHECK_CLIENT_REQUESTS[client_sleutel] = tijdstempels
+
+        # Houd alleen recente clients in memory om groei te voorkomen.
+        if len(QUICK_CHECK_CLIENT_REQUESTS) > 600:
+            QUICK_CHECK_CLIENT_REQUESTS.clear()
+
+    return False, 0
+
+
+def maak_quick_checker_cache_sleutel(doel_url, scan_mode):
+    return f"{scan_mode}::{str(doel_url or '').strip().lower()}"
+
+
+def haal_quick_checker_cache_resultaat(cache_sleutel):
+    nu = time.time()
+    verlopen_grens = nu - QUICK_CHECK_CACHE_TTL_SECONDS
+
+    with QUICK_CHECK_CACHE_LOCK:
+        verlopen_sleutels = [
+            sleutel
+            for sleutel, item in QUICK_CHECK_CACHE.items()
+            if float(item.get("created_at", 0.0) or 0.0) < verlopen_grens
+        ]
+        for sleutel in verlopen_sleutels:
+            QUICK_CHECK_CACHE.pop(sleutel, None)
+
+        cache_item = QUICK_CHECK_CACHE.get(cache_sleutel)
+        if not cache_item:
+            return None, 0
+
+        created_at = float(cache_item.get("created_at", 0.0) or 0.0)
+        payload = cache_item.get("payload")
+        if not isinstance(payload, dict):
+            QUICK_CHECK_CACHE.pop(cache_sleutel, None)
+            return None, 0
+
+        leeftijd = max(0, int(round(nu - created_at)))
+        return payload, leeftijd
+
+
+def sla_quick_checker_cache_resultaat(cache_sleutel, payload):
+    if not isinstance(payload, dict):
+        return
+
+    with QUICK_CHECK_CACHE_LOCK:
+        QUICK_CHECK_CACHE[cache_sleutel] = {
+            "created_at": time.time(),
+            "payload": payload,
+        }
+
+        if len(QUICK_CHECK_CACHE) > QUICK_CHECK_CACHE_MAX_ITEMS:
+            oudste = sorted(
+                QUICK_CHECK_CACHE.items(),
+                key=lambda item: float(item[1].get("created_at", 0.0) or 0.0),
+            )
+            teveel = len(QUICK_CHECK_CACHE) - QUICK_CHECK_CACHE_MAX_ITEMS
+            for sleutel, _item in oudste[:teveel]:
+                QUICK_CHECK_CACHE.pop(sleutel, None)
+
+
+def voer_quick_checker_scan_met_timeout(quick_checker_module, doel_url, scan_mode):
+    resultaat = {}
+    fout = {}
+
+    def worker():
+        try:
+            resultaat["report"] = quick_checker_module.run_scan(doel_url, scan_mode)
+        except Exception as exc:
+            fout["error"] = exc
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(max(5, int(QUICK_CHECK_SCAN_TIMEOUT_SECONDS)))
+
+    if thread.is_alive():
+        raise TimeoutError("Quick checker scan timeout")
+
+    if "error" in fout:
+        raise fout["error"]
+
+    report = resultaat.get("report")
+    if not isinstance(report, dict):
+        raise RuntimeError("Quick checker scan gaf geen geldig rapport terug")
+
+    return report
+
+
+def bouw_quick_checker_response_payload(quick_checker_module, report):
+    text_report = ""
+    report_to_text_fn = getattr(quick_checker_module, "report_to_text", None)
+    if callable(report_to_text_fn):
+        try:
+            text_report = str(report_to_text_fn(report))
+        except Exception:
+            text_report = ""
+
+    client_message = ""
+    build_client_message_fn = getattr(quick_checker_module, "build_client_message", None)
+    if callable(build_client_message_fn):
+        try:
+            client_message = str(build_client_message_fn(report))
+        except Exception:
+            client_message = ""
+
+    return {
+        "report": report,
+        "text_report": text_report,
+        "client_message": client_message,
+    }
+
+
+def standaard_quick_check_task_data(task_id, doel_url, scan_mode, client_sleutel):
+    nu = time.time()
+    return {
+        "id": str(task_id or "").strip(),
+        "status": "queued",
+        "running": True,
+        "stage": "queued",
+        "progress_percent": 2,
+        "message": tekst_voor_taal("Quick checker queued.", "Quick checker staat in de wachtrij."),
+        "target_url": str(doel_url or "").strip(),
+        "scan_mode": normaliseer_quick_checker_scan_mode(scan_mode),
+        "from_cache": False,
+        "cache_age_seconds": 0,
+        "duration_ms": 0,
+        "error": "",
+        "payload": None,
+        "client": str(client_sleutel or "unknown").strip()[:120],
+        "created_at": nu,
+        "updated_at": nu,
+        "started_at": nu,
+        "finished_at": 0.0,
+    }
+
+
+def snoei_quick_check_taken_locked():
+    if len(QUICK_CHECK_TASK_ORDER) <= QUICK_CHECK_TASK_MAX_ITEMS:
+        return
+
+    teveel = len(QUICK_CHECK_TASK_ORDER) - QUICK_CHECK_TASK_MAX_ITEMS
+    te_verwijderen = QUICK_CHECK_TASK_ORDER[:teveel]
+    QUICK_CHECK_TASK_ORDER[:] = QUICK_CHECK_TASK_ORDER[teveel:]
+
+    for taak_id in te_verwijderen:
+        QUICK_CHECK_TASKS.pop(taak_id, None)
+
+    for client_sleutel, laatste_taak_id in list(QUICK_CHECK_CLIENT_LATEST_TASK.items()):
+        if laatste_taak_id not in QUICK_CHECK_TASKS:
+            QUICK_CHECK_CLIENT_LATEST_TASK.pop(client_sleutel, None)
+
+
+def registreer_quick_check_taak(task_data):
+    if not isinstance(task_data, dict):
+        return None
+
+    taak_id = str(task_data.get("id", "") or "").strip()
+    if not taak_id:
+        return None
+
+    with QUICK_CHECK_TASK_LOCK:
+        QUICK_CHECK_TASKS[taak_id] = copy.deepcopy(task_data)
+        if taak_id in QUICK_CHECK_TASK_ORDER:
+            QUICK_CHECK_TASK_ORDER.remove(taak_id)
+        QUICK_CHECK_TASK_ORDER.append(taak_id)
+
+        client_sleutel = str(task_data.get("client", "") or "").strip()
+        if client_sleutel:
+            QUICK_CHECK_CLIENT_LATEST_TASK[client_sleutel] = taak_id
+
+        snoei_quick_check_taken_locked()
+        return copy.deepcopy(QUICK_CHECK_TASKS.get(taak_id))
+
+
+def update_quick_check_taak(task_id, **updates):
+    taak_id = str(task_id or "").strip()
+    if not taak_id:
+        return None
+
+    with QUICK_CHECK_TASK_LOCK:
+        taak = QUICK_CHECK_TASKS.get(taak_id)
+        if not isinstance(taak, dict):
+            return None
+
+        for sleutel, waarde in updates.items():
+            taak[sleutel] = copy.deepcopy(waarde)
+
+        taak["updated_at"] = time.time()
+        QUICK_CHECK_TASKS[taak_id] = taak
+        return copy.deepcopy(taak)
+
+
+def haal_quick_check_taak(task_id):
+    taak_id = str(task_id or "").strip()
+    if not taak_id:
+        return None
+
+    with QUICK_CHECK_TASK_LOCK:
+        taak = QUICK_CHECK_TASKS.get(taak_id)
+        return copy.deepcopy(taak) if isinstance(taak, dict) else None
+
+
+def haal_laatste_quick_check_taak_voor_client(client_sleutel):
+    client_sleutel = str(client_sleutel or "").strip()[:120]
+
+    with QUICK_CHECK_TASK_LOCK:
+        if client_sleutel:
+            taak_id = QUICK_CHECK_CLIENT_LATEST_TASK.get(client_sleutel)
+            if taak_id and taak_id in QUICK_CHECK_TASKS:
+                return copy.deepcopy(QUICK_CHECK_TASKS[taak_id])
+
+        while QUICK_CHECK_TASK_ORDER:
+            laatste_taak_id = QUICK_CHECK_TASK_ORDER[-1]
+            taak = QUICK_CHECK_TASKS.get(laatste_taak_id)
+            if isinstance(taak, dict):
+                return copy.deepcopy(taak)
+            QUICK_CHECK_TASK_ORDER.pop()
+
+    return None
+
+
+def quick_check_taak_response_payload(task_data, include_result=False):
+    task_data = task_data if isinstance(task_data, dict) else {}
+    payload = {
+        "id": str(task_data.get("id", "") or "").strip(),
+        "status": str(task_data.get("status", "queued") or "queued").strip().lower(),
+        "running": bool(task_data.get("running", False)),
+        "stage": str(task_data.get("stage", "") or "").strip().lower(),
+        "progress_percent": int(begrens_int_waarde(task_data.get("progress_percent", 0), 0, 0, 100)),
+        "message": str(task_data.get("message", "") or "").strip(),
+        "target_url": str(task_data.get("target_url", "") or "").strip(),
+        "scan_mode": normaliseer_quick_checker_scan_mode(task_data.get("scan_mode", "quick")),
+        "from_cache": bool(task_data.get("from_cache", False)),
+        "cache_age_seconds": int(begrens_int_waarde(task_data.get("cache_age_seconds", 0), 0, 0)),
+        "duration_ms": int(begrens_int_waarde(task_data.get("duration_ms", 0), 0, 0)),
+        "error": str(task_data.get("error", "") or "").strip(),
+        "created_at": float(task_data.get("created_at", 0.0) or 0.0),
+        "updated_at": float(task_data.get("updated_at", 0.0) or 0.0),
+        "finished_at": float(task_data.get("finished_at", 0.0) or 0.0),
+    }
+
+    if include_result:
+        result_payload = task_data.get("payload")
+        payload["result"] = copy.deepcopy(result_payload) if isinstance(result_payload, dict) else None
+
+    return payload
+
+
+def start_quick_checker_scan_taak(doel_url, scan_mode, client_sleutel):
+    scan_mode = normaliseer_quick_checker_scan_mode(scan_mode)
+    cache_sleutel = maak_quick_checker_cache_sleutel(doel_url, scan_mode)
+
+    taak_id = f"quick-check-{uuid.uuid4().hex[:10]}"
+    taak_data = standaard_quick_check_task_data(taak_id, doel_url, scan_mode, client_sleutel)
+
+    cached_payload, cache_leeftijd = haal_quick_checker_cache_resultaat(cache_sleutel)
+    if cached_payload is not None:
+        taak_data.update({
+            "status": "completed",
+            "running": False,
+            "stage": "completed",
+            "progress_percent": 100,
+            "message": tekst_voor_taal("Quick checker cache result loaded.", "Quick checker cache-resultaat geladen."),
+            "from_cache": True,
+            "cache_age_seconds": int(cache_leeftijd),
+            "payload": copy.deepcopy(cached_payload),
+            "finished_at": time.time(),
+        })
+        return registreer_quick_check_taak(taak_data)
+
+    registreer_quick_check_taak(taak_data)
+
+    def worker():
+        start_tijd = time.time()
+        try:
+            update_quick_check_taak(
+                taak_id,
+                stage="module_load",
+                progress_percent=16,
+                message=tekst_voor_taal("Loading quick checker module.", "Quick checker module wordt geladen."),
+            )
+            quick_checker_module = laad_quick_checker_module()
+
+            update_quick_check_taak(
+                taak_id,
+                stage="scan_running",
+                progress_percent=48,
+                message=tekst_voor_taal("Running website scan.", "Website-scan wordt uitgevoerd."),
+            )
+            report = voer_quick_checker_scan_met_timeout(quick_checker_module, doel_url, scan_mode)
+
+            update_quick_check_taak(
+                taak_id,
+                stage="report_build",
+                progress_percent=78,
+                message=tekst_voor_taal("Building report output.", "Rapport-output wordt opgebouwd."),
+            )
+            payload = bouw_quick_checker_response_payload(quick_checker_module, report)
+
+            update_quick_check_taak(
+                taak_id,
+                stage="cache_store",
+                progress_percent=93,
+                message=tekst_voor_taal("Saving scan cache.", "Scan-cache wordt opgeslagen."),
+            )
+            sla_quick_checker_cache_resultaat(cache_sleutel, payload)
+
+            duur_ms = int(round((time.time() - start_tijd) * 1000))
+            update_quick_check_taak(
+                taak_id,
+                status="completed",
+                running=False,
+                stage="completed",
+                progress_percent=100,
+                message=tekst_voor_taal("Quick checker scan completed.", "Quick checker scan afgerond."),
+                payload=payload,
+                duration_ms=duur_ms,
+                finished_at=time.time(),
+                error="",
+            )
+        except TimeoutError:
+            update_quick_check_taak(
+                taak_id,
+                status="failed",
+                running=False,
+                stage="failed",
+                progress_percent=100,
+                message=tekst_voor_taal(
+                    "Quick checker timed out. Try quick mode or run it again later.",
+                    "Quick checker timeout. Probeer quick-modus of start de scan later opnieuw."
+                ),
+                error="timeout",
+                finished_at=time.time(),
+            )
+        except ValueError as exc:
+            update_quick_check_taak(
+                taak_id,
+                status="failed",
+                running=False,
+                stage="failed",
+                progress_percent=100,
+                message=str(exc),
+                error=str(exc),
+                finished_at=time.time(),
+            )
+        except Exception as exc:
+            app.logger.exception("Quick checker background scan failed for %s (%s)", doel_url, scan_mode)
+            update_quick_check_taak(
+                taak_id,
+                status="failed",
+                running=False,
+                stage="failed",
+                progress_percent=100,
+                message=str(exc),
+                error=str(exc),
+                finished_at=time.time(),
+            )
+
+    threading.Thread(target=worker, daemon=True).start()
+    return haal_quick_check_taak(taak_id)
 
 # Web-UI entrypoint.
 @app.route('/')
@@ -16334,6 +17283,15 @@ def index():
         'index.html',
         instellingen=instellingen,
         spraak_beschikbaar=SPRAAK_BESCHIKBAAR,
+        build_id=APP_BUILD_ID,
+    )
+
+
+@app.route('/quick-checker')
+def quick_checker_page():
+    return render_template(
+        'quick-checker.html',
+        instellingen=instellingen,
         build_id=APP_BUILD_ID,
     )
 
@@ -16376,6 +17334,15 @@ def execute_command():
             'status': 'error',
             'message': tekst_voor_taal('No command provided', 'Geen opdracht opgegeven')
         }), 400
+
+    if len(commando) > MAX_COMMAND_TEXT_CHARS:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                f'Command is too long (max {MAX_COMMAND_TEXT_CHARS} characters).',
+                f'Opdracht is te lang (max {MAX_COMMAND_TEXT_CHARS} tekens).'
+            ),
+        }), 413
 
     vorige_screenshot_marker = maak_laatste_screenshot_marker()
 
@@ -16774,6 +17741,177 @@ def start_website_audit_endpoint():
     }), (200 if gestart else 409)
 
 
+@app.route('/api/quick-check/start', methods=['POST'])
+def start_quick_checker_scan_endpoint():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Invalid JSON payload', 'Ongeldige JSON-payload'),
+        }), 400
+
+    doel_url = normaliseer_quick_checker_url(data.get('url', ''))
+    if not doel_url:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                f'Please provide a valid URL (max {MAX_QUICK_CHECK_URL_CHARS} chars).',
+                f'Geef een geldige URL op (max {MAX_QUICK_CHECK_URL_CHARS} tekens).'
+            ),
+        }), 400
+
+    scan_mode = normaliseer_quick_checker_scan_mode(data.get('mode', 'quick'))
+    client_sleutel = quick_checker_client_sleutel()
+    is_beperkt, retry_after = registreer_quick_checker_verzoek_en_check_limit(client_sleutel)
+    if is_beperkt:
+        response = jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                'Too many quick checker requests. Please wait a moment and try again.',
+                'Te veel quick checker verzoeken. Wacht even en probeer opnieuw.'
+            ),
+            'retry_after_seconds': retry_after,
+        })
+        response.headers['Retry-After'] = str(retry_after)
+        return response, 429
+
+    taak = start_quick_checker_scan_taak(doel_url, scan_mode, client_sleutel)
+    if not isinstance(taak, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Could not start quick checker task.', 'Kon quick checker taak niet starten.'),
+        }), 500
+
+    klaar = str(taak.get('status', '')).strip().lower() == 'completed'
+    return jsonify({
+        'status': 'success',
+        'message': str(taak.get('message', '') or tekst_voor_taal('Quick checker started.', 'Quick checker gestart.')).strip(),
+        'task': quick_check_taak_response_payload(taak, include_result=klaar),
+    })
+
+
+@app.route('/api/quick-check/status/latest', methods=['GET'])
+def get_latest_quick_checker_task_status():
+    client_sleutel = quick_checker_client_sleutel()
+    taak = haal_laatste_quick_check_taak_voor_client(client_sleutel)
+    if not isinstance(taak, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('No quick checker task found yet.', 'Nog geen quick checker taak gevonden.'),
+        }), 404
+
+    status = str(taak.get('status', '')).strip().lower()
+    return jsonify({
+        'status': 'success',
+        'message': str(taak.get('message', '') or '').strip(),
+        'task': quick_check_taak_response_payload(taak, include_result=(status == 'completed')),
+    })
+
+
+@app.route('/api/quick-check/status/<taak_id>', methods=['GET'])
+def get_quick_checker_task_status(taak_id):
+    taak = haal_quick_check_taak(taak_id)
+    if not isinstance(taak, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Quick checker task not found.', 'Quick checker taak niet gevonden.'),
+            'task_id': str(taak_id or '').strip(),
+        }), 404
+
+    status = str(taak.get('status', '')).strip().lower()
+    return jsonify({
+        'status': 'success',
+        'message': str(taak.get('message', '') or '').strip(),
+        'task': quick_check_taak_response_payload(taak, include_result=(status == 'completed')),
+    })
+
+
+@app.route('/api/quick-check/run', methods=['POST'])
+def run_quick_checker_scan():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal('Invalid JSON payload', 'Ongeldige JSON-payload'),
+        }), 400
+
+    doel_url = normaliseer_quick_checker_url(data.get('url', ''))
+    if not doel_url:
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                f'Please provide a valid URL (max {MAX_QUICK_CHECK_URL_CHARS} chars).',
+                f'Geef een geldige URL op (max {MAX_QUICK_CHECK_URL_CHARS} tekens).'
+            ),
+        }), 400
+
+    scan_mode = normaliseer_quick_checker_scan_mode(data.get('mode', 'quick'))
+    client_sleutel = quick_checker_client_sleutel()
+    is_beperkt, retry_after = registreer_quick_checker_verzoek_en_check_limit(client_sleutel)
+    if is_beperkt:
+        response = jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                'Too many quick checker requests. Please wait a moment and try again.',
+                'Te veel quick checker verzoeken. Wacht even en probeer opnieuw.'
+            ),
+            'retry_after_seconds': retry_after,
+        })
+        response.headers['Retry-After'] = str(retry_after)
+        return response, 429
+
+    cache_sleutel = maak_quick_checker_cache_sleutel(doel_url, scan_mode)
+    cached_payload, cache_leeftijd = haal_quick_checker_cache_resultaat(cache_sleutel)
+    if cached_payload is not None:
+        return jsonify({
+            'status': 'success',
+            'message': tekst_voor_taal('Quick checker cache result loaded.', 'Quick checker cache-resultaat geladen.'),
+            'from_cache': True,
+            'cache_age_seconds': cache_leeftijd,
+            'scan_mode': scan_mode,
+            'target_url': doel_url,
+            **cached_payload,
+        })
+
+    try:
+        quick_checker_module = laad_quick_checker_module()
+        start_tijd = time.time()
+        report = voer_quick_checker_scan_met_timeout(quick_checker_module, doel_url, scan_mode)
+        payload = bouw_quick_checker_response_payload(quick_checker_module, report)
+        duur_ms = int(round((time.time() - start_tijd) * 1000))
+        sla_quick_checker_cache_resultaat(cache_sleutel, payload)
+    except TimeoutError:
+        app.logger.warning('Quick checker scan timeout for %s (%s)', doel_url, scan_mode)
+        return jsonify({
+            'status': 'error',
+            'message': tekst_voor_taal(
+                'Quick checker timed out. Try quick mode or scan again later.',
+                'Quick checker timeout. Probeer quick-modus of scan later opnieuw.'
+            ),
+        }), 504
+    except ValueError as exc:
+        return jsonify({
+            'status': 'error',
+            'message': str(exc),
+        }), 400
+    except Exception as exc:
+        app.logger.exception('Quick checker scan failed for %s (%s)', doel_url, scan_mode)
+        return jsonify({
+            'status': 'error',
+            'message': str(exc),
+        }), 500
+
+    return jsonify({
+        'status': 'success',
+        'message': tekst_voor_taal('Quick checker scan completed.', 'Quick checker scan afgerond.'),
+        'from_cache': False,
+        'duration_ms': duur_ms,
+        'scan_mode': scan_mode,
+        'target_url': doel_url,
+        **payload,
+    })
+
+
 @app.route('/api/website-audit/report/latest', methods=['GET'])
 def get_latest_website_audit_report():
     rapport = laad_laatste_website_audit_rapport()
@@ -16900,15 +18038,42 @@ def update_settings():
         }), 400
 
     global instellingen
-    
+
+    profiel_in_payload = "instellingen_profiel" in data
+    profiel_toepassen = parseer_bool_waarde(
+        data.get("apply_profile", profiel_in_payload),
+        standaard=profiel_in_payload,
+    )
+
     for key, value in data.items():
+        if key == "apply_profile":
+            continue
         if key in instellingen:
             instellingen[key] = value
 
     synchroniseer_taalinstellingen(instellingen)
+
+    toegepast_profiel = ""
+    if profiel_toepassen:
+        toegepast_profiel = pas_instellingen_profiel_toe(
+            instellingen,
+            data.get("instellingen_profiel", instellingen.get("instellingen_profiel", "normal")),
+        )
+        synchroniseer_taalinstellingen(instellingen)
     
     sla_instellingen_op(instellingen)
-    return jsonify({'status': 'success', 'message': tekst_voor_taal('Settings saved', 'Instellingen opgeslagen')})
+    return jsonify({
+        'status': 'success',
+        'message': tekst_voor_taal('Settings saved', 'Instellingen opgeslagen'),
+        'settings_profile': str(instellingen.get('instellingen_profiel', 'normal') or 'normal').strip().lower(),
+        'profile_applied': bool(toegepast_profiel),
+        'settings_profiles': sorted(list((instellingen.get('instellingen_profielen') or {}).keys())),
+        'settings_profile_configs': copy.deepcopy(instellingen.get('instellingen_profielen') or {}),
+        'settings_profile_actions': copy.deepcopy(instellingen.get('instellingen_profiel_acties') or {}),
+        'profile_auto_router_enabled': bool(instellingen.get('profiel_auto_router_enabled', True)),
+        'profile_auto_router_suggest_threshold': int(instellingen.get('profiel_auto_router_suggest_threshold', 62) or 62),
+        'profile_auto_router_auto_threshold': int(instellingen.get('profiel_auto_router_auto_threshold', 86) or 86),
+    })
 
 
 def poort_is_beschikbaar(poort, host="127.0.0.1"):

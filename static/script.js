@@ -69,6 +69,30 @@ const overviewStreamChip = document.getElementById('overviewStreamChip');
 const actionFilterLabel = document.getElementById('actionFilterLabel');
 const actionFilterInput = document.getElementById('actionFilterInput');
 const actionFilterHint = document.getElementById('actionFilterHint');
+const settingsProfilePanel = document.getElementById('settingsProfilePanel');
+const settingsProfileKicker = document.getElementById('settingsProfileKicker');
+const settingsProfileState = document.getElementById('settingsProfileState');
+const settingsProfileSummary = document.getElementById('settingsProfileSummary');
+const settingsProfileForm = document.getElementById('settingsProfileForm');
+const settingsProfileSelect = document.getElementById('settingsProfileSelect');
+const settingsProfileApplyBtn = document.getElementById('settingsProfileApplyBtn');
+const settingsProfileLaunchBtn = document.getElementById('settingsProfileLaunchBtn');
+const settingsProfileActionsTitle = document.getElementById('settingsProfileActionsTitle');
+const settingsProfileEffects = document.getElementById('settingsProfileEffects');
+const settingsProfileActions = document.getElementById('settingsProfileActions');
+const settingsProfileRouterState = document.getElementById('settingsProfileRouterState');
+const settingsProfileRouterForm = document.getElementById('settingsProfileRouterForm');
+const settingsProfileRouterEnabledToggle = document.getElementById('settingsProfileRouterEnabledToggle');
+const settingsProfileRouterEnabledLabel = document.getElementById('settingsProfileRouterEnabledLabel');
+const settingsProfileSuggestThresholdLabel = document.getElementById('settingsProfileSuggestThresholdLabel');
+const settingsProfileAutoThresholdLabel = document.getElementById('settingsProfileAutoThresholdLabel');
+const settingsProfileSuggestThresholdInput = document.getElementById('settingsProfileSuggestThresholdInput');
+const settingsProfileAutoThresholdInput = document.getElementById('settingsProfileAutoThresholdInput');
+const settingsProfileRouterSaveBtn = document.getElementById('settingsProfileRouterSaveBtn');
+const settingsProfileActionsEditorLabel = document.getElementById('settingsProfileActionsEditorLabel');
+const settingsProfileActionsEditor = document.getElementById('settingsProfileActionsEditor');
+const settingsProfileActionsSaveBtn = document.getElementById('settingsProfileActionsSaveBtn');
+const settingsProfileActionsResetBtn = document.getElementById('settingsProfileActionsResetBtn');
 const websiteAuditKicker = document.getElementById('websiteAuditKicker');
 const websiteAuditState = document.getElementById('websiteAuditState');
 const websiteAuditForm = document.getElementById('websiteAuditForm');
@@ -119,7 +143,8 @@ const appState = {
     listeningActive: false,
     speakingActive: false,
     speakingPulseTimer: null,
-    visualizerTimer: null,
+    visualizerTimer: 0,
+    visualizerLastFrameAt: 0,
     voiceInputMode: 'none',
     isSamsungBrowser: false,
     voiceUploadInFlight: false,
@@ -145,6 +170,12 @@ const appState = {
     voiceTranscriptTimer: null,
     lastVoiceTranscriptNormalized: '',
     lastVoiceTranscriptAt: 0,
+    lastVoiceCommandDispatchedNormalized: '',
+    lastVoiceCommandDispatchedAt: 0,
+    voiceCommandInFlight: false,
+    recognitionErrorStreak: 0,
+    recognitionRestartCount: 0,
+    recognitionRestartTimer: null,
     lastAssistantMessageNormalized: '',
     lastAssistantMessageAt: 0,
     activeAudio: null,
@@ -156,11 +187,31 @@ const appState = {
     streamLive: false,
     streamRecording: false,
     actionFilterQuery: '',
+    settingsProfile: 'normal',
+    settingsProfileSelected: 'normal',
+    settingsProfiles: ['normal', 'streaming', 'security'],
+    settingsProfileConfigs: {},
+    settingsProfileActionsByProfile: {},
+    settingsProfileActionsEditorDirty: false,
+    settingsProfileApplying: false,
+    settingsProfileLaunching: false,
+    settingsProfileRouterEnabled: true,
+    settingsProfileRouterSuggestThreshold: 62,
+    settingsProfileRouterAutoThreshold: 86,
+    settingsProfileRouterSaving: false,
+    settingsProfileIntentHint: null,
+    settingsProfileHighlightTimer: 0,
     threatLevel: 'nominal',
     threatResetTimer: null,
     runtimeBuildId: '',
     runtimeVersionPollTimer: null,
     dashboardPollTimer: null,
+    dashboardRefreshInFlight: false,
+    dashboardRefreshQueued: false,
+    dashboardLastRefreshAt: 0,
+    dashboardRenderRaf: 0,
+    dashboardPendingPayload: null,
+    dashboardSectionSignatures: {},
     apiBaseUrl: '',
     apiDiscoveryInFlight: null,
     dailySecuritySnapshot: {
@@ -232,7 +283,16 @@ const appState = {
 const RUNTIME_VERSION_POLL_MS = 2200;
 const DASHBOARD_POLL_MS = 12000;
 const VOICE_DUPLICATE_WINDOW_MS = 2800;
+const VOICE_COMMAND_DISPATCH_DUPLICATE_WINDOW_MS = 5200;
+const VOICE_TRANSCRIPT_BUFFER_MS = 650;
 const ASSISTANT_DUPLICATE_WINDOW_MS = 7000;
+const RECOGNITION_RESTART_BASE_DELAY_MS = 280;
+const RECOGNITION_MAX_RESTARTS = 6;
+const RECOGNITION_FALLBACK_THRESHOLD = 3;
+const DASHBOARD_REFRESH_MIN_INTERVAL_MS = 900;
+const VISUALIZER_ACTIVE_FRAME_MS = 90;
+const VISUALIZER_IDLE_FRAME_MS = 180;
+const MAX_FEED_MESSAGES = 120;
 const API_DISCOVERY_TIMEOUT_MS = 420;
 const ECHO_RUNTIME_PORT_START = 5000;
 const ECHO_RUNTIME_PORT_SPAN = 50;
@@ -308,6 +368,99 @@ const THREAT_LEVELS = {
         contextEn: 'SYSTEM CONTROL',
         contextNl: 'SYSTEEMCONTROLE',
     },
+};
+
+const SETTINGS_PROFILE_BASE_CONFIGS = {
+    normal: {
+        agent_modus: true,
+        geheugen_modus: true,
+        prioriteit_modus: true,
+        computerbesturing_toestaan: false,
+        online_ai_modus: true,
+        ai_agent_primair: true,
+        spraak_ingang: false,
+        spraak_uitgang: true,
+        spraak_input_provider: 'google',
+        spraak_provider: 'local',
+        security_scan_daily_enabled: false,
+        website_audit_schedule_profile: 'standard',
+        stream_auto_focus_obs: true,
+    },
+    streaming: {
+        agent_modus: true,
+        geheugen_modus: true,
+        prioriteit_modus: false,
+        computerbesturing_toestaan: true,
+        online_ai_modus: true,
+        ai_agent_primair: true,
+        spraak_ingang: true,
+        spraak_uitgang: false,
+        spraak_input_provider: 'whisper',
+        spraak_provider: 'local',
+        security_scan_daily_enabled: false,
+        website_audit_schedule_profile: 'quick',
+        stream_auto_focus_obs: true,
+    },
+    security: {
+        agent_modus: true,
+        geheugen_modus: true,
+        prioriteit_modus: true,
+        computerbesturing_toestaan: false,
+        online_ai_modus: false,
+        ai_agent_primair: false,
+        spraak_ingang: false,
+        spraak_uitgang: true,
+        spraak_input_provider: 'google',
+        spraak_provider: 'local',
+        security_scan_daily_enabled: true,
+        website_audit_schedule_profile: 'security',
+        stream_auto_focus_obs: false,
+    },
+};
+
+const SETTINGS_PROFILE_ACTION_PRESETS = {
+    normal: [
+        { command: 'system info and show agenda and show tasks', labelKey: 'settings_profile_action_daily_briefing' },
+        { command: 'show tasks', labelKey: 'settings_profile_action_task_radar' },
+        { command: 'phone status', labelKey: 'settings_profile_action_phone_status' },
+        { command: 'take screenshot', labelKey: 'settings_profile_action_take_screenshot' },
+    ],
+    streaming: [
+        { command: 'stream mode on', labelKey: 'settings_profile_action_stream_mode' },
+        { command: 'stream start', labelKey: 'settings_profile_action_stream_start' },
+        { command: 'stream recording start', labelKey: 'settings_profile_action_stream_record' },
+        { command: 'stream help', labelKey: 'settings_profile_action_stream_help' },
+    ],
+    security: [
+        { command: 'website audit status', labelKey: 'settings_profile_action_audit_status' },
+        { command: 'website audit report latest', labelKey: 'settings_profile_action_audit_report' },
+        { command: 'website audit schedule status', labelKey: 'settings_profile_action_audit_schedule' },
+        { command: 'enable automation mode', labelKey: 'settings_profile_action_enable_automation' },
+    ],
+};
+
+const SETTINGS_PROFILE_LAUNCH_SEQUENCES = {
+    normal: ['system info and show agenda and show tasks'],
+    streaming: ['stream mode on', 'stream help'],
+    security: ['website audit status', 'website audit schedule status'],
+};
+
+const SETTINGS_PROFILE_INTENT_RULES = {
+    streaming: [
+        { pattern: /\bstream\b|\bstreaming\b|\bobs\b|\bgo\s*live\b|\blive\s*stream\b/, score: 38, hint: 'settings_profile_router_hint_stream_core' },
+        { pattern: /\bscene\b|\bbrb\b|\bmarker\b|\brecord(?:ing)?\b|\bmic\s*toggle\b/, score: 30, hint: 'settings_profile_router_hint_stream_controls' },
+        { pattern: /\btwitch\b|\byoutube\s*live\b|\bchat\s*overlay\b/, score: 24, hint: 'settings_profile_router_hint_stream_platform' },
+    ],
+    security: [
+        { pattern: /\bsecurity\b|\bsecure\b|\bthreat\b|\bmalware\b|\bvirus\b|\bprivacy\b/, score: 38, hint: 'settings_profile_router_hint_security_core' },
+        { pattern: /\baudit\b|\bscan\b|\bvulnerab(?:ility|ilities)\b|\bfirewall\b|\bphishing\b/, score: 30, hint: 'settings_profile_router_hint_security_scan' },
+        { pattern: /\bwebsite\s*audit\b|\bquick\s*checker\b|\bquick\s*check\b/, score: 28, hint: 'settings_profile_router_hint_security_web' },
+    ],
+    normal: [
+        { pattern: /\bagenda\b|\btasks?\b|\btimer\b|\breminder\b|\bcalendar\b/, score: 20, hint: 'settings_profile_router_hint_normal_planning' },
+        { pattern: /\bgoogle\b|\byoutube\b|\bcalculator\b|\bexplorer\b|\bweather\b|\btime\b/, score: 16, hint: 'settings_profile_router_hint_normal_daily' },
+        { pattern: /\bnotes?\b|\bmail\b|\bsearch\b|\bsystem\s*info\b|\bphone\s*status\b/, score: 14, hint: 'settings_profile_router_hint_normal_productivity' },
+    ],
 };
 
 // Tweetalige UI-strings met variabele placeholders.
@@ -471,6 +624,85 @@ const UI_STRINGS = {
         stream_marker_button: 'Drop Marker',
         stream_mic_toggle_button: 'Mic Toggle',
         stream_help_button: 'Stream Help',
+        settings_profile_kicker: 'Echo Profielen',
+        settings_profile_state_idle: 'Kies een profiel en klik op toepassen.',
+        settings_profile_state_current: 'Actief profiel: {profile}',
+        settings_profile_state_preview: 'Geselecteerd: {selected} | Actief: {active}. Klik op toepassen om te wisselen.',
+        settings_profile_state_launching: 'Profiel wordt gestart: {profile}...',
+        settings_profile_applying: 'Profiel wordt toegepast...',
+        settings_profile_apply_button: 'Profiel Toepassen',
+        settings_profile_launch_button: 'Toepassen + Profiel Starten',
+        settings_profile_launching: 'Profielworkflow starten...',
+        settings_profile_launch_done: 'Profiel gestart: {profile}.',
+        settings_profile_launch_failed: 'Profiel starten mislukt.',
+        settings_profile_router_state_idle: 'Auto-router: standby',
+        settings_profile_router_state_off: 'Auto-router uit. Echo wisselt geen profiel automatisch.',
+        settings_profile_router_state_suggest: 'Router suggestie: {profile} ({confidence}%)',
+        settings_profile_router_state_auto: 'Router auto-switch: {profile} ({confidence}%)',
+        settings_profile_router_switched: 'Auto-router schakelde over naar {profile} ({confidence}%).',
+        settings_profile_router_switch_failed: 'Auto-router kon profiel niet wisselen. Verder met huidig profiel.',
+        settings_profile_router_settings_saved: 'Auto-router instellingen opgeslagen.',
+        settings_profile_router_settings_failed: 'Auto-router instellingen opslaan mislukt.',
+        settings_profile_router_enabled_label: 'Auto-profielrouter',
+        settings_profile_router_suggest_label: 'Suggestie %',
+        settings_profile_router_auto_label: 'Auto-switch %',
+        settings_profile_router_save_button: 'Router Opslaan',
+        settings_profile_router_hint_stream_core: 'stream-kernwoorden gedetecteerd',
+        settings_profile_router_hint_stream_controls: 'streamcontrols gedetecteerd',
+        settings_profile_router_hint_stream_platform: 'streamplatform-signalen gedetecteerd',
+        settings_profile_router_hint_security_core: 'security-kernwoorden gedetecteerd',
+        settings_profile_router_hint_security_scan: 'scan/audit-signalen gedetecteerd',
+        settings_profile_router_hint_security_web: 'website-audit-signalen gedetecteerd',
+        settings_profile_router_hint_normal_planning: 'planning-signalen gedetecteerd',
+        settings_profile_router_hint_normal_daily: 'dagelijkse taken-signalen gedetecteerd',
+        settings_profile_router_hint_normal_productivity: 'productiviteitssignalen gedetecteerd',
+        settings_profile_actions_editor_label: 'Aangepaste acties (een commando per regel)',
+        settings_profile_actions_editor_placeholder: 'stream mode on\nstream start\nstream help',
+        settings_profile_actions_save_button: 'Acties Opslaan',
+        settings_profile_actions_reset_button: 'Reset Standaard',
+        settings_profile_actions_save_success: 'Profielacties opgeslagen voor {profile}.',
+        settings_profile_actions_save_failed: 'Profielacties opslaan mislukt.',
+        settings_profile_actions_reset_success: 'Standaard profielacties teruggezet voor {profile}.',
+        settings_profile_actions_reset_failed: 'Standaard profielacties resetten mislukt.',
+        settings_profile_apply_success: 'Profiel toegepast: {profile}.',
+        settings_profile_apply_failed: 'Profiel toepassen mislukt.',
+        settings_profile_summary_normal: 'Normaal gebruik: stabiele dagelijkse assistent met balans tussen AI, geheugen en veiligheid.',
+        settings_profile_summary_streaming: 'Streaming: snelle live control, steminput aan en OBS focus voor soepele stream-acties.',
+        settings_profile_summary_security: 'Security: defensieve modus met dagelijkse security-focus en strengere auditkeuzes.',
+        settings_profile_actions_title: 'Profielacties',
+        settings_profile_on: 'AAN',
+        settings_profile_off: 'UIT',
+        settings_profile_provider_local: 'Lokaal',
+        settings_profile_provider_cloud: 'Cloud',
+        settings_profile_provider_google: 'Google',
+        settings_profile_provider_whisper: 'Whisper',
+        settings_profile_effect_agent_mode: 'Agent Modus',
+        settings_profile_effect_memory_mode: 'Geheugen Modus',
+        settings_profile_effect_priority_mode: 'Prioriteit Modus',
+        settings_profile_effect_automation: 'Computerbesturing',
+        settings_profile_effect_online_ai: 'Online AI',
+        settings_profile_effect_voice_input: 'Stem Input',
+        settings_profile_effect_voice_output: 'Stem Output',
+        settings_profile_effect_stt_provider: 'STT Provider',
+        settings_profile_effect_tts_provider: 'TTS Provider',
+        settings_profile_effect_security_daily: 'Dagelijkse Security Scan',
+        settings_profile_effect_audit_profile: 'Website Audit Profiel',
+        settings_profile_effect_obs_focus: 'OBS Auto Focus',
+        settings_profile_action_daily_briefing: 'Daily Briefing',
+        settings_profile_action_task_radar: 'Task Radar',
+        settings_profile_action_phone_status: 'Phone Link Status',
+        settings_profile_action_take_screenshot: 'Take Screenshot',
+        settings_profile_action_stream_mode: 'Stream Mode On',
+        settings_profile_action_stream_start: 'Go Live',
+        settings_profile_action_stream_record: 'Start Recording',
+        settings_profile_action_stream_help: 'Stream Help',
+        settings_profile_action_audit_status: 'Audit Status',
+        settings_profile_action_audit_report: 'Laatste Audit Rapport',
+        settings_profile_action_audit_schedule: 'Audit Schedule Status',
+        settings_profile_action_enable_automation: 'Enable Automation',
+        settings_profile_option_normal: 'Normaal Gebruik',
+        settings_profile_option_streaming: 'Streaming',
+        settings_profile_option_security: 'Security',
         website_audit_kicker: 'Website Audit',
         website_audit_idle: 'Audit stand-by. Voeg een URL toe en start een scan.',
         website_audit_running: 'Audit bezig: {stage} ({progress}%)',
@@ -696,6 +928,85 @@ const UI_STRINGS = {
         stream_marker_button: 'Drop Marker',
         stream_mic_toggle_button: 'Mic Toggle',
         stream_help_button: 'Stream Help',
+        settings_profile_kicker: 'Echo Profiles',
+        settings_profile_state_idle: 'Choose a profile and click apply.',
+        settings_profile_state_current: 'Active profile: {profile}',
+        settings_profile_state_preview: 'Selected: {selected} | Active: {active}. Click apply to switch.',
+        settings_profile_state_launching: 'Starting profile: {profile}...',
+        settings_profile_applying: 'Applying profile...',
+        settings_profile_apply_button: 'Apply Profile',
+        settings_profile_launch_button: 'Apply + Start Profile',
+        settings_profile_launching: 'Starting profile workflow...',
+        settings_profile_launch_done: 'Profile started: {profile}.',
+        settings_profile_launch_failed: 'Could not start profile workflow.',
+        settings_profile_router_state_idle: 'Auto-router: standby',
+        settings_profile_router_state_off: 'Auto-router is off. Echo will not switch profiles automatically.',
+        settings_profile_router_state_suggest: 'Router suggestion: {profile} ({confidence}%)',
+        settings_profile_router_state_auto: 'Router auto-switch: {profile} ({confidence}%)',
+        settings_profile_router_switched: 'Auto-router switched to {profile} ({confidence}%).',
+        settings_profile_router_switch_failed: 'Auto-router could not switch profile. Continuing with current profile.',
+        settings_profile_router_settings_saved: 'Auto-router settings saved.',
+        settings_profile_router_settings_failed: 'Could not save auto-router settings.',
+        settings_profile_router_enabled_label: 'Auto profile router',
+        settings_profile_router_suggest_label: 'Suggest %',
+        settings_profile_router_auto_label: 'Auto-switch %',
+        settings_profile_router_save_button: 'Save Router',
+        settings_profile_router_hint_stream_core: 'streaming keywords detected',
+        settings_profile_router_hint_stream_controls: 'stream controls detected',
+        settings_profile_router_hint_stream_platform: 'stream platform cues detected',
+        settings_profile_router_hint_security_core: 'security keywords detected',
+        settings_profile_router_hint_security_scan: 'scan/audit signals detected',
+        settings_profile_router_hint_security_web: 'website audit signals detected',
+        settings_profile_router_hint_normal_planning: 'planning signals detected',
+        settings_profile_router_hint_normal_daily: 'daily-task signals detected',
+        settings_profile_router_hint_normal_productivity: 'productivity signals detected',
+        settings_profile_actions_editor_label: 'Custom actions (one command per line)',
+        settings_profile_actions_editor_placeholder: 'stream mode on\nstream start\nstream help',
+        settings_profile_actions_save_button: 'Save Actions',
+        settings_profile_actions_reset_button: 'Reset Defaults',
+        settings_profile_actions_save_success: 'Saved profile actions for {profile}.',
+        settings_profile_actions_save_failed: 'Could not save profile actions.',
+        settings_profile_actions_reset_success: 'Reset default actions for {profile}.',
+        settings_profile_actions_reset_failed: 'Could not reset default profile actions.',
+        settings_profile_apply_success: 'Profile applied: {profile}.',
+        settings_profile_apply_failed: 'Could not apply profile.',
+        settings_profile_summary_normal: 'Normal use: balanced daily assistant profile for AI, memory, and safe control.',
+        settings_profile_summary_streaming: 'Streaming: fast live controls, voice input enabled, and OBS-first flow.',
+        settings_profile_summary_security: 'Security: defensive mode with daily security focus and stricter audit defaults.',
+        settings_profile_actions_title: 'Profile actions',
+        settings_profile_on: 'ON',
+        settings_profile_off: 'OFF',
+        settings_profile_provider_local: 'Local',
+        settings_profile_provider_cloud: 'Cloud',
+        settings_profile_provider_google: 'Google',
+        settings_profile_provider_whisper: 'Whisper',
+        settings_profile_effect_agent_mode: 'Agent Mode',
+        settings_profile_effect_memory_mode: 'Memory Mode',
+        settings_profile_effect_priority_mode: 'Priority Mode',
+        settings_profile_effect_automation: 'Computer Control',
+        settings_profile_effect_online_ai: 'Online AI',
+        settings_profile_effect_voice_input: 'Voice Input',
+        settings_profile_effect_voice_output: 'Voice Output',
+        settings_profile_effect_stt_provider: 'STT Provider',
+        settings_profile_effect_tts_provider: 'TTS Provider',
+        settings_profile_effect_security_daily: 'Daily Security Scan',
+        settings_profile_effect_audit_profile: 'Website Audit Profile',
+        settings_profile_effect_obs_focus: 'OBS Auto Focus',
+        settings_profile_action_daily_briefing: 'Daily Briefing',
+        settings_profile_action_task_radar: 'Task Radar',
+        settings_profile_action_phone_status: 'Phone Link Status',
+        settings_profile_action_take_screenshot: 'Take Screenshot',
+        settings_profile_action_stream_mode: 'Stream Mode On',
+        settings_profile_action_stream_start: 'Go Live',
+        settings_profile_action_stream_record: 'Start Recording',
+        settings_profile_action_stream_help: 'Stream Help',
+        settings_profile_action_audit_status: 'Audit Status',
+        settings_profile_action_audit_report: 'Latest Audit Report',
+        settings_profile_action_audit_schedule: 'Audit Schedule Status',
+        settings_profile_action_enable_automation: 'Enable Automation',
+        settings_profile_option_normal: 'Normal Use',
+        settings_profile_option_streaming: 'Streaming',
+        settings_profile_option_security: 'Security',
         website_audit_kicker: 'Website Audit',
         website_audit_idle: 'Audit idle. Add a URL and start a scan.',
         website_audit_running: 'Audit running: {stage} ({progress}%)',
@@ -967,6 +1278,56 @@ function uiTekst(sleutel, variabelen = {}) {
     });
 
     return tekst;
+}
+
+function setTextContentIfChanged(element, waarde) {
+    if (!element) {
+        return false;
+    }
+
+    const volgende = String(waarde || '');
+    if (String(element.textContent || '') === volgende) {
+        return false;
+    }
+
+    element.textContent = volgende;
+    return true;
+}
+
+function setElementDisabledIfChanged(element, disabled) {
+    if (!element) {
+        return false;
+    }
+
+    const volgende = Boolean(disabled);
+    if (Boolean(element.disabled) === volgende) {
+        return false;
+    }
+
+    element.disabled = volgende;
+    return true;
+}
+
+function serialiseerVoorUiSignature(waarde) {
+    try {
+        return JSON.stringify(waarde);
+    } catch (_error) {
+        return String(waarde || '');
+    }
+}
+
+function dashboardSectieIsGewijzigd(sleutel, payload, force = false) {
+    if (force) {
+        appState.dashboardSectionSignatures[sleutel] = '';
+    }
+
+    const signature = serialiseerVoorUiSignature(payload);
+    if (appState.dashboardSectionSignatures[sleutel] === signature) {
+        return false;
+    }
+
+    appState.dashboardSectionSignatures[sleutel] = signature;
+    return true;
 }
 
 function parseerBoolWaarde(waarde, standaard = false) {
@@ -1241,6 +1602,1229 @@ function normaliseerWebsiteAuditTijd(waarde) {
     }
 
     return `${String(uur).padStart(2, '0')}:${String(minuut).padStart(2, '0')}`;
+}
+
+function normaliseerSettingsProfielNaam(waarde) {
+    const raw = String(waarde || '').trim().toLowerCase();
+    if (raw === 'streaming' || raw === 'security') {
+        return raw;
+    }
+    return 'normal';
+}
+
+function normaliseerSettingsProfielenLijst(waarde) {
+    const basis = ['normal', 'streaming', 'security'];
+    const bron = [];
+
+    if (Array.isArray(waarde)) {
+        bron.push(...waarde);
+    } else if (waarde && typeof waarde === 'object') {
+        bron.push(...Object.keys(waarde));
+    }
+
+    const genormaliseerd = [];
+    bron.forEach((item) => {
+        const profiel = normaliseerSettingsProfielNaam(item);
+        if (!genormaliseerd.includes(profiel)) {
+            genormaliseerd.push(profiel);
+        }
+    });
+
+    basis.forEach((item) => {
+        if (!genormaliseerd.includes(item)) {
+            genormaliseerd.push(item);
+        }
+    });
+
+    return genormaliseerd;
+}
+
+function settingsProfielLabel(waarde) {
+    const sleutel = normaliseerSettingsProfielNaam(waarde);
+    return uiTekst('settings_profile_option_' + sleutel);
+}
+
+function normaliseerSettingsProfielProvider(waarde, toegestaan, fallback) {
+    const raw = String(waarde || '').trim().toLowerCase();
+    if (toegestaan.includes(raw)) {
+        return raw;
+    }
+    return fallback;
+}
+
+function normaliseerSettingsWebsiteAuditProfiel(waarde) {
+    const raw = String(waarde || '').trim().toLowerCase();
+    if (raw === 'quick' || raw === 'security' || raw === 'full') {
+        return raw;
+    }
+    return 'standard';
+}
+
+function normaliseerSettingsProfielConfig(naam, profielConfig) {
+    const profielNaam = normaliseerSettingsProfielNaam(naam);
+    const basis = SETTINGS_PROFILE_BASE_CONFIGS[profielNaam] || SETTINGS_PROFILE_BASE_CONFIGS.normal;
+    const bron = profielConfig && typeof profielConfig === 'object' ? profielConfig : {};
+
+    return {
+        agent_modus: parseerBoolWaarde(bron.agent_modus, basis.agent_modus),
+        geheugen_modus: parseerBoolWaarde(bron.geheugen_modus, basis.geheugen_modus),
+        prioriteit_modus: parseerBoolWaarde(bron.prioriteit_modus, basis.prioriteit_modus),
+        computerbesturing_toestaan: parseerBoolWaarde(bron.computerbesturing_toestaan, basis.computerbesturing_toestaan),
+        online_ai_modus: parseerBoolWaarde(bron.online_ai_modus, basis.online_ai_modus),
+        ai_agent_primair: parseerBoolWaarde(bron.ai_agent_primair, basis.ai_agent_primair),
+        spraak_ingang: parseerBoolWaarde(bron.spraak_ingang, basis.spraak_ingang),
+        spraak_uitgang: parseerBoolWaarde(bron.spraak_uitgang, basis.spraak_uitgang),
+        spraak_input_provider: normaliseerSettingsProfielProvider(
+            bron.spraak_input_provider,
+            ['google', 'whisper'],
+            basis.spraak_input_provider
+        ),
+        spraak_provider: normaliseerSettingsProfielProvider(
+            bron.spraak_provider,
+            ['local', 'google'],
+            basis.spraak_provider
+        ),
+        security_scan_daily_enabled: parseerBoolWaarde(bron.security_scan_daily_enabled, basis.security_scan_daily_enabled),
+        website_audit_schedule_profile: normaliseerSettingsWebsiteAuditProfiel(
+            bron.website_audit_schedule_profile || basis.website_audit_schedule_profile
+        ),
+        stream_auto_focus_obs: parseerBoolWaarde(bron.stream_auto_focus_obs, basis.stream_auto_focus_obs),
+    };
+}
+
+function normaliseerSettingsProfielConfigs(waarde) {
+    const basis = {
+        normal: normaliseerSettingsProfielConfig('normal', SETTINGS_PROFILE_BASE_CONFIGS.normal),
+        streaming: normaliseerSettingsProfielConfig('streaming', SETTINGS_PROFILE_BASE_CONFIGS.streaming),
+        security: normaliseerSettingsProfielConfig('security', SETTINGS_PROFILE_BASE_CONFIGS.security),
+    };
+
+    if (!waarde || typeof waarde !== 'object') {
+        return basis;
+    }
+
+    Object.entries(waarde).forEach(([naam, config]) => {
+        const profielNaam = normaliseerSettingsProfielNaam(naam);
+        basis[profielNaam] = normaliseerSettingsProfielConfig(profielNaam, config);
+    });
+
+    return basis;
+}
+
+function extractSettingsProfielenUitPayload(payload = {}) {
+    const data = payload && typeof payload === 'object' ? payload : {};
+
+    if (Array.isArray(data.settings_profiles)) {
+        return data.settings_profiles;
+    }
+
+    if (Array.isArray(data.settingsProfiles)) {
+        return data.settingsProfiles;
+    }
+
+    if (data.instellingen_profielen && typeof data.instellingen_profielen === 'object') {
+        return Object.keys(data.instellingen_profielen);
+    }
+
+    return [];
+}
+
+function extractSettingsProfielConfigsUitPayload(payload = {}) {
+    const data = payload && typeof payload === 'object' ? payload : {};
+
+    if (data.settings_profile_configs && typeof data.settings_profile_configs === 'object') {
+        return data.settings_profile_configs;
+    }
+
+    if (data.instellingen_profielen && typeof data.instellingen_profielen === 'object') {
+        return data.instellingen_profielen;
+    }
+
+    return {};
+}
+
+function normaliseerSettingsProfielActieItem(actie) {
+    const data = actie && typeof actie === 'object' && !Array.isArray(actie)
+        ? actie
+        : { command: actie };
+
+    const command = String(data.command || '').trim().replace(/\s+/g, ' ');
+    if (!command) {
+        return null;
+    }
+
+    const label = String(data.label || '').trim().replace(/\s+/g, ' ');
+    const labelKey = String(data.labelKey || '').trim();
+    const item = { command };
+    if (label) {
+        item.label = label;
+    }
+    if (labelKey) {
+        item.labelKey = labelKey;
+    }
+    return item;
+}
+
+function normaliseerSettingsProfielActiesLijst(waarde, fallback = []) {
+    const bron = Array.isArray(waarde) ? waarde : fallback;
+    const lijst = [];
+
+    bron.forEach((item) => {
+        if (lijst.length >= 10) {
+            return;
+        }
+        const actie = normaliseerSettingsProfielActieItem(item);
+        if (actie) {
+            lijst.push(actie);
+        }
+    });
+
+    return lijst;
+}
+
+function normaliseerSettingsProfielActiesData(waarde) {
+    const basis = {
+        normal: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.normal, SETTINGS_PROFILE_ACTION_PRESETS.normal),
+        streaming: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.streaming, SETTINGS_PROFILE_ACTION_PRESETS.streaming),
+        security: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.security, SETTINGS_PROFILE_ACTION_PRESETS.security),
+    };
+
+    if (!waarde || typeof waarde !== 'object') {
+        return basis;
+    }
+
+    Object.entries(waarde).forEach(([naam, acties]) => {
+        const profielNaam = normaliseerSettingsProfielNaam(naam);
+        basis[profielNaam] = normaliseerSettingsProfielActiesLijst(
+            acties,
+            SETTINGS_PROFILE_ACTION_PRESETS[profielNaam] || SETTINGS_PROFILE_ACTION_PRESETS.normal
+        );
+    });
+
+    return basis;
+}
+
+function extractSettingsProfielActiesUitPayload(payload = {}) {
+    const data = payload && typeof payload === 'object' ? payload : {};
+    if (data.settings_profile_actions && typeof data.settings_profile_actions === 'object') {
+        return data.settings_profile_actions;
+    }
+    if (data.instellingen_profiel_acties && typeof data.instellingen_profiel_acties === 'object') {
+        return data.instellingen_profiel_acties;
+    }
+    return {};
+}
+
+function begrensSettingsRouterThreshold(waarde, fallback, min, max) {
+    const parsed = Number.parseInt(String(waarde || ''), 10);
+    if (!Number.isInteger(parsed)) {
+        return fallback;
+    }
+    return Math.max(min, Math.min(max, parsed));
+}
+
+function normaliseerSettingsProfileRouterConfig(payload = {}) {
+    const data = payload && typeof payload === 'object' ? payload : {};
+
+    const leesWaarde = (engelseSleutel, nederlandseSleutel, fallback) => {
+        if (Object.prototype.hasOwnProperty.call(data, engelseSleutel)) {
+            return data[engelseSleutel];
+        }
+        if (Object.prototype.hasOwnProperty.call(data, nederlandseSleutel)) {
+            return data[nederlandseSleutel];
+        }
+        return fallback;
+    };
+
+    const enabled = parseerBoolWaarde(
+        leesWaarde('profile_auto_router_enabled', 'profiel_auto_router_enabled', appState.settingsProfileRouterEnabled),
+        true
+    );
+
+    const suggest = begrensSettingsRouterThreshold(
+        leesWaarde(
+            'profile_auto_router_suggest_threshold',
+            'profiel_auto_router_suggest_threshold',
+            appState.settingsProfileRouterSuggestThreshold
+        ),
+        62,
+        35,
+        95
+    );
+
+    const autoThresholdRuw = begrensSettingsRouterThreshold(
+        leesWaarde(
+            'profile_auto_router_auto_threshold',
+            'profiel_auto_router_auto_threshold',
+            appState.settingsProfileRouterAutoThreshold
+        ),
+        86,
+        45,
+        99
+    );
+
+    const autoThreshold = Math.max(Math.min(99, suggest + 5), autoThresholdRuw);
+    return {
+        enabled,
+        suggestThreshold: suggest,
+        autoThreshold,
+    };
+}
+
+function analyseerSettingsProfielIntent(commandoTekst) {
+    const tekst = normalizeText(commandoTekst);
+    if (!tekst) {
+        return null;
+    }
+
+    const scores = {
+        normal: 4,
+        streaming: 0,
+        security: 0,
+    };
+    const hints = {
+        normal: [],
+        streaming: [],
+        security: [],
+    };
+
+    Object.entries(SETTINGS_PROFILE_INTENT_RULES).forEach(([profiel, regels]) => {
+        regels.forEach((regel) => {
+            if (regel.pattern.test(tekst)) {
+                scores[profiel] += Number(regel.score || 0);
+                hints[profiel].push(String(regel.hint || '').trim());
+            }
+        });
+    });
+
+    const ranking = Object.entries(scores)
+        .map(([profiel, score]) => ({ profiel, score: Number(score || 0) }))
+        .sort((a, b) => b.score - a.score);
+
+    const top = ranking[0];
+    const second = ranking[1] || { score: 0 };
+    if (!top || top.score <= 0) {
+        return null;
+    }
+
+    const delta = top.score - Number(second.score || 0);
+    const confidenceRaw = 44 + (top.score * 1.5) + (delta * 1.15);
+    const confidence = Math.max(0, Math.min(99, Math.round(confidenceRaw)));
+
+    return {
+        profile: normaliseerSettingsProfielNaam(top.profiel),
+        score: top.score,
+        confidence,
+        hintKey: hints[top.profiel][0] || '',
+    };
+}
+
+function settingsProfielStatusLabel(waarde) {
+    return parseerBoolWaarde(waarde, false) ? uiTekst('settings_profile_on') : uiTekst('settings_profile_off');
+}
+
+function settingsProfielProviderLabel(type, waarde) {
+    const raw = String(waarde || '').trim().toLowerCase();
+    if (type === 'stt') {
+        return uiTekst(raw === 'whisper' ? 'settings_profile_provider_whisper' : 'settings_profile_provider_google');
+    }
+    return uiTekst(raw === 'google' ? 'settings_profile_provider_google' : 'settings_profile_provider_local');
+}
+
+function settingsProfielSummaryTekst(waarde) {
+    const profielNaam = normaliseerSettingsProfielNaam(waarde);
+    return uiTekst('settings_profile_summary_' + profielNaam);
+}
+
+function settingsProfielActiePreset(waarde) {
+    const profielNaam = normaliseerSettingsProfielNaam(waarde);
+    const acties = appState.settingsProfileActionsByProfile[profielNaam];
+    if (Array.isArray(acties) && acties.length) {
+        return acties;
+    }
+    return normaliseerSettingsProfielActiesLijst(
+        SETTINGS_PROFILE_ACTION_PRESETS[profielNaam] || SETTINGS_PROFILE_ACTION_PRESETS.normal,
+        SETTINGS_PROFILE_ACTION_PRESETS.normal
+    );
+}
+
+function settingsProfielLaunchSequence(waarde) {
+    const profielNaam = normaliseerSettingsProfielNaam(waarde);
+    const custom = settingsProfielActiePreset(profielNaam)
+        .map((actie) => String(actie.command || '').trim())
+        .filter(Boolean)
+        .slice(0, 2);
+    if (custom.length) {
+        return custom;
+    }
+    return SETTINGS_PROFILE_LAUNCH_SEQUENCES[profielNaam] || SETTINGS_PROFILE_LAUNCH_SEQUENCES.normal;
+}
+
+function settingsProfielActieLabel(actie) {
+    const data = actie && typeof actie === 'object' ? actie : {};
+    const labelKey = String(data.labelKey || '').trim();
+    const labelTekst = String(data.label || '').trim();
+    if (labelKey) {
+        return uiTekst(labelKey);
+    }
+    if (labelTekst) {
+        return labelTekst;
+    }
+    return String(data.command || '').trim();
+}
+
+function serializeSettingsProfielActiesVoorEditor(profielNaam) {
+    const profiel = normaliseerSettingsProfielNaam(profielNaam);
+    const lijst = settingsProfielActiePreset(profiel);
+    return lijst
+        .map((actie) => String(actie.command || '').trim())
+        .filter(Boolean)
+        .join('\n');
+}
+
+function renderSettingsProfielActiesEditor(profielNaam, options = {}) {
+    if (!settingsProfileActionsEditor) {
+        return;
+    }
+
+    const opts = options && typeof options === 'object' ? options : {};
+    const force = parseerBoolWaarde(opts.force, false);
+    const locked = parseerBoolWaarde(opts.locked, false);
+    const volgendeWaarde = serializeSettingsProfielActiesVoorEditor(profielNaam);
+    const heeftFocus = document.activeElement === settingsProfileActionsEditor;
+
+    if (force || !heeftFocus || !appState.settingsProfileActionsEditorDirty) {
+        settingsProfileActionsEditor.value = volgendeWaarde;
+        appState.settingsProfileActionsEditorDirty = false;
+    }
+
+    settingsProfileActionsEditor.disabled = Boolean(locked);
+}
+
+function settingsProfielRouterStatusTekst() {
+    if (!appState.settingsProfileRouterEnabled) {
+        return uiTekst('settings_profile_router_state_off');
+    }
+
+    const hint = appState.settingsProfileIntentHint;
+    if (!hint || !hint.profile) {
+        return uiTekst('settings_profile_router_state_idle');
+    }
+
+    const profielLabel = settingsProfielLabel(hint.profile);
+    const confidence = String(Math.max(0, Math.min(99, Number(hint.confidence || 0))));
+    const statusKey = hint.mode === 'auto'
+        ? 'settings_profile_router_state_auto'
+        : 'settings_profile_router_state_suggest';
+    let tekst = uiTekst(statusKey, {
+        profile: profielLabel,
+        confidence,
+    });
+
+    if (hint.hintKey) {
+        tekst += ` | ${uiTekst(hint.hintKey)}`;
+    }
+    return tekst;
+}
+
+function renderSettingsProfielEffecten(profielNaam, profielConfig) {
+    if (!settingsProfileEffects) {
+        return;
+    }
+
+    const config = normaliseerSettingsProfielConfig(profielNaam, profielConfig);
+    const auditProfiel = normaliseerSettingsWebsiteAuditProfiel(config.website_audit_schedule_profile);
+    const regels = [
+        {
+            labelKey: 'settings_profile_effect_agent_mode',
+            value: settingsProfielStatusLabel(config.agent_modus),
+            state: parseerBoolWaarde(config.agent_modus, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_memory_mode',
+            value: settingsProfielStatusLabel(config.geheugen_modus),
+            state: parseerBoolWaarde(config.geheugen_modus, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_priority_mode',
+            value: settingsProfielStatusLabel(config.prioriteit_modus),
+            state: parseerBoolWaarde(config.prioriteit_modus, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_automation',
+            value: settingsProfielStatusLabel(config.computerbesturing_toestaan),
+            state: parseerBoolWaarde(config.computerbesturing_toestaan, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_online_ai',
+            value: settingsProfielStatusLabel(config.online_ai_modus),
+            state: parseerBoolWaarde(config.online_ai_modus, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_voice_input',
+            value: settingsProfielStatusLabel(config.spraak_ingang),
+            state: parseerBoolWaarde(config.spraak_ingang, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_voice_output',
+            value: settingsProfielStatusLabel(config.spraak_uitgang),
+            state: parseerBoolWaarde(config.spraak_uitgang, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_stt_provider',
+            value: settingsProfielProviderLabel('stt', config.spraak_input_provider),
+            state: 'accent',
+        },
+        {
+            labelKey: 'settings_profile_effect_tts_provider',
+            value: settingsProfielProviderLabel('tts', config.spraak_provider),
+            state: 'accent',
+        },
+        {
+            labelKey: 'settings_profile_effect_security_daily',
+            value: settingsProfielStatusLabel(config.security_scan_daily_enabled),
+            state: parseerBoolWaarde(config.security_scan_daily_enabled, false) ? 'on' : 'off',
+        },
+        {
+            labelKey: 'settings_profile_effect_audit_profile',
+            value: uiTekst('website_audit_profile_' + auditProfiel),
+            state: 'accent',
+        },
+        {
+            labelKey: 'settings_profile_effect_obs_focus',
+            value: settingsProfielStatusLabel(config.stream_auto_focus_obs),
+            state: parseerBoolWaarde(config.stream_auto_focus_obs, false) ? 'on' : 'off',
+        },
+    ];
+
+    settingsProfileEffects.innerHTML = '';
+    regels.forEach((regel) => {
+        const row = document.createElement('article');
+        row.className = 'settings-profile-effect';
+
+        const label = document.createElement('span');
+        label.className = 'settings-profile-effect__label';
+        label.textContent = uiTekst(regel.labelKey);
+        row.appendChild(label);
+
+        const value = document.createElement('span');
+        value.className = 'settings-profile-effect__value';
+        value.dataset.state = regel.state;
+        value.textContent = String(regel.value || '').trim() || '-';
+        row.appendChild(value);
+
+        settingsProfileEffects.appendChild(row);
+    });
+}
+
+function renderSettingsProfielActies(profielNaam, disabled = false) {
+    if (!settingsProfileActions) {
+        return;
+    }
+
+    const acties = settingsProfielActiePreset(profielNaam);
+    settingsProfileActions.innerHTML = '';
+
+    acties.forEach((actie) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'panel-action settings-profile-action';
+        button.dataset.profileCommand = String(actie.command || '').trim();
+        button.dataset.profileName = normaliseerSettingsProfielNaam(profielNaam);
+        button.disabled = Boolean(disabled);
+        button.textContent = settingsProfielActieLabel(actie);
+        settingsProfileActions.appendChild(button);
+    });
+}
+
+async function startSettingsProfielWorkflowVoorProfiel(waarde) {
+    if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+        return;
+    }
+
+    const profielNaam = normaliseerSettingsProfielNaam(waarde);
+    const launchActies = settingsProfielLaunchSequence(profielNaam);
+    if (!Array.isArray(launchActies) || !launchActies.length) {
+        return;
+    }
+
+    appState.settingsProfileLaunching = true;
+    renderSettingsProfilePanel({
+        launching: true,
+        selected: profielNaam,
+    });
+
+    const profielLabel = settingsProfielLabel(profielNaam);
+    setCommandStatus(uiTekst('settings_profile_state_launching', {
+        profile: profielLabel,
+    }));
+
+    try {
+        for (const actie of launchActies) {
+            const commando = String(actie || '').trim();
+            if (!commando) {
+                continue;
+            }
+            await sendCommand(commando, 'quick');
+        }
+
+        const melding = uiTekst('settings_profile_launch_done', {
+            profile: profielLabel,
+        });
+        setCommandStatus(melding);
+        triggerHapticFeedback([40, 25, 40]);
+    } catch (_error) {
+        setCommandStatus(uiTekst('settings_profile_launch_failed'));
+        triggerHapticFeedback([90, 35, 90]);
+    } finally {
+        appState.settingsProfileLaunching = false;
+        renderSettingsProfilePanel({
+            launching: false,
+            selected: profielNaam,
+        });
+    }
+}
+
+async function startSettingsProfielFlow(event) {
+    if (event && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+    }
+
+    if (!settingsProfileSelect || appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+        return;
+    }
+
+    const geselecteerdProfiel = normaliseerSettingsProfielNaam(settingsProfileSelect.value);
+    if (geselecteerdProfiel !== appState.settingsProfile) {
+        await applySettingsProfiel(null, {
+            forcedProfile: geselecteerdProfiel,
+            launchAfterApply: true,
+        });
+        return;
+    }
+
+    await startSettingsProfielWorkflowVoorProfiel(geselecteerdProfiel);
+}
+
+function bouwProfielActiesLijstUitEditor() {
+    const lines = String(settingsProfileActionsEditor ? settingsProfileActionsEditor.value : '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 10);
+
+    return normaliseerSettingsProfielActiesLijst(lines, []);
+}
+
+async function saveSettingsProfielActies(event) {
+    if (event && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+    }
+
+    if (!settingsProfileActionsEditor || appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+        return;
+    }
+
+    const profielNaam = normaliseerSettingsProfielNaam(appState.settingsProfileSelected || appState.settingsProfile);
+    const acties = bouwProfielActiesLijstUitEditor();
+    if (!acties.length) {
+        setCommandStatus(uiTekst('settings_profile_actions_save_failed'));
+        triggerHapticFeedback([90, 35, 90]);
+        return;
+    }
+
+    const volgendeActies = {
+        ...appState.settingsProfileActionsByProfile,
+        [profielNaam]: acties,
+    };
+
+    appState.settingsProfileRouterSaving = true;
+    renderSettingsProfilePanel({
+        profileActions: volgendeActies,
+        routerSaving: true,
+    });
+
+    try {
+        const response = await fetchEchoApi('/api/instellingen', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                instellingen_profiel_acties: volgendeActies,
+            }),
+        }, 9000);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        if (!response.ok || data.status !== 'success') {
+            const message = String(data.message || '').trim() || uiTekst('settings_profile_actions_save_failed');
+            throw new Error(message);
+        }
+
+        const payloadActies = extractSettingsProfielActiesUitPayload(data);
+        appState.settingsProfileActionsByProfile = normaliseerSettingsProfielActiesData(
+            Object.keys(payloadActies).length ? payloadActies : volgendeActies
+        );
+        appState.settingsProfileActionsEditorDirty = false;
+        appState.settingsProfileRouterSaving = false;
+
+        renderSettingsProfilePanel({
+            profileActions: appState.settingsProfileActionsByProfile,
+            routerSaving: false,
+        });
+
+        const melding = uiTekst('settings_profile_actions_save_success', {
+            profile: settingsProfielLabel(profielNaam),
+        });
+        addMessage('ai', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback(40);
+    } catch (error) {
+        appState.settingsProfileRouterSaving = false;
+        renderSettingsProfilePanel({ routerSaving: false });
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const melding = rawMessage || uiTekst('settings_profile_actions_save_failed');
+        addMessage('error', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback([90, 35, 90]);
+    }
+}
+
+async function resetSettingsProfielActies(event) {
+    if (event && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+    }
+
+    if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+        return;
+    }
+
+    const profielNaam = normaliseerSettingsProfielNaam(appState.settingsProfileSelected || appState.settingsProfile);
+    const standaardActies = normaliseerSettingsProfielActiesLijst(
+        SETTINGS_PROFILE_ACTION_PRESETS[profielNaam] || SETTINGS_PROFILE_ACTION_PRESETS.normal,
+        SETTINGS_PROFILE_ACTION_PRESETS.normal
+    );
+
+    const volgendeActies = {
+        ...appState.settingsProfileActionsByProfile,
+        [profielNaam]: standaardActies,
+    };
+
+    appState.settingsProfileRouterSaving = true;
+    renderSettingsProfilePanel({
+        profileActions: volgendeActies,
+        routerSaving: true,
+    });
+
+    try {
+        const response = await fetchEchoApi('/api/instellingen', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                instellingen_profiel_acties: volgendeActies,
+            }),
+        }, 9000);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        if (!response.ok || data.status !== 'success') {
+            const message = String(data.message || '').trim() || uiTekst('settings_profile_actions_reset_failed');
+            throw new Error(message);
+        }
+
+        const payloadActies = extractSettingsProfielActiesUitPayload(data);
+        appState.settingsProfileActionsByProfile = normaliseerSettingsProfielActiesData(
+            Object.keys(payloadActies).length ? payloadActies : volgendeActies
+        );
+        appState.settingsProfileActionsEditorDirty = false;
+        appState.settingsProfileRouterSaving = false;
+
+        renderSettingsProfilePanel({
+            profileActions: appState.settingsProfileActionsByProfile,
+            routerSaving: false,
+        });
+
+        const melding = uiTekst('settings_profile_actions_reset_success', {
+            profile: settingsProfielLabel(profielNaam),
+        });
+        addMessage('ai', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback(40);
+    } catch (error) {
+        appState.settingsProfileRouterSaving = false;
+        renderSettingsProfilePanel({ routerSaving: false });
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const melding = rawMessage || uiTekst('settings_profile_actions_reset_failed');
+        addMessage('error', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback([90, 35, 90]);
+    }
+}
+
+async function saveSettingsProfielRouter(event) {
+    if (event && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+    }
+
+    if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+        return;
+    }
+
+    const routerEnabled = parseerBoolWaarde(
+        settingsProfileRouterEnabledToggle && settingsProfileRouterEnabledToggle.checked,
+        true
+    );
+    const suggestThreshold = begrensSettingsRouterThreshold(
+        settingsProfileSuggestThresholdInput ? settingsProfileSuggestThresholdInput.value : appState.settingsProfileRouterSuggestThreshold,
+        appState.settingsProfileRouterSuggestThreshold,
+        35,
+        95
+    );
+    const autoThresholdRuw = begrensSettingsRouterThreshold(
+        settingsProfileAutoThresholdInput ? settingsProfileAutoThresholdInput.value : appState.settingsProfileRouterAutoThreshold,
+        appState.settingsProfileRouterAutoThreshold,
+        45,
+        99
+    );
+    const autoThreshold = Math.max(Math.min(99, suggestThreshold + 5), autoThresholdRuw);
+
+    appState.settingsProfileRouterSaving = true;
+    renderSettingsProfilePanel({
+        profile_auto_router_enabled: routerEnabled,
+        profile_auto_router_suggest_threshold: suggestThreshold,
+        profile_auto_router_auto_threshold: autoThreshold,
+        routerSaving: true,
+    });
+
+    try {
+        const response = await fetchEchoApi('/api/instellingen', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                profiel_auto_router_enabled: routerEnabled,
+                profiel_auto_router_suggest_threshold: suggestThreshold,
+                profiel_auto_router_auto_threshold: autoThreshold,
+            }),
+        }, 9000);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        if (!response.ok || data.status !== 'success') {
+            const message = String(data.message || '').trim() || uiTekst('settings_profile_router_settings_failed');
+            throw new Error(message);
+        }
+
+        const routerConfig = normaliseerSettingsProfileRouterConfig(data);
+        appState.settingsProfileRouterEnabled = routerConfig.enabled;
+        appState.settingsProfileRouterSuggestThreshold = routerConfig.suggestThreshold;
+        appState.settingsProfileRouterAutoThreshold = routerConfig.autoThreshold;
+        appState.settingsProfileRouterSaving = false;
+
+        renderSettingsProfilePanel({
+            profile_auto_router_enabled: appState.settingsProfileRouterEnabled,
+            profile_auto_router_suggest_threshold: appState.settingsProfileRouterSuggestThreshold,
+            profile_auto_router_auto_threshold: appState.settingsProfileRouterAutoThreshold,
+            routerSaving: false,
+        });
+
+        const melding = uiTekst('settings_profile_router_settings_saved');
+        setCommandStatus(melding);
+        triggerHapticFeedback(40);
+    } catch (error) {
+        appState.settingsProfileRouterSaving = false;
+        renderSettingsProfilePanel({ routerSaving: false });
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const melding = rawMessage || uiTekst('settings_profile_router_settings_failed');
+        addMessage('error', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback([90, 35, 90]);
+    }
+}
+
+function updateSettingsProfileIntentHint(commandoTekst, modeOverride = '') {
+    const hint = analyseerSettingsProfielIntent(commandoTekst);
+    if (!hint) {
+        appState.settingsProfileIntentHint = null;
+        renderSettingsProfilePanel({ intentHint: null });
+        return null;
+    }
+
+    const mode = String(modeOverride || '').trim().toLowerCase();
+    const resolvedMode = mode === 'auto'
+        ? 'auto'
+        : (hint.confidence >= appState.settingsProfileRouterAutoThreshold ? 'auto' : 'suggest');
+
+    appState.settingsProfileIntentHint = {
+        profile: hint.profile,
+        confidence: hint.confidence,
+        mode: resolvedMode,
+        hintKey: hint.hintKey,
+    };
+    renderSettingsProfilePanel({ intentHint: appState.settingsProfileIntentHint });
+    return appState.settingsProfileIntentHint;
+}
+
+function wisSettingsProfielHighlight() {
+    if (appState.settingsProfileHighlightTimer) {
+        window.clearTimeout(appState.settingsProfileHighlightTimer);
+        appState.settingsProfileHighlightTimer = 0;
+    }
+
+    if (settingsProfilePanel) {
+        settingsProfilePanel.dataset.applied = 'false';
+    }
+}
+
+function markeerSettingsProfielToegepast() {
+    if (!settingsProfilePanel) {
+        return;
+    }
+
+    wisSettingsProfielHighlight();
+    settingsProfilePanel.dataset.applied = 'true';
+    appState.settingsProfileHighlightTimer = window.setTimeout(() => {
+        if (settingsProfilePanel) {
+            settingsProfilePanel.dataset.applied = 'false';
+        }
+        appState.settingsProfileHighlightTimer = 0;
+    }, 1900);
+}
+
+function renderSettingsProfilePanel(payload = {}) {
+    if (!settingsProfileKicker || !settingsProfileState || !settingsProfileSelect || !settingsProfileApplyBtn) {
+        return;
+    }
+
+    const data = payload && typeof payload === 'object' ? payload : {};
+    const profielBron = Object.prototype.hasOwnProperty.call(data, 'profile')
+        ? data.profile
+        : appState.settingsProfile;
+    const geselecteerdProfielBron = Object.prototype.hasOwnProperty.call(data, 'selected')
+        ? data.selected
+        : appState.settingsProfileSelected;
+    const profielenBron = Object.prototype.hasOwnProperty.call(data, 'profiles')
+        ? data.profiles
+        : appState.settingsProfiles;
+    const profielConfigsBron = Object.prototype.hasOwnProperty.call(data, 'profileConfigs')
+        ? data.profileConfigs
+        : appState.settingsProfileConfigs;
+    const profielActiesBron = Object.prototype.hasOwnProperty.call(data, 'profileActions')
+        ? data.profileActions
+        : appState.settingsProfileActionsByProfile;
+    const applyingBron = Object.prototype.hasOwnProperty.call(data, 'applying')
+        ? data.applying
+        : appState.settingsProfileApplying;
+    const launchingBron = Object.prototype.hasOwnProperty.call(data, 'launching')
+        ? data.launching
+        : appState.settingsProfileLaunching;
+    const routerSavingBron = Object.prototype.hasOwnProperty.call(data, 'routerSaving')
+        ? data.routerSaving
+        : appState.settingsProfileRouterSaving;
+    const intentHintBron = Object.prototype.hasOwnProperty.call(data, 'intentHint')
+        ? data.intentHint
+        : appState.settingsProfileIntentHint;
+
+    appState.settingsProfile = normaliseerSettingsProfielNaam(profielBron);
+    appState.settingsProfileSelected = normaliseerSettingsProfielNaam(geselecteerdProfielBron || appState.settingsProfile);
+    appState.settingsProfiles = normaliseerSettingsProfielenLijst(profielenBron);
+    appState.settingsProfileConfigs = normaliseerSettingsProfielConfigs(profielConfigsBron);
+    appState.settingsProfileActionsByProfile = normaliseerSettingsProfielActiesData(profielActiesBron);
+    appState.settingsProfileApplying = parseerBoolWaarde(applyingBron, false);
+    appState.settingsProfileLaunching = parseerBoolWaarde(launchingBron, false);
+    appState.settingsProfileRouterSaving = parseerBoolWaarde(routerSavingBron, false);
+
+    const routerConfig = normaliseerSettingsProfileRouterConfig(data);
+    appState.settingsProfileRouterEnabled = routerConfig.enabled;
+    appState.settingsProfileRouterSuggestThreshold = routerConfig.suggestThreshold;
+    appState.settingsProfileRouterAutoThreshold = routerConfig.autoThreshold;
+    appState.settingsProfileIntentHint = intentHintBron && typeof intentHintBron === 'object'
+        ? {
+            profile: normaliseerSettingsProfielNaam(intentHintBron.profile || appState.settingsProfile),
+            confidence: Math.max(0, Math.min(99, Number(intentHintBron.confidence || 0))),
+            mode: String(intentHintBron.mode || 'suggest').trim().toLowerCase() === 'auto' ? 'auto' : 'suggest',
+            hintKey: String(intentHintBron.hintKey || '').trim(),
+        }
+        : null;
+
+    if (!appState.settingsProfiles.includes(appState.settingsProfile)) {
+        appState.settingsProfiles = [appState.settingsProfile, ...appState.settingsProfiles];
+    }
+    if (!appState.settingsProfiles.includes(appState.settingsProfileSelected)) {
+        appState.settingsProfiles = [appState.settingsProfileSelected, ...appState.settingsProfiles];
+    }
+
+    const bestaandeOpties = Array.from(settingsProfileSelect.options || [])
+        .map((optie) => String(optie.value || '').trim().toLowerCase());
+    const gewensteOpties = [...appState.settingsProfiles];
+    const moetOptiesVerversen = bestaandeOpties.join('|') !== gewensteOpties.join('|');
+
+    if (moetOptiesVerversen) {
+        settingsProfileSelect.innerHTML = '';
+        gewensteOpties.forEach((profiel) => {
+            const option = document.createElement('option');
+            option.value = profiel;
+            option.textContent = settingsProfielLabel(profiel);
+            settingsProfileSelect.appendChild(option);
+        });
+    } else {
+        Array.from(settingsProfileSelect.options || []).forEach((optie) => {
+            const profiel = normaliseerSettingsProfielNaam(optie.value);
+            optie.textContent = settingsProfielLabel(profiel);
+        });
+    }
+
+    if (document.activeElement !== settingsProfileSelect) {
+        settingsProfileSelect.value = appState.settingsProfileSelected;
+    }
+
+    const profielInteractieGeblokkeerd = appState.settingsProfileApplying
+        || appState.settingsProfileLaunching
+        || appState.settingsProfileRouterSaving;
+    settingsProfileSelect.disabled = profielInteractieGeblokkeerd;
+    settingsProfileApplyBtn.disabled = profielInteractieGeblokkeerd;
+    settingsProfileApplyBtn.textContent = appState.settingsProfileApplying
+        ? uiTekst('settings_profile_applying')
+        : uiTekst('settings_profile_apply_button');
+
+    if (settingsProfileLaunchBtn) {
+        settingsProfileLaunchBtn.disabled = profielInteractieGeblokkeerd;
+        settingsProfileLaunchBtn.textContent = appState.settingsProfileLaunching
+            ? uiTekst('settings_profile_launching')
+            : uiTekst('settings_profile_launch_button');
+    }
+
+    if (settingsProfileSummary) {
+        settingsProfileSummary.textContent = settingsProfielSummaryTekst(appState.settingsProfileSelected);
+    }
+
+    if (settingsProfileActionsTitle) {
+        settingsProfileActionsTitle.textContent = uiTekst('settings_profile_actions_title');
+    }
+
+    if (settingsProfileActionsEditorLabel) {
+        settingsProfileActionsEditorLabel.textContent = uiTekst('settings_profile_actions_editor_label');
+    }
+
+    if (settingsProfileActionsSaveBtn) {
+        settingsProfileActionsSaveBtn.textContent = uiTekst('settings_profile_actions_save_button');
+        settingsProfileActionsSaveBtn.disabled = profielInteractieGeblokkeerd;
+    }
+
+    if (settingsProfileActionsResetBtn) {
+        settingsProfileActionsResetBtn.textContent = uiTekst('settings_profile_actions_reset_button');
+        settingsProfileActionsResetBtn.disabled = profielInteractieGeblokkeerd;
+    }
+
+    if (settingsProfileActionsEditor) {
+        settingsProfileActionsEditor.placeholder = uiTekst('settings_profile_actions_editor_placeholder');
+    }
+
+    if (settingsProfileRouterEnabledLabel) {
+        settingsProfileRouterEnabledLabel.textContent = uiTekst('settings_profile_router_enabled_label');
+    }
+    if (settingsProfileSuggestThresholdLabel) {
+        settingsProfileSuggestThresholdLabel.textContent = uiTekst('settings_profile_router_suggest_label');
+    }
+    if (settingsProfileAutoThresholdLabel) {
+        settingsProfileAutoThresholdLabel.textContent = uiTekst('settings_profile_router_auto_label');
+    }
+    if (settingsProfileRouterSaveBtn) {
+        settingsProfileRouterSaveBtn.textContent = uiTekst('settings_profile_router_save_button');
+        settingsProfileRouterSaveBtn.disabled = profielInteractieGeblokkeerd;
+    }
+    if (settingsProfileRouterEnabledToggle && document.activeElement !== settingsProfileRouterEnabledToggle) {
+        settingsProfileRouterEnabledToggle.checked = appState.settingsProfileRouterEnabled;
+        settingsProfileRouterEnabledToggle.disabled = profielInteractieGeblokkeerd;
+    }
+    if (settingsProfileSuggestThresholdInput && document.activeElement !== settingsProfileSuggestThresholdInput) {
+        settingsProfileSuggestThresholdInput.value = String(appState.settingsProfileRouterSuggestThreshold);
+        settingsProfileSuggestThresholdInput.disabled = profielInteractieGeblokkeerd;
+    }
+    if (settingsProfileAutoThresholdInput && document.activeElement !== settingsProfileAutoThresholdInput) {
+        settingsProfileAutoThresholdInput.value = String(appState.settingsProfileRouterAutoThreshold);
+        settingsProfileAutoThresholdInput.disabled = profielInteractieGeblokkeerd;
+    }
+
+    if (settingsProfileRouterState) {
+        settingsProfileRouterState.textContent = settingsProfielRouterStatusTekst();
+    }
+
+    const geselecteerdConfig = appState.settingsProfileConfigs[appState.settingsProfileSelected]
+        || appState.settingsProfileConfigs[appState.settingsProfile]
+        || SETTINGS_PROFILE_BASE_CONFIGS.normal;
+    renderSettingsProfielEffecten(appState.settingsProfileSelected, geselecteerdConfig);
+    renderSettingsProfielActies(appState.settingsProfileSelected, profielInteractieGeblokkeerd);
+    renderSettingsProfielActiesEditor(appState.settingsProfileSelected, {
+        locked: profielInteractieGeblokkeerd,
+    });
+
+    settingsProfileKicker.textContent = uiTekst('settings_profile_kicker');
+    const actiefProfielLabel = settingsProfielLabel(appState.settingsProfile);
+    const geselecteerdProfielLabel = settingsProfielLabel(appState.settingsProfileSelected);
+    if (appState.settingsProfileApplying) {
+        settingsProfileState.textContent = uiTekst('settings_profile_applying');
+    } else if (appState.settingsProfileLaunching) {
+        settingsProfileState.textContent = uiTekst('settings_profile_state_launching', {
+            profile: geselecteerdProfielLabel,
+        });
+    } else if (appState.settingsProfileSelected !== appState.settingsProfile) {
+        settingsProfileState.textContent = uiTekst('settings_profile_state_preview', {
+            selected: geselecteerdProfielLabel,
+            active: actiefProfielLabel,
+        });
+    } else {
+        settingsProfileState.textContent = uiTekst('settings_profile_state_current', {
+            profile: actiefProfielLabel,
+        });
+    }
+
+    if (settingsProfilePanel) {
+        settingsProfilePanel.dataset.applying = appState.settingsProfileApplying ? 'true' : 'false';
+        settingsProfilePanel.dataset.launching = appState.settingsProfileLaunching ? 'true' : 'false';
+        settingsProfilePanel.dataset.routerSaving = appState.settingsProfileRouterSaving ? 'true' : 'false';
+        if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+            settingsProfilePanel.dataset.applied = 'false';
+        } else if (!Object.prototype.hasOwnProperty.call(settingsProfilePanel.dataset, 'applied')) {
+            settingsProfilePanel.dataset.applied = 'false';
+        }
+    }
+}
+
+async function applySettingsProfiel(event, options = {}) {
+    if (event && typeof event.preventDefault === 'function') {
+        event.preventDefault();
+    }
+
+    if (!settingsProfileSelect || appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+        return false;
+    }
+
+    const opts = options && typeof options === 'object' ? options : {};
+    const geforceerdProfiel = Object.prototype.hasOwnProperty.call(opts, 'forcedProfile')
+        ? normaliseerSettingsProfielNaam(opts.forcedProfile)
+        : '';
+    const launchAfterApply = parseerBoolWaarde(opts.launchAfterApply, false);
+    const silent = parseerBoolWaarde(opts.silent, false);
+
+    const geselecteerdProfiel = geforceerdProfiel || normaliseerSettingsProfielNaam(settingsProfileSelect.value);
+    const vorigProfiel = appState.settingsProfile;
+    const vorigGeselecteerdProfiel = appState.settingsProfileSelected;
+
+    appState.settingsProfileApplying = true;
+    appState.settingsProfileSelected = geselecteerdProfiel;
+    wisSettingsProfielHighlight();
+    renderSettingsProfilePanel({
+        profile: geselecteerdProfiel,
+        selected: geselecteerdProfiel,
+        applying: true,
+    });
+    setCommandStatus(uiTekst('settings_profile_applying'));
+
+    try {
+        const response = await fetchEchoApi('/api/instellingen', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                instellingen_profiel: geselecteerdProfiel,
+                apply_profile: true,
+            }),
+        }, 9000);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        if (!response.ok || data.status !== 'success') {
+            const message = String(data.message || '').trim() || uiTekst('settings_profile_apply_failed');
+            throw new Error(message);
+        }
+
+        const actiefProfiel = normaliseerSettingsProfielNaam(data.settings_profile || geselecteerdProfiel);
+        const payloadProfielen = extractSettingsProfielenUitPayload(data);
+        const profielOpties = normaliseerSettingsProfielenLijst(
+            payloadProfielen.length ? payloadProfielen : appState.settingsProfiles
+        );
+        const payloadProfielConfigs = extractSettingsProfielConfigsUitPayload(data);
+        const profielConfigs = normaliseerSettingsProfielConfigs(
+            Object.keys(payloadProfielConfigs).length ? payloadProfielConfigs : appState.settingsProfileConfigs
+        );
+        const payloadProfielActies = extractSettingsProfielActiesUitPayload(data);
+        const profielActies = normaliseerSettingsProfielActiesData(
+            Object.keys(payloadProfielActies).length ? payloadProfielActies : appState.settingsProfileActionsByProfile
+        );
+        const routerConfig = normaliseerSettingsProfileRouterConfig(data);
+
+        appState.settingsProfileApplying = false;
+        appState.settingsProfileSelected = actiefProfiel;
+        appState.settingsProfileActionsByProfile = profielActies;
+        appState.settingsProfileRouterEnabled = routerConfig.enabled;
+        appState.settingsProfileRouterSuggestThreshold = routerConfig.suggestThreshold;
+        appState.settingsProfileRouterAutoThreshold = routerConfig.autoThreshold;
+        renderSettingsProfilePanel({
+            profile: actiefProfiel,
+            selected: actiefProfiel,
+            profiles: profielOpties,
+            profileConfigs: profielConfigs,
+            profileActions: profielActies,
+            profile_auto_router_enabled: routerConfig.enabled,
+            profile_auto_router_suggest_threshold: routerConfig.suggestThreshold,
+            profile_auto_router_auto_threshold: routerConfig.autoThreshold,
+            applying: false,
+        });
+        markeerSettingsProfielToegepast();
+
+        const profielLabel = settingsProfielLabel(actiefProfiel);
+        const melding = uiTekst('settings_profile_apply_success', {
+            profile: profielLabel,
+        });
+        if (!silent) {
+            addMessage('ai', melding);
+            setCommandStatus(melding);
+            triggerHapticFeedback(45);
+        }
+
+        await loadSettings();
+        if (launchAfterApply) {
+            await startSettingsProfielWorkflowVoorProfiel(actiefProfiel);
+        }
+        void refreshDashboardTelemetry();
+        return true;
+    } catch (error) {
+        appState.settingsProfileApplying = false;
+        appState.settingsProfileSelected = vorigGeselecteerdProfiel;
+        wisSettingsProfielHighlight();
+        renderSettingsProfilePanel({
+            profile: vorigProfiel,
+            selected: vorigGeselecteerdProfiel,
+            applying: false,
+        });
+
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const melding = rawMessage || uiTekst('settings_profile_apply_failed');
+        if (!silent) {
+            addMessage('error', melding);
+            setCommandStatus(melding);
+            triggerHapticFeedback([90, 35, 90]);
+        }
+        return false;
+    }
 }
 
 function normaliseerWebsiteAuditSnapshot(payload = {}) {
@@ -1869,8 +3453,10 @@ function zetOverviewChip(chip, tekst, state = 'idle') {
         return;
     }
 
-    chip.textContent = String(tekst || '').trim();
-    chip.dataset.state = state;
+    setTextContentIfChanged(chip, String(tekst || '').trim());
+    if (String(chip.dataset.state || '') !== String(state || '')) {
+        chip.dataset.state = state;
+    }
 }
 
 function renderCommandCenterStatus() {
@@ -3549,92 +5135,212 @@ function stopRuntimeVersionWatcher() {
 function stopDashboardWatcher() {
     // Stop dashboardpolling om dubbele interval-timers te voorkomen.
     if (!appState.dashboardPollTimer) {
+        if (appState.dashboardRenderRaf) {
+            window.cancelAnimationFrame(appState.dashboardRenderRaf);
+            appState.dashboardRenderRaf = 0;
+        }
+        appState.dashboardPendingPayload = null;
+        appState.dashboardRefreshQueued = false;
         return;
     }
 
     window.clearInterval(appState.dashboardPollTimer);
     appState.dashboardPollTimer = null;
+    if (appState.dashboardRenderRaf) {
+        window.cancelAnimationFrame(appState.dashboardRenderRaf);
+        appState.dashboardRenderRaf = 0;
+    }
+    appState.dashboardPendingPayload = null;
+    appState.dashboardRefreshQueued = false;
 }
 
-async function refreshDashboardTelemetry() {
-    // Haal dashboard-data op voor live status zonder pagina-refresh.
+function renderDashboardPayload(payload = {}, force = false) {
+    if (!payload || typeof payload !== 'object') {
+        return;
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'modes')
+        && payload.modes
+        && typeof payload.modes === 'object'
+        && dashboardSectieIsGewijzigd('modes', payload.modes, force)
+    ) {
+        renderSettingsProfilePanel({
+            profile: payload.modes.settings_profile,
+            profiles: payload.modes.settings_profiles,
+            profileConfigs: payload.modes.settings_profile_configs,
+            profileActions: payload.modes.settings_profile_actions,
+            profile_auto_router_enabled: payload.modes.profile_auto_router_enabled,
+            profile_auto_router_suggest_threshold: payload.modes.profile_auto_router_suggest_threshold,
+            profile_auto_router_auto_threshold: payload.modes.profile_auto_router_auto_threshold,
+        });
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'security_daily_scan')
+        && dashboardSectieIsGewijzigd('security_daily_scan', payload.security_daily_scan, force)
+    ) {
+        renderDailySecurityPanel(payload.security_daily_scan);
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'mobile_access')
+        && dashboardSectieIsGewijzigd('mobile_access', payload.mobile_access, force)
+    ) {
+        renderMobileAccessPanel(payload.mobile_access);
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'latest_screenshot')
+        && dashboardSectieIsGewijzigd('latest_screenshot', payload.latest_screenshot, force)
+    ) {
+        renderLatestScreenshotPanel(payload.latest_screenshot);
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'website_audit')
+        && dashboardSectieIsGewijzigd('website_audit', payload.website_audit, force)
+    ) {
+        renderWebsiteAuditPanel(payload.website_audit);
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'website_audit_schedule')
+        && dashboardSectieIsGewijzigd('website_audit_schedule', payload.website_audit_schedule, force)
+    ) {
+        renderWebsiteAuditSchedulePanel(payload.website_audit_schedule);
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(payload, 'pending_confirmation')
+        && dashboardSectieIsGewijzigd('pending_confirmation', payload.pending_confirmation, force)
+    ) {
+        renderPendingConfirmation(payload.pending_confirmation);
+    }
+}
+
+function queueDashboardPayloadRender(payload = {}, force = false) {
+    if (!payload || typeof payload !== 'object') {
+        return;
+    }
+
+    const bestaand = appState.dashboardPendingPayload && typeof appState.dashboardPendingPayload === 'object'
+        ? appState.dashboardPendingPayload
+        : { payload: {}, force: false };
+
+    appState.dashboardPendingPayload = {
+        payload: {
+            ...bestaand.payload,
+            ...payload,
+        },
+        force: Boolean(force || bestaand.force),
+    };
+
+    if (appState.dashboardRenderRaf) {
+        return;
+    }
+
+    appState.dashboardRenderRaf = window.requestAnimationFrame(() => {
+        appState.dashboardRenderRaf = 0;
+        const pending = appState.dashboardPendingPayload;
+        appState.dashboardPendingPayload = null;
+        if (!pending || typeof pending !== 'object') {
+            return;
+        }
+        renderDashboardPayload(pending.payload, Boolean(pending.force));
+    });
+}
+
+async function haalJsonViaEchoApi(path, timeoutMs = 1400) {
     try {
-        const response = await fetchEchoApi('/api/dashboard', {
+        const response = await fetchEchoApi(path, {
             method: 'GET',
             cache: 'no-store',
-        }, 1800);
-
+        }, timeoutMs);
         if (!response.ok) {
-            return;
+            return null;
         }
-
-        const payload = await response.json().catch(() => null);
-        if (!payload || typeof payload !== 'object') {
-            return;
-        }
-
-        renderDailySecurityPanel(payload.security_daily_scan);
-        if (payload.mobile_access) {
-            renderMobileAccessPanel(payload.mobile_access);
-        }
-        if (payload.latest_screenshot) {
-            renderLatestScreenshotPanel(payload.latest_screenshot);
-        }
-        if (payload.website_audit) {
-            renderWebsiteAuditPanel(payload.website_audit);
-        }
-        if (payload.website_audit_schedule) {
-            renderWebsiteAuditSchedulePanel(payload.website_audit_schedule);
-        }
-        if (payload.pending_confirmation) {
-            renderPendingConfirmation(payload.pending_confirmation);
-        }
+        return await response.json().catch(() => null);
     } catch (_error) {
-        // Keep current panel values on transient network failures.
+        return null;
+    }
+}
+
+async function refreshDashboardTelemetry(force = false) {
+    // Voorkom overlap en throttle losse handmatige refresh-triggers.
+    const nu = Date.now();
+    if (!force && (nu - appState.dashboardLastRefreshAt) < DASHBOARD_REFRESH_MIN_INTERVAL_MS) {
+        return;
+    }
+
+    if (appState.dashboardRefreshInFlight) {
+        appState.dashboardRefreshQueued = true;
+        return;
+    }
+
+    appState.dashboardRefreshInFlight = true;
+    appState.dashboardLastRefreshAt = nu;
+
+    try {
         try {
-            const fallback = await fetchEchoApi('/api/mobile-access', {
-                method: 'GET',
-                cache: 'no-store',
-            }, 1400);
-            if (fallback.ok) {
-                const data = await fallback.json().catch(() => null);
-                if (data && typeof data === 'object') {
-                    renderMobileAccessPanel(data);
-                }
+            const payload = await haalJsonViaEchoApi('/api/dashboard', 1800);
+            if (payload && typeof payload === 'object') {
+                queueDashboardPayloadRender(payload, force);
+                return;
             }
-        } catch (_innerError) {
-            // Ignore fallback errors.
+        } catch (_error) {
+            // Val terug op losse deel-endpoints als dashboard tijdelijk niet reageert.
         }
 
-        try {
-            const screenshotFallback = await fetchEchoApi('/api/screenshot/latest', {
-                method: 'GET',
-                cache: 'no-store',
-            }, 1400);
-            if (screenshotFallback.ok) {
-                const screenshotData = await screenshotFallback.json().catch(() => null);
-                if (screenshotData && typeof screenshotData === 'object') {
-                    renderLatestScreenshotPanel(screenshotData);
-                }
-            }
-        } catch (_innerScreenshotError) {
-            // Ignore screenshot fallback errors.
+        const [mobileData, screenshotData, auditData, settingsData] = await Promise.all([
+            haalJsonViaEchoApi('/api/mobile-access', 1400),
+            haalJsonViaEchoApi('/api/screenshot/latest', 1400),
+            haalJsonViaEchoApi('/api/website-audit/status', 1400),
+            haalJsonViaEchoApi('/api/instellingen', 1600),
+        ]);
+
+        const fallbackPayload = {};
+        if (mobileData && typeof mobileData === 'object') {
+            fallbackPayload.mobile_access = mobileData;
+        }
+        if (screenshotData && typeof screenshotData === 'object') {
+            fallbackPayload.latest_screenshot = screenshotData;
+        }
+        if (auditData && typeof auditData === 'object') {
+            fallbackPayload.website_audit = auditData.audit || auditData;
+            fallbackPayload.website_audit_schedule = auditData.schedule || auditData.website_audit_schedule || {};
         }
 
-        try {
-            const auditFallback = await fetchEchoApi('/api/website-audit/status', {
-                method: 'GET',
-                cache: 'no-store',
-            }, 1400);
-            if (auditFallback.ok) {
-                const auditData = await auditFallback.json().catch(() => null);
-                if (auditData && typeof auditData === 'object') {
-                    renderWebsiteAuditPanel(auditData.audit || auditData);
-                    renderWebsiteAuditSchedulePanel(auditData.schedule || auditData.website_audit_schedule || {});
-                }
-            }
-        } catch (_innerAuditError) {
-            // Ignore audit fallback errors.
+        if (settingsData && typeof settingsData === 'object') {
+            const profiel = normaliseerSettingsProfielNaam(
+                settingsData.instellingen_profiel || settingsData.settings_profile || appState.settingsProfile
+            );
+            const profielLijst = normaliseerSettingsProfielenLijst(extractSettingsProfielenUitPayload(settingsData));
+            const profielConfigs = normaliseerSettingsProfielConfigs(extractSettingsProfielConfigsUitPayload(settingsData));
+            const profielActies = normaliseerSettingsProfielActiesData(extractSettingsProfielActiesUitPayload(settingsData));
+            const routerConfig = normaliseerSettingsProfileRouterConfig(settingsData);
+
+            fallbackPayload.modes = {
+                settings_profile: profiel,
+                settings_profiles: profielLijst,
+                settings_profile_configs: profielConfigs,
+                settings_profile_actions: profielActies,
+                profile_auto_router_enabled: routerConfig.enabled,
+                profile_auto_router_suggest_threshold: routerConfig.suggestThreshold,
+                profile_auto_router_auto_threshold: routerConfig.autoThreshold,
+            };
+        }
+
+        if (Object.keys(fallbackPayload).length) {
+            queueDashboardPayloadRender(fallbackPayload, force);
+        }
+    } finally {
+        appState.dashboardRefreshInFlight = false;
+        if (appState.dashboardRefreshQueued) {
+            appState.dashboardRefreshQueued = false;
+            window.setTimeout(() => {
+                void refreshDashboardTelemetry(force);
+            }, 120);
         }
     }
 }
@@ -3648,7 +5354,7 @@ function startDashboardWatcher() {
         return;
     }
 
-    void refreshDashboardTelemetry();
+    void refreshDashboardTelemetry(true);
     appState.dashboardPollTimer = window.setInterval(() => {
         void refreshDashboardTelemetry();
     }, DASHBOARD_POLL_MS);
@@ -4163,12 +5869,12 @@ function updateWakeGateStatus() {
     }
 
     if (appState.wakeArmed) {
-        wakeGateStatus.textContent = uiTekst('wake_gate_armed');
+        setTextContentIfChanged(wakeGateStatus, uiTekst('wake_gate_armed'));
         wakeGateStatus.classList.add('is-armed');
         return;
     }
 
-    wakeGateStatus.textContent = uiTekst('wake_gate_locked');
+    setTextContentIfChanged(wakeGateStatus, uiTekst('wake_gate_locked'));
     wakeGateStatus.classList.remove('is-armed');
 }
 
@@ -4333,29 +6039,35 @@ function updateSpeechButtonLabel() {
     }
 
     if (appState.micMuted) {
-        speechBtn.disabled = true;
-        speechBtn.textContent = uiTekst('voice_button_muted');
+        setElementDisabledIfChanged(speechBtn, true);
+        setTextContentIfChanged(speechBtn, uiTekst('voice_button_muted'));
         return;
     }
 
     if (appState.voiceInputMode === 'upload') {
-        speechBtn.disabled = appState.voiceUploadInFlight;
-        speechBtn.textContent = appState.voiceUploadInFlight
-            ? uiTekst('voice_upload_processing')
-            : uiTekst('voice_input_quick_capture');
+        setElementDisabledIfChanged(speechBtn, appState.voiceUploadInFlight);
+        setTextContentIfChanged(
+            speechBtn,
+            appState.voiceUploadInFlight
+                ? uiTekst('voice_upload_processing')
+                : uiTekst('voice_input_quick_capture')
+        );
         return;
     }
 
     if (appState.voiceInputMode === 'browser') {
-        speechBtn.disabled = false;
-        speechBtn.textContent = appState.listeningActive
-            ? uiTekst('speech_listening_stop')
-            : uiTekst('speech_listening_start');
+        setElementDisabledIfChanged(speechBtn, false);
+        setTextContentIfChanged(
+            speechBtn,
+            appState.listeningActive
+                ? uiTekst('speech_listening_stop')
+                : uiTekst('speech_listening_start')
+        );
         return;
     }
 
-    speechBtn.disabled = true;
-    speechBtn.textContent = uiTekst('voice_not_supported');
+    setElementDisabledIfChanged(speechBtn, true);
+    setTextContentIfChanged(speechBtn, uiTekst('voice_not_supported'));
 }
 
 function resetPendingCommandsDefaults() {
@@ -4604,6 +6316,11 @@ function updateLocalizedUiLabels() {
     }
 
     renderDailySecurityPanel(appState.dailySecuritySnapshot);
+    renderSettingsProfilePanel({
+        profile: appState.settingsProfile,
+        profiles: appState.settingsProfiles,
+        applying: appState.settingsProfileApplying,
+    });
     renderMobileAccessPanel(appState.mobileAccessSnapshot);
     renderLatestScreenshotPanel(appState.latestScreenshotSnapshot);
     renderWebsiteAuditPanel(appState.websiteAuditSnapshot);
@@ -4679,6 +6396,8 @@ function addMessage(kind, text) {
         return;
     }
 
+    const zatDichtbijOnderkant = (messages.scrollHeight - (messages.scrollTop + messages.clientHeight)) < 40;
+
     const row = document.createElement('div');
     row.classList.add('message');
     if (kind === 'user') {
@@ -4691,13 +6410,22 @@ function addMessage(kind, text) {
 
     row.innerHTML = escapeHtml(text);
     messages.appendChild(row);
-    messages.scrollTop = messages.scrollHeight;
+
+    while (messages.childElementCount > MAX_FEED_MESSAGES) {
+        const oudste = messages.firstElementChild;
+        if (!oudste) {
+            break;
+        }
+        messages.removeChild(oudste);
+    }
+
+    if (zatDichtbijOnderkant || kind === 'user') {
+        messages.scrollTop = messages.scrollHeight;
+    }
 }
 
 function setCommandStatus(text) {
-    if (commandStatus) {
-        commandStatus.textContent = text;
-    }
+    setTextContentIfChanged(commandStatus, text);
 }
 
 function isRecentDuplicateAssistantMessage(text) {
@@ -4716,9 +6444,7 @@ function isRecentDuplicateAssistantMessage(text) {
 }
 
 function setVoiceStatus(text) {
-    if (voiceStatus) {
-        voiceStatus.textContent = text;
-    }
+    setTextContentIfChanged(voiceStatus, text);
 }
 
 function refreshCoreStateClasses() {
@@ -4895,6 +6621,41 @@ async function sendCommand(command, source = 'text') {
 
     if (await handelLokaleSnelkoppelingAf(commandText, source)) {
         return;
+    }
+
+    if (source !== 'system') {
+        const routerHint = updateSettingsProfileIntentHint(commandText);
+        const heeftProfielMismatch = Boolean(routerHint && routerHint.profile && routerHint.profile !== appState.settingsProfile);
+
+        if (appState.settingsProfileRouterEnabled && heeftProfielMismatch) {
+            const confidence = Number(routerHint.confidence || 0);
+            if (confidence >= appState.settingsProfileRouterAutoThreshold) {
+                const autoHint = updateSettingsProfileIntentHint(commandText, 'auto');
+                const wisselGelukt = await applySettingsProfiel(null, {
+                    forcedProfile: routerHint.profile,
+                    silent: true,
+                });
+                if (wisselGelukt) {
+                    const melding = uiTekst('settings_profile_router_switched', {
+                        profile: settingsProfielLabel(routerHint.profile),
+                        confidence: String(Math.max(0, Math.min(99, Number(routerHint.confidence || 0)))),
+                    });
+                    setCommandStatus(melding);
+                    triggerHapticFeedback([25, 20, 25]);
+                    if (autoHint) {
+                        renderSettingsProfilePanel({ intentHint: autoHint });
+                    }
+                } else {
+                    setCommandStatus(uiTekst('settings_profile_router_switch_failed'));
+                }
+            } else if (confidence >= appState.settingsProfileRouterSuggestThreshold) {
+                const suggestie = uiTekst('settings_profile_router_state_suggest', {
+                    profile: settingsProfielLabel(routerHint.profile),
+                    confidence: String(Math.max(0, Math.min(99, Number(routerHint.confidence || 0)))),
+                });
+                setCommandStatus(suggestie);
+            }
+        }
     }
 
     if (source !== 'system') {
@@ -5075,14 +6836,125 @@ async function sendCommand(command, source = 'text') {
             pulseSpeaking(1400);
         }
     } finally {
+        if (source === 'voice') {
+            appState.voiceCommandInFlight = false;
+        }
         if (sendBtn) {
             sendBtn.disabled = false;
         }
     }
 }
 
+function clearVoiceTranscriptBuffer() {
+    appState.voiceTranscriptBuffer = [];
+    if (appState.voiceTranscriptTimer) {
+        window.clearTimeout(appState.voiceTranscriptTimer);
+        appState.voiceTranscriptTimer = null;
+    }
+}
+
+function normaliseerVoiceTranscriptTekst(transcript) {
+    const genormaliseerd = normalizeText(transcript);
+    if (!genormaliseerd) {
+        return '';
+    }
+
+    const woorden = genormaliseerd.split(' ').filter(Boolean);
+    const compact = [];
+    let vorige = '';
+    let herhaling = 0;
+
+    for (const woord of woorden) {
+        if (woord === vorige) {
+            herhaling += 1;
+            if (herhaling >= 2) {
+                continue;
+            }
+        } else {
+            vorige = woord;
+            herhaling = 0;
+        }
+        compact.push(woord);
+    }
+
+    return compact.join(' ').trim();
+}
+
+function clearRecognitionRestartTimer() {
+    if (!appState.recognitionRestartTimer) {
+        return;
+    }
+
+    window.clearTimeout(appState.recognitionRestartTimer);
+    appState.recognitionRestartTimer = null;
+}
+
+function activeerVoiceUploadFallback(reasonCode = '') {
+    if (!isVoiceUploadFallbackAvailable()) {
+        return false;
+    }
+
+    clearRecognitionRestartTimer();
+    clearVoiceTranscriptBuffer();
+    appState.recognitionErrorStreak = 0;
+    appState.recognitionRestartCount = 0;
+    appState.listeningWanted = false;
+    appState.voiceInputMode = 'upload';
+
+    try {
+        if (appState.recognition) {
+            appState.recognition.stop();
+        }
+    } catch (_error) {
+        // Ignore stop errors while switching fallback modes.
+    }
+
+    setListening(false);
+    setWakeArmed(false);
+    setVoiceStatus(uiTekst('voice_manual_mobile_hint'));
+    setCommandStatus(uiTekst('voice_recognition_unavailable_browser'));
+    updateSpeechButtonLabel();
+
+    if (reasonCode) {
+        console.warn('[Echo] Voice fallback enabled:', reasonCode);
+    }
+
+    return true;
+}
+
+function planRecognitionRestart(reasonCode = '') {
+    if (!appState.listeningWanted || appState.voiceInputMode !== 'browser' || !appState.recognition) {
+        return;
+    }
+
+    if (appState.recognitionRestartCount >= RECOGNITION_MAX_RESTARTS) {
+        const fallbackActief = activeerVoiceUploadFallback(reasonCode || 'restart-limit');
+        if (!fallbackActief) {
+            appState.listeningWanted = false;
+            setListening(false);
+            setWakeArmed(false);
+            setVoiceStatus(uiTekst('voice_recognition_unavailable'));
+            setCommandStatus(uiTekst('voice_recognition_unavailable'));
+        }
+        return;
+    }
+
+    clearRecognitionRestartTimer();
+    const poging = appState.recognitionRestartCount + 1;
+    appState.recognitionRestartCount = poging;
+    const vertraging = Math.min(1800, RECOGNITION_RESTART_BASE_DELAY_MS * poging);
+
+    appState.recognitionRestartTimer = window.setTimeout(() => {
+        appState.recognitionRestartTimer = null;
+        if (!appState.listeningWanted || appState.voiceInputMode !== 'browser') {
+            return;
+        }
+        startRecognition();
+    }, vertraging);
+}
+
 function processVoiceTranscript(transcript) {
-    const spokenRaw = String(transcript || '').trim();
+    const spokenRaw = normaliseerVoiceTranscriptTekst(transcript);
     if (!spokenRaw) {
         return;
     }
@@ -5115,24 +6987,31 @@ function processVoiceTranscript(transcript) {
     }
 
     const now = Date.now();
-    const isDuplicate = normalizedCommand === appState.lastVoiceTranscriptNormalized
+    const isTranscriptDuplicate = normalizedCommand === appState.lastVoiceTranscriptNormalized
         && (now - appState.lastVoiceTranscriptAt) < VOICE_DUPLICATE_WINDOW_MS;
+    const isRecentDispatchDuplicate = normalizedCommand === appState.lastVoiceCommandDispatchedNormalized
+        && (now - appState.lastVoiceCommandDispatchedAt) < VOICE_COMMAND_DISPATCH_DUPLICATE_WINDOW_MS;
+    const isInflightDuplicate = appState.voiceCommandInFlight
+        && normalizedCommand === appState.lastVoiceCommandDispatchedNormalized;
 
-    if (isDuplicate) {
+    if (isTranscriptDuplicate || isRecentDispatchDuplicate || isInflightDuplicate) {
         setVoiceStatus(tekstVoorTaal('Ignored duplicate voice command.', 'Dubbele spraakopdracht genegeerd.'));
         return;
     }
 
     appState.lastVoiceTranscriptNormalized = normalizedCommand;
     appState.lastVoiceTranscriptAt = now;
-    void sendCommand(commandToSend, 'voice');
-}
+    appState.lastVoiceCommandDispatchedNormalized = normalizedCommand;
+    appState.lastVoiceCommandDispatchedAt = now;
+    appState.voiceCommandInFlight = true;
 
-function clearVoiceTranscriptBuffer() {
-    appState.voiceTranscriptBuffer = [];
-    if (appState.voiceTranscriptTimer) {
-        window.clearTimeout(appState.voiceTranscriptTimer);
-        appState.voiceTranscriptTimer = null;
+    const taak = sendCommand(commandToSend, 'voice');
+    if (taak && typeof taak.finally === 'function') {
+        taak.finally(() => {
+            appState.voiceCommandInFlight = false;
+        });
+    } else {
+        appState.voiceCommandInFlight = false;
     }
 }
 
@@ -5148,6 +7027,9 @@ function handleRecognitionResult(event) {
             if (!fragment) {
                 continue;
             }
+
+            appState.recognitionErrorStreak = 0;
+            appState.recognitionRestartCount = 0;
 
             const normalizedFragment = normalizeText(fragment);
             const vorigeFragment = appState.voiceTranscriptBuffer.length
@@ -5166,7 +7048,7 @@ function handleRecognitionResult(event) {
                 const transcript = appState.voiceTranscriptBuffer.join(' ').trim();
                 clearVoiceTranscriptBuffer();
                 processVoiceTranscript(transcript);
-            }, 1000);
+            }, VOICE_TRANSCRIPT_BUFFER_MS);
         }
     }
 }
@@ -5176,11 +7058,18 @@ function startRecognition() {
         return;
     }
 
+    clearRecognitionRestartTimer();
+
     try {
         appState.recognition.lang = appState.language;
         appState.recognition.start();
-    } catch (_error) {
-        // Start can fail if called too quickly.
+    } catch (error) {
+        appState.recognitionErrorStreak += 1;
+        planRecognitionRestart('start-error');
+        const code = error && typeof error === 'object' && 'name' in error
+            ? String(error.name || '').trim().toLowerCase()
+            : 'start';
+        setCommandStatus(uiTekst('voice_error_code', { code }));
     }
 }
 
@@ -5189,7 +7078,10 @@ function stopRecognition() {
         return;
     }
 
+    clearRecognitionRestartTimer();
     clearVoiceTranscriptBuffer();
+    appState.recognitionErrorStreak = 0;
+    appState.recognitionRestartCount = 0;
     setWakeArmed(false);
 
     try {
@@ -5320,6 +7212,9 @@ function toggleListening() {
 
 function initRecognition() {
     appState.isSamsungBrowser = detectSamsungBrowser();
+    appState.recognitionErrorStreak = 0;
+    appState.recognitionRestartCount = 0;
+    clearRecognitionRestartTimer();
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -5347,6 +7242,8 @@ function initRecognition() {
     recognition.lang = appState.language;
 
     recognition.onstart = () => {
+        appState.recognitionErrorStreak = 0;
+        appState.recognitionRestartCount = 0;
         clearVoiceTranscriptBuffer();
         setListening(true);
         setCommandStatus(uiTekst('voice_listening_active'));
@@ -5355,34 +7252,67 @@ function initRecognition() {
     recognition.onresult = handleRecognitionResult;
 
     recognition.onerror = (event) => {
-        const code = event && event.error ? String(event.error) : 'unknown';
-        setCommandStatus(uiTekst('voice_error_code', { code }));
-
-        if (code === 'service-not-allowed' && appState.isSamsungBrowser && isVoiceUploadFallbackAvailable()) {
-            appState.listeningWanted = false;
-            setListening(false);
-            setWakeArmed(false);
-            appState.voiceInputMode = 'upload';
-            appState.recognition = null;
-            setVoiceStatus(uiTekst('voice_manual_mobile_hint'));
-            setCommandStatus(uiTekst('voice_recognition_unavailable_browser'));
-            updateSpeechButtonLabel();
+        const code = event && event.error ? String(event.error || '').trim().toLowerCase() : 'unknown';
+        if (code === 'aborted' && !appState.listeningWanted) {
             return;
         }
 
-        if (code === 'not-allowed' || code === 'service-not-allowed') {
+        setCommandStatus(uiTekst('voice_error_code', { code }));
+
+        if (code === 'service-not-allowed' || code === 'not-allowed') {
             appState.listeningWanted = false;
             setListening(false);
             setWakeArmed(false);
-            setVoiceStatus(uiTekst('microphone_permission_denied'));
-        } else if (code === 'audio-capture') {
-            appState.listeningWanted = false;
-            setListening(false);
+            const fallbackActief = activeerVoiceUploadFallback(code);
+            if (!fallbackActief) {
+                setVoiceStatus(uiTekst('microphone_permission_denied'));
+                updateSpeechButtonLabel();
+            }
+            return;
+        }
+
+        if (code === 'audio-capture') {
+            appState.recognitionErrorStreak += 1;
+            if (appState.recognitionErrorStreak >= RECOGNITION_FALLBACK_THRESHOLD) {
+                const fallbackActief = activeerVoiceUploadFallback(code);
+                if (fallbackActief) {
+                    return;
+                }
+            }
             setVoiceStatus('Geen microfoonsignaal. Controleer of je microfoon niet door een andere app wordt gebruikt.');
-        } else if (code === 'network') {
+            return;
+        }
+
+        if (code === 'network') {
+            appState.recognitionErrorStreak += 1;
+            if (appState.recognitionErrorStreak >= RECOGNITION_FALLBACK_THRESHOLD) {
+                const fallbackActief = activeerVoiceUploadFallback(code);
+                if (fallbackActief) {
+                    return;
+                }
+            }
             setVoiceStatus('Spraakherkenning kan geen verbinding maken. Controleer internet en probeer opnieuw.');
-        } else if (code === 'no-speech') {
+            return;
+        }
+
+        if (code === 'no-speech') {
+            appState.recognitionErrorStreak += 1;
+            if (appState.recognitionErrorStreak >= RECOGNITION_FALLBACK_THRESHOLD && appState.isSamsungBrowser) {
+                const fallbackActief = activeerVoiceUploadFallback(code);
+                if (fallbackActief) {
+                    return;
+                }
+            }
             setVoiceStatus('Geen spraak gehoord. Spreek opnieuw nadat luisteren actief is.');
+            return;
+        }
+
+        appState.recognitionErrorStreak += 1;
+        if (appState.recognitionErrorStreak >= RECOGNITION_FALLBACK_THRESHOLD && appState.isSamsungBrowser) {
+            const fallbackActief = activeerVoiceUploadFallback(code);
+            if (fallbackActief) {
+                return;
+            }
         }
     };
 
@@ -5390,8 +7320,21 @@ function initRecognition() {
         clearVoiceTranscriptBuffer();
         setWakeArmed(false);
         setListening(false);
-        if (appState.listeningWanted && appState.voiceInputMode === 'browser') {
-            window.setTimeout(startRecognition, 280);
+
+        if (appState.voiceInputMode !== 'browser') {
+            return;
+        }
+
+        if (
+            appState.listeningWanted
+            && appState.recognitionErrorStreak >= RECOGNITION_FALLBACK_THRESHOLD
+            && activeerVoiceUploadFallback('error-streak')
+        ) {
+            return;
+        }
+
+        if (appState.listeningWanted) {
+            planRecognitionRestart('onend');
         }
     };
 
@@ -5399,18 +7342,28 @@ function initRecognition() {
     updateSpeechButtonLabel();
 }
 
-function updateVisualizerBars() {
+function updateVisualizerBars(nowMs = performance.now()) {
     if (!visualizerBars.length) {
         return;
     }
 
-    const now = Date.now() / 220;
+    const hiddenIdle = Boolean(document.hidden) && !appState.speakingActive && !appState.listeningActive;
+    const minInterval = hiddenIdle
+        ? 420
+        : (appState.speakingActive || appState.listeningActive ? VISUALIZER_ACTIVE_FRAME_MS : VISUALIZER_IDLE_FRAME_MS);
+
+    if ((nowMs - appState.visualizerLastFrameAt) < minInterval) {
+        return;
+    }
+    appState.visualizerLastFrameAt = nowMs;
+
+    const osc = nowMs / 220;
     const base = appState.speakingActive
         ? 0.72
         : (appState.listeningActive ? 0.45 : 0.13);
 
     visualizerBars.forEach((bar, index) => {
-        const harmonic = (Math.sin(now + (index * 0.53)) + 1) * 0.13;
+        const harmonic = (Math.sin(osc + (index * 0.53)) + 1) * 0.13;
         const noise = Math.random() * (appState.speakingActive ? 0.34 : (appState.listeningActive ? 0.22 : 0.06));
         const level = Math.min(1, Math.max(0.08, base + harmonic + noise));
         bar.style.setProperty('--level', level.toFixed(3));
@@ -5418,21 +7371,27 @@ function updateVisualizerBars() {
     });
 }
 
+function visualizerFrameTick(nowMs) {
+    updateVisualizerBars(nowMs);
+    appState.visualizerTimer = window.requestAnimationFrame(visualizerFrameTick);
+}
+
+function stopVisualizer() {
+    if (!appState.visualizerTimer) {
+        return;
+    }
+
+    window.cancelAnimationFrame(appState.visualizerTimer);
+    appState.visualizerTimer = 0;
+}
+
 function startVisualizer() {
     if (appState.visualizerTimer) {
         return;
     }
 
-    appState.visualizerTimer = window.setInterval(updateVisualizerBars, 90);
-}
-
-function clearFeed() {
-    if (!messages) {
-        return;
-    }
-
-    messages.innerHTML = '';
-    addMessage('ai', uiTekst('feed_cleared'));
+    appState.visualizerLastFrameAt = 0;
+    appState.visualizerTimer = window.requestAnimationFrame(visualizerFrameTick);
 }
 
 async function loadSettings() {
@@ -5454,6 +7413,25 @@ async function loadSettings() {
         appState.wakeWord = String(settings.wake_word || 'hey echo').trim() || 'hey echo';
         appState.browserVoicePreference = String(settings.browser_stem || '').trim();
         appState.premiumVoiceId = String(settings.premium_tts_voice_id || '').trim();
+        appState.settingsProfile = normaliseerSettingsProfielNaam(
+            settings.instellingen_profiel || settings.settings_profile || appState.settingsProfile
+        );
+        appState.settingsProfileSelected = appState.settingsProfile;
+        appState.settingsProfiles = normaliseerSettingsProfielenLijst(extractSettingsProfielenUitPayload(settings));
+        appState.settingsProfileConfigs = normaliseerSettingsProfielConfigs(
+            extractSettingsProfielConfigsUitPayload(settings)
+        );
+        appState.settingsProfileActionsByProfile = normaliseerSettingsProfielActiesData(
+            extractSettingsProfielActiesUitPayload(settings)
+        );
+        const routerConfig = normaliseerSettingsProfileRouterConfig(settings);
+        appState.settingsProfileRouterEnabled = routerConfig.enabled;
+        appState.settingsProfileRouterSuggestThreshold = routerConfig.suggestThreshold;
+        appState.settingsProfileRouterAutoThreshold = routerConfig.autoThreshold;
+        appState.settingsProfileApplying = false;
+        appState.settingsProfileLaunching = false;
+        appState.settingsProfileRouterSaving = false;
+        appState.settingsProfileIntentHint = null;
 
         if (assistantName) {
             assistantName.textContent = appState.aiName.toUpperCase();
@@ -5464,6 +7442,20 @@ async function loadSettings() {
         renderDailySecurityPanel({
             enabled: parseerBoolWaarde(settings.security_scan_daily_enabled, false),
             scheduled_time: String(settings.security_scan_daily_time || '03:00').trim() || '03:00',
+        });
+        renderSettingsProfilePanel({
+            profile: appState.settingsProfile,
+            selected: appState.settingsProfileSelected,
+            profiles: appState.settingsProfiles,
+            profileConfigs: appState.settingsProfileConfigs,
+            profileActions: appState.settingsProfileActionsByProfile,
+            profile_auto_router_enabled: appState.settingsProfileRouterEnabled,
+            profile_auto_router_suggest_threshold: appState.settingsProfileRouterSuggestThreshold,
+            profile_auto_router_auto_threshold: appState.settingsProfileRouterAutoThreshold,
+            applying: false,
+            launching: false,
+            routerSaving: false,
+            intentHint: null,
         });
         renderWebsiteAuditSchedulePanel({
             enabled: parseerBoolWaarde(settings.website_audit_schedule_enabled, false),
@@ -5477,9 +7469,6 @@ async function loadSettings() {
         renderMobileAccessPanel(appState.mobileAccessSnapshot);
 
         document.title = appState.aiName;
-
-        void ensureBrowserVoices();
-        void probePremiumTtsEndpoint(false);
     } catch (_error) {
         // Keep defaults if settings endpoint is unavailable.
     }
@@ -5547,6 +7536,120 @@ function wireEvents() {
                 commandInput.focus();
             }
             hideCommandSuggestions();
+        });
+    }
+
+    if (settingsProfileForm) {
+        settingsProfileForm.addEventListener('submit', (event) => {
+            void applySettingsProfiel(event);
+        });
+    }
+
+    if (settingsProfileRouterForm) {
+        settingsProfileRouterForm.addEventListener('submit', (event) => {
+            void saveSettingsProfielRouter(event);
+        });
+    }
+
+    if (settingsProfileRouterEnabledToggle) {
+        settingsProfileRouterEnabledToggle.addEventListener('change', () => {
+            if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+                return;
+            }
+            renderSettingsProfilePanel({
+                profile_auto_router_enabled: settingsProfileRouterEnabledToggle.checked,
+            });
+        });
+    }
+
+    const routerThresholdPreviewHandler = () => {
+        if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+            return;
+        }
+        renderSettingsProfilePanel({
+            profile_auto_router_suggest_threshold: settingsProfileSuggestThresholdInput
+                ? settingsProfileSuggestThresholdInput.value
+                : appState.settingsProfileRouterSuggestThreshold,
+            profile_auto_router_auto_threshold: settingsProfileAutoThresholdInput
+                ? settingsProfileAutoThresholdInput.value
+                : appState.settingsProfileRouterAutoThreshold,
+        });
+    };
+
+    if (settingsProfileSuggestThresholdInput) {
+        settingsProfileSuggestThresholdInput.addEventListener('input', routerThresholdPreviewHandler);
+    }
+
+    if (settingsProfileAutoThresholdInput) {
+        settingsProfileAutoThresholdInput.addEventListener('input', routerThresholdPreviewHandler);
+    }
+
+    if (settingsProfileLaunchBtn) {
+        settingsProfileLaunchBtn.addEventListener('click', (event) => {
+            void startSettingsProfielFlow(event);
+        });
+    }
+
+    if (settingsProfileSelect) {
+        settingsProfileSelect.addEventListener('change', () => {
+            if (appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+                return;
+            }
+
+            appState.settingsProfileSelected = normaliseerSettingsProfielNaam(settingsProfileSelect.value);
+            appState.settingsProfileActionsEditorDirty = false;
+            renderSettingsProfilePanel({
+                selected: appState.settingsProfileSelected,
+            });
+        });
+    }
+
+    if (settingsProfileActionsEditor) {
+        settingsProfileActionsEditor.addEventListener('input', () => {
+            appState.settingsProfileActionsEditorDirty = true;
+        });
+    }
+
+    if (settingsProfileActionsSaveBtn) {
+        settingsProfileActionsSaveBtn.addEventListener('click', (event) => {
+            void saveSettingsProfielActies(event);
+        });
+    }
+
+    if (settingsProfileActionsResetBtn) {
+        settingsProfileActionsResetBtn.addEventListener('click', (event) => {
+            void resetSettingsProfielActies(event);
+        });
+    }
+
+    if (settingsProfileActions) {
+        settingsProfileActions.addEventListener('click', (event) => {
+            const target = event.target;
+            const button = target instanceof Element
+                ? target.closest('button[data-profile-command]')
+                : null;
+
+            if (!(button instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            const commando = String(button.dataset.profileCommand || '').trim();
+            const actieProfiel = normaliseerSettingsProfielNaam(button.dataset.profileName || appState.settingsProfileSelected);
+            if (!commando || appState.settingsProfileApplying || appState.settingsProfileLaunching || appState.settingsProfileRouterSaving) {
+                return;
+            }
+
+            void (async () => {
+                if (actieProfiel !== appState.settingsProfile) {
+                    const toegepast = await applySettingsProfiel(null, {
+                        forcedProfile: actieProfiel,
+                    });
+                    if (!toegepast) {
+                        return;
+                    }
+                }
+                await sendCommand(commando, 'quick');
+            })();
         });
     }
 
@@ -5723,6 +7826,7 @@ function wireEvents() {
     if (commandInput) {
         commandInput.addEventListener('input', () => {
             refreshCommandSuggestionsFromInput();
+            updateSettingsProfileIntentHint(commandInput.value);
         });
 
         commandInput.addEventListener('keydown', (event) => {
@@ -5755,6 +7859,14 @@ function wireEvents() {
 
         commandInput.addEventListener('focus', () => {
             refreshCommandSuggestionsFromInput();
+            updateSettingsProfileIntentHint(commandInput.value);
+        });
+
+        commandInput.addEventListener('blur', () => {
+            if (!String(commandInput.value || '').trim()) {
+                appState.settingsProfileIntentHint = null;
+                renderSettingsProfilePanel({ intentHint: null });
+            }
         });
     }
 
@@ -6017,19 +8129,23 @@ async function init() {
     loadCommandHistory();
     updateViewportModeClass();
 
-    await loadSettings();
-    void ensureBrowserVoices();
-    void probePremiumTtsEndpoint(false);
+    const settingsTaak = loadSettings();
     initRecognition();
     wireEvents();
-    startVisualizer();
-    startRuntimeVersionWatcher();
-    startDashboardWatcher();
 
     setVoiceStatus(uiTekst('boot_running'));
     setCommandStatus(uiTekst('core_initializing'));
 
-    await runBootSequence();
+    await Promise.allSettled([
+        settingsTaak,
+        runBootSequence(),
+    ]);
+
+    void ensureBrowserVoices();
+    void probePremiumTtsEndpoint(false);
+    startVisualizer();
+    startRuntimeVersionWatcher();
+    startDashboardWatcher();
 }
 
 window.addEventListener('load', () => {
@@ -6037,6 +8153,9 @@ window.addEventListener('load', () => {
 });
 
 window.addEventListener('beforeunload', () => {
+    appState.listeningWanted = false;
+    clearRecognitionRestartTimer();
+    stopVisualizer();
     stopCameraStream();
     stopDashboardWatcher();
     stopRuntimeVersionWatcher();

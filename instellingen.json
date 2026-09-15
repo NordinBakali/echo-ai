@@ -14,7 +14,7 @@
   "agent_modus": true,
   "geheugen_modus": true,
   "prioriteit_modus": true,
-  "computerbesturing_toestaan": true,
+  "computerbesturing_toestaan": false,
   "client_naam": "Nordin",
   "spraak_input_provider": "google",
   "whisper_model": "small",
@@ -30,6 +30,54 @@
   "online_ai_model": "gemini-1.5-flash",
   "ai_agent_primair": true,
   "premium_tts_voice_id": "",
+  "instellingen_profiel": "normal",
+  "instellingen_profielen": {
+    "normal": {
+      "agent_modus": true,
+      "geheugen_modus": true,
+      "prioriteit_modus": true,
+      "computerbesturing_toestaan": false,
+      "online_ai_modus": true,
+      "ai_agent_primair": true,
+      "spraak_ingang": false,
+      "spraak_uitgang": true,
+      "spraak_input_provider": "google",
+      "spraak_provider": "local",
+      "security_scan_daily_enabled": false,
+      "website_audit_schedule_profile": "standard",
+      "stream_auto_focus_obs": true
+    },
+    "streaming": {
+      "agent_modus": true,
+      "geheugen_modus": true,
+      "prioriteit_modus": false,
+      "computerbesturing_toestaan": true,
+      "online_ai_modus": true,
+      "ai_agent_primair": true,
+      "spraak_ingang": true,
+      "spraak_uitgang": false,
+      "spraak_input_provider": "whisper",
+      "spraak_provider": "local",
+      "security_scan_daily_enabled": false,
+      "website_audit_schedule_profile": "quick",
+      "stream_auto_focus_obs": true
+    },
+    "security": {
+      "agent_modus": true,
+      "geheugen_modus": true,
+      "prioriteit_modus": true,
+      "computerbesturing_toestaan": false,
+      "online_ai_modus": false,
+      "ai_agent_primair": false,
+      "spraak_ingang": false,
+      "spraak_uitgang": true,
+      "spraak_input_provider": "google",
+      "spraak_provider": "local",
+      "security_scan_daily_enabled": true,
+      "website_audit_schedule_profile": "security",
+      "stream_auto_focus_obs": false
+    }
+  },
   "security_scan_daily_enabled": false,
   "security_scan_daily_time": "03:00",
   "discord_dm_vriend_aliases": {},
@@ -52,5 +100,64 @@
   "website_audit_schedule_profile": "standard",
   "website_audit_alert_webhook": "",
   "website_audit_alert_score_drop": 12,
-  "website_audit_alert_on_critical": true
+  "website_audit_alert_on_critical": true,
+  "instellingen_profiel_acties": {
+    "normal": [
+      {
+        "command": "system info and show agenda and show tasks",
+        "label": "Daily Briefing"
+      },
+      {
+        "command": "show tasks",
+        "label": "Task Radar"
+      },
+      {
+        "command": "phone status",
+        "label": "Phone Link Status"
+      },
+      {
+        "command": "take screenshot",
+        "label": "Take Screenshot"
+      }
+    ],
+    "streaming": [
+      {
+        "command": "stream mode on",
+        "label": "Stream Mode"
+      },
+      {
+        "command": "stream start",
+        "label": "Go Live"
+      },
+      {
+        "command": "stream recording start",
+        "label": "Start Recording"
+      },
+      {
+        "command": "stream help",
+        "label": "Stream Help"
+      }
+    ],
+    "security": [
+      {
+        "command": "website audit status",
+        "label": "Audit Status"
+      },
+      {
+        "command": "website audit report latest",
+        "label": "Latest Audit Report"
+      },
+      {
+        "command": "website audit schedule status",
+        "label": "Audit Schedule"
+      },
+      {
+        "command": "enable automation mode",
+        "label": "Enable Automation"
+      }
+    ]
+  },
+  "profiel_auto_router_enabled": true,
+  "profiel_auto_router_suggest_threshold": 62,
+  "profiel_auto_router_auto_threshold": 86
 }

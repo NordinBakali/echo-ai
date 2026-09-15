@@ -154,9 +154,59 @@
                     <div class="command-suggestions" id="commandSuggestions" aria-live="polite"></div>
                 </div>
 
-                <div class="panel-block website-audit-panel" id="websiteAuditPanel">
+                <div class="panel-block settings-profile-panel" id="settingsProfilePanel">
+                    <p class="panel-kicker" id="settingsProfileKicker">Echo Profiles</p>
+                    <p class="panel-note" id="settingsProfileState">Kies een profiel en klik op toepassen.</p>
+                    <p class="panel-note settings-profile-summary" id="settingsProfileSummary">Profielinstellingen worden geladen...</p>
+                    <div class="settings-profile-effects" id="settingsProfileEffects" aria-live="polite"></div>
+                    <form id="settingsProfileForm" class="settings-profile-form" autocomplete="off">
+                        <select id="settingsProfileSelect">
+                            <option value="normal" selected>Normaal Gebruik</option>
+                            <option value="streaming">Streaming</option>
+                            <option value="security">Security</option>
+                        </select>
+                        <div class="settings-profile-form-actions">
+                            <button id="settingsProfileApplyBtn" type="submit" class="panel-action">Profiel Toepassen</button>
+                            <button id="settingsProfileLaunchBtn" type="button" class="panel-action">Toepassen + Profiel Starten</button>
+                        </div>
+                    </form>
+                    <p class="panel-note settings-profile-router-state" id="settingsProfileRouterState">Auto-profielrouter laden...</p>
+                    <form id="settingsProfileRouterForm" class="settings-profile-router-form" autocomplete="off">
+                        <label class="settings-profile-toggle">
+                            <input id="settingsProfileRouterEnabledToggle" type="checkbox" checked>
+                            <span id="settingsProfileRouterEnabledLabel">Auto-profielrouter</span>
+                        </label>
+                        <div class="settings-profile-thresholds">
+                            <label class="settings-profile-threshold" for="settingsProfileSuggestThresholdInput">
+                                <span id="settingsProfileSuggestThresholdLabel">Suggestie %</span>
+                                <input id="settingsProfileSuggestThresholdInput" type="number" min="35" max="95" step="1" value="62" inputmode="numeric">
+                            </label>
+                            <label class="settings-profile-threshold" for="settingsProfileAutoThresholdInput">
+                                <span id="settingsProfileAutoThresholdLabel">Auto-switch %</span>
+                                <input id="settingsProfileAutoThresholdInput" type="number" min="45" max="99" step="1" value="86" inputmode="numeric">
+                            </label>
+                        </div>
+                        <button id="settingsProfileRouterSaveBtn" type="submit" class="panel-action settings-profile-router-save">Router Opslaan</button>
+                    </form>
+                    <p class="panel-note settings-profile-actions-title" id="settingsProfileActionsTitle">Profielacties</p>
+                    <div class="settings-profile-actions" id="settingsProfileActions"></div>
+                    <p class="panel-note settings-profile-actions-editor-label" id="settingsProfileActionsEditorLabel">Aangepaste acties (een commando per regel)</p>
+                    <textarea
+                        id="settingsProfileActionsEditor"
+                        class="settings-profile-actions-editor"
+                        rows="4"
+                        spellcheck="false"
+                        placeholder="stream mode on&#10;stream start&#10;stream help"
+                    ></textarea>
+                    <div class="settings-profile-actions-editor-controls">
+                        <button id="settingsProfileActionsSaveBtn" type="button" class="panel-action">Acties Opslaan</button>
+                        <button id="settingsProfileActionsResetBtn" type="button" class="panel-action">Reset Standaard</button>
+                    </div>
+                </div>
+
+                <div class="panel-block website-audit-panel quick-checker-only" id="websiteAuditPanel">
                     <p class="panel-kicker" id="websiteAuditKicker">Website Audit</p>
-                    <p class="panel-note" id="websiteAuditState">Audit idle. Add a URL and start a scan.</p>
+                    <p class="panel-note" id="websiteAuditState">Open de Quick Checker popup om direct een website scan te starten.</p>
                     <div class="website-audit-progress" aria-hidden="true">
                         <div class="website-audit-progress__fill" id="websiteAuditProgressBar"></div>
                     </div>
@@ -181,6 +231,16 @@
                     <div class="pending-actions">
                         <button id="websiteAuditDownloadPdfBtn" type="button" class="panel-action">Download PDF</button>
                         <button id="websiteAuditScheduleStatusBtn" type="button" class="panel-action" data-command="website audit schedule status">Schedule Status</button>
+                    </div>
+                    <div class="pending-actions" id="websiteQuickCheckerPopupWrap">
+                        <button
+                            id="websiteQuickCheckerPopupBtn"
+                            type="button"
+                            class="panel-action"
+                            onclick="window.open('/quick-checker', 'echoQuickChecker', 'popup=yes,width=1440,height=920,resizable=yes,scrollbars=yes');"
+                        >
+                            Quick Checker Popup
+                        </button>
                     </div>
                     <p class="panel-note website-audit-score" id="websiteAuditScore">Score: --</p>
                     <p class="panel-note website-audit-meta" id="websiteAuditMeta">Pass: 0 | Warn: 0 | Fail: 0</p>
