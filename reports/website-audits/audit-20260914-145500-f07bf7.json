@@ -1,0 +1,432 @@
+{
+  "scan_id": "audit-20260914-145500-f07bf7",
+  "created_at": 1789390501.3664694,
+  "created_at_label": "2026-09-14 14:55:01",
+  "target_url": "https://www2.hm.com/nl_nl/index.html",
+  "target_host": "www2.hm.com",
+  "profile": "standard",
+  "profile_label": "Standaard audit",
+  "summary": {
+    "score": 26,
+    "grade": "E",
+    "exposure_level": "Hoog",
+    "checks_total": 24,
+    "checks_passed": 11,
+    "checks_warn": 11,
+    "checks_failed": 2,
+    "findings_total": 13,
+    "pages_scanned": 1,
+    "links_checked": 0,
+    "forms_seen": 0,
+    "buttons_seen": 0,
+    "severity_totals": {
+      "critical": 0,
+      "high": 2,
+      "medium": 4,
+      "low": 7
+    },
+    "average_page_load_ms": 163
+  },
+  "checks": [
+    {
+      "id": "transport-https",
+      "status": "pass",
+      "severity": "high",
+      "category": "security",
+      "title": "HTTPS is actief.",
+      "detail": "",
+      "recommendation": "Houd HTTPS afgedwongen op alle publieke routes.",
+      "page_url": ""
+    },
+    {
+      "id": "page-status-1",
+      "status": "fail",
+      "severity": "high",
+      "category": "availability",
+      "title": "Pagina gaf een foutstatus terug.",
+      "detail": "https://www2.hm.com/nl_nl/index.html gaf status 403 terug.",
+      "recommendation": "Los routing/serverfouten op voor deze URL.",
+      "page_url": "https://www2.hm.com/nl_nl/index.html"
+    },
+    {
+      "id": "forms-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen formulieren gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "Als formulieren verwacht zijn, controleer routes en gerenderde HTML op form-elementen.",
+      "page_url": ""
+    },
+    {
+      "id": "buttons-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen knopbediening gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "links-checked",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Er zijn geen interne links gecontroleerd.",
+      "detail": "",
+      "recommendation": "Zorg dat er minstens één crawlbare interne link is voor baselinechecks.",
+      "page_url": ""
+    },
+    {
+      "id": "mixed-content",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Geen mixed content gedetecteerd in gescande pagina's.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "header-hsts",
+      "status": "pass",
+      "severity": "high",
+      "category": "security",
+      "title": "HSTS-header aanwezig.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "header-csp",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Content-Security-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Voeg een CSP toe om script-injectierisico te verkleinen.",
+      "page_url": ""
+    },
+    {
+      "id": "header-framing",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Framing-bescherming ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Frame-Options of frame-ancestors in CSP in.",
+      "page_url": ""
+    },
+    {
+      "id": "header-nosniff",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "X-Content-Type-Options nosniff ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Content-Type-Options: nosniff in.",
+      "page_url": ""
+    },
+    {
+      "id": "header-referrer-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Referrer-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel Referrer-Policy in op een privacyvriendelijke waarde.",
+      "page_url": ""
+    },
+    {
+      "id": "header-permissions-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Permissions-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel een restrictieve Permissions-Policy in voor ongebruikte browserfeatures.",
+      "page_url": ""
+    },
+    {
+      "id": "header-server-disclosure",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Servertechnologie-headers geven stackdetails prijs.",
+      "detail": "AkamaiGHost",
+      "recommendation": "Minimaliseer of maskeer Server/X-Powered-By-headers.",
+      "page_url": ""
+    },
+    {
+      "id": "cookies-secure",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Sommige cookies missen de Secure-flag.",
+      "detail": "2 cookie(s) zonder Secure.",
+      "recommendation": "Zet Secure op alle cookies die via HTTPS worden geserveerd.",
+      "page_url": ""
+    },
+    {
+      "id": "cookies-httponly",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Sommige cookies missen de HttpOnly-flag.",
+      "detail": "2 cookie(s) zonder HttpOnly.",
+      "recommendation": "Zet HttpOnly op cookies die geen JavaScript-toegang nodig hebben.",
+      "page_url": ""
+    },
+    {
+      "id": "cookies-samesite",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Sommige cookies missen de SameSite-flag.",
+      "detail": "3 cookie(s) zonder SameSite.",
+      "recommendation": "Gebruik waar mogelijk SameSite=Lax of SameSite=Strict.",
+      "page_url": ""
+    },
+    {
+      "id": "tls-certificate",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "TLS-certificaatgeldigheid ziet er gezond uit.",
+      "detail": "TLS-versie: TLSv1.3, resterende certificaatgeldigheid: 152 dag(en).",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "sensitive-path-/.env",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://www2.hm.com/.env gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://www2.hm.com/.env"
+    },
+    {
+      "id": "sensitive-path-/.git/HEAD",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://www2.hm.com/.git/HEAD gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://www2.hm.com/.git/HEAD"
+    },
+    {
+      "id": "sensitive-path-/phpinfo.php",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://www2.hm.com/phpinfo.php gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://www2.hm.com/phpinfo.php"
+    },
+    {
+      "id": "sensitive-path-/server-status",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://www2.hm.com/server-status gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://www2.hm.com/server-status"
+    },
+    {
+      "id": "sensitive-path-/actuator/env",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://www2.hm.com/actuator/env gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://www2.hm.com/actuator/env"
+    },
+    {
+      "id": "sensitive-path-/debug",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://www2.hm.com/debug gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://www2.hm.com/debug"
+    },
+    {
+      "id": "performance-average",
+      "status": "pass",
+      "severity": "low",
+      "category": "performance",
+      "title": "Gemiddelde paginalaadtijd valt binnen baseline-drempel.",
+      "detail": "Gemiddelde paginalaadtijd: 163 ms.",
+      "recommendation": "",
+      "page_url": ""
+    }
+  ],
+  "findings": [
+    {
+      "id": "page-status-1",
+      "status": "fail",
+      "severity": "high",
+      "category": "availability",
+      "title": "Pagina gaf een foutstatus terug.",
+      "detail": "https://www2.hm.com/nl_nl/index.html gaf status 403 terug.",
+      "recommendation": "Los routing/serverfouten op voor deze URL.",
+      "page_url": "https://www2.hm.com/nl_nl/index.html"
+    },
+    {
+      "id": "cookies-secure",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Sommige cookies missen de Secure-flag.",
+      "detail": "2 cookie(s) zonder Secure.",
+      "recommendation": "Zet Secure op alle cookies die via HTTPS worden geserveerd.",
+      "page_url": ""
+    },
+    {
+      "id": "header-csp",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Content-Security-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Voeg een CSP toe om script-injectierisico te verkleinen.",
+      "page_url": ""
+    },
+    {
+      "id": "header-framing",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Framing-bescherming ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Frame-Options of frame-ancestors in CSP in.",
+      "page_url": ""
+    },
+    {
+      "id": "cookies-httponly",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Sommige cookies missen de HttpOnly-flag.",
+      "detail": "2 cookie(s) zonder HttpOnly.",
+      "recommendation": "Zet HttpOnly op cookies die geen JavaScript-toegang nodig hebben.",
+      "page_url": ""
+    },
+    {
+      "id": "header-nosniff",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "X-Content-Type-Options nosniff ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Content-Type-Options: nosniff in.",
+      "page_url": ""
+    },
+    {
+      "id": "links-checked",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Er zijn geen interne links gecontroleerd.",
+      "detail": "",
+      "recommendation": "Zorg dat er minstens één crawlbare interne link is voor baselinechecks.",
+      "page_url": ""
+    },
+    {
+      "id": "forms-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen formulieren gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "Als formulieren verwacht zijn, controleer routes en gerenderde HTML op form-elementen.",
+      "page_url": ""
+    },
+    {
+      "id": "buttons-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen knopbediening gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "header-permissions-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Permissions-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel een restrictieve Permissions-Policy in voor ongebruikte browserfeatures.",
+      "page_url": ""
+    },
+    {
+      "id": "header-referrer-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Referrer-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel Referrer-Policy in op een privacyvriendelijke waarde.",
+      "page_url": ""
+    },
+    {
+      "id": "header-server-disclosure",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Servertechnologie-headers geven stackdetails prijs.",
+      "detail": "AkamaiGHost",
+      "recommendation": "Minimaliseer of maskeer Server/X-Powered-By-headers.",
+      "page_url": ""
+    },
+    {
+      "id": "cookies-samesite",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Sommige cookies missen de SameSite-flag.",
+      "detail": "3 cookie(s) zonder SameSite.",
+      "recommendation": "Gebruik waar mogelijk SameSite=Lax of SameSite=Strict.",
+      "page_url": ""
+    }
+  ],
+  "pages": [
+    {
+      "url": "https://www2.hm.com/nl_nl/index.html",
+      "status": 403,
+      "load_ms": 163,
+      "title": "Access Denied",
+      "links": 0,
+      "forms": 0,
+      "buttons": 0,
+      "content_type": "text/html"
+    }
+  ],
+  "links": [],
+  "limits": {
+    "max_pages": 5,
+    "max_links_per_page": 10,
+    "max_total_links": 26,
+    "sensitive_path_limit": 6
+  },
+  "notes": [
+    "Dit is een passieve baseline-scan en voert geen exploitpogingen uit.",
+    "Combineer dit met browser-E2E-tests voor volledige validatie van knopflows."
+  ],
+  "result_message": "Website-audit afgerond voor https://www2.hm.com/nl_nl/index.html. Score 26/100 (E, risiconiveau Hoog). Fail: 2, waarschuwingen: 11, pass: 11.",
+  "report_files": {
+    "json": "reports\\website-audits\\audit-20260914-145500-f07bf7.json",
+    "markdown": "reports\\website-audits\\audit-20260914-145500-f07bf7.md"
+  }
+}

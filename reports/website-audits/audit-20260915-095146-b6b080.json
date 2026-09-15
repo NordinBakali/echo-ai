@@ -1,0 +1,606 @@
+{
+  "scan_id": "audit-20260915-095146-b6b080",
+  "created_at": 1789458707.3567276,
+  "created_at_label": "2026-09-15 09:51:47",
+  "target_url": "https://chiefsofit.com/",
+  "target_host": "chiefsofit.com",
+  "profile": "standard",
+  "profile_label": "Standaard audit",
+  "summary": {
+    "score": 0,
+    "grade": "E",
+    "exposure_level": "Hoog",
+    "checks_total": 26,
+    "checks_passed": 11,
+    "checks_warn": 10,
+    "checks_failed": 5,
+    "findings_total": 15,
+    "pages_scanned": 1,
+    "links_checked": 0,
+    "forms_seen": 0,
+    "buttons_seen": 0,
+    "forms_checked": 0,
+    "buttons_checked": 0,
+    "form_probe_failures": 0,
+    "button_probe_failures": 0,
+    "severity_totals": {
+      "critical": 0,
+      "high": 5,
+      "medium": 4,
+      "low": 6
+    },
+    "average_page_load_ms": 268,
+    "next_actions": [
+      "Voeg Strict-Transport-Security toe met veilige max-age en includeSubDomains.",
+      "Schakel gevoelige actuator-endpoints uit of bescherm ze met authenticatie en IP-controles.",
+      "Verwijder phpinfo- en debugdiagnostiekpagina's uit productie."
+    ]
+  },
+  "checks": [
+    {
+      "id": "transport-https",
+      "status": "pass",
+      "severity": "high",
+      "category": "security",
+      "title": "HTTPS is actief.",
+      "detail": "",
+      "recommendation": "Houd HTTPS afgedwongen op alle publieke routes.",
+      "page_url": ""
+    },
+    {
+      "id": "page-status-1",
+      "status": "pass",
+      "severity": "low",
+      "category": "availability",
+      "title": "Pagina reageerde succesvol.",
+      "detail": "https://chiefsofit.com/ gaf status 200 terug.",
+      "recommendation": "",
+      "page_url": "https://chiefsofit.com/"
+    },
+    {
+      "id": "forms-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen formulieren gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "Als formulieren verwacht zijn, controleer routes en gerenderde HTML op form-elementen.",
+      "page_url": ""
+    },
+    {
+      "id": "buttons-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen knopbediening gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "links-checked",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Er zijn geen interne links gecontroleerd.",
+      "detail": "",
+      "recommendation": "Zorg dat er minstens één crawlbare interne link is voor baselinechecks.",
+      "page_url": ""
+    },
+    {
+      "id": "mixed-content",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Geen mixed content gedetecteerd in gescande pagina's.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "transport-http-redirect",
+      "status": "warn",
+      "severity": "high",
+      "category": "security",
+      "title": "HTTP-naar-HTTPS-redirect ontbreekt of is inconsistent.",
+      "detail": "HTTP-probestatus 200 eind-URL https://chiefsofit.com/.",
+      "recommendation": "Dwing HTTP 301/308-redirects naar HTTPS af op alle publieke routes.",
+      "page_url": ""
+    },
+    {
+      "id": "http-options-methods",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Geen risicovolle HTTP-methodes geadverteerd in Allow-header.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "security-txt",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "security.txt is aanwezig.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": "https://chiefsofit.com/.well-known/security.txt"
+    },
+    {
+      "id": "header-hsts",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "HSTS-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Voeg Strict-Transport-Security toe met veilige max-age en includeSubDomains.",
+      "page_url": ""
+    },
+    {
+      "id": "header-csp",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Content-Security-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Voeg een CSP toe om script-injectierisico te verkleinen.",
+      "page_url": ""
+    },
+    {
+      "id": "header-framing",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Framing-bescherming ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Frame-Options of frame-ancestors in CSP in.",
+      "page_url": ""
+    },
+    {
+      "id": "header-nosniff",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "X-Content-Type-Options nosniff ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Content-Type-Options: nosniff in.",
+      "page_url": ""
+    },
+    {
+      "id": "header-referrer-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Referrer-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel Referrer-Policy in op een privacyvriendelijke waarde.",
+      "page_url": ""
+    },
+    {
+      "id": "header-permissions-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Permissions-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel een restrictieve Permissions-Policy in voor ongebruikte browserfeatures.",
+      "page_url": ""
+    },
+    {
+      "id": "header-server-disclosure",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Servertechnologie-headers geven stackdetails prijs.",
+      "detail": "LiteSpeed",
+      "recommendation": "Minimaliseer of maskeer Server/X-Powered-By-headers.",
+      "page_url": ""
+    },
+    {
+      "id": "cookies-flags",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Geen Set-Cookie-headers gedetecteerd op de root-respons.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "tls-version",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Moderne TLS-protocolversie gedetecteerd.",
+      "detail": "Onderhandelde versie: TLSv1.3",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "tls-certificate",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "TLS-certificaatgeldigheid ziet er gezond uit.",
+      "detail": "TLS-versie: TLSv1.3, resterende certificaatgeldigheid: 65 dag(en), subject: www.chiefsofit.com, issuer: YE2 .",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "sensitive-path-/.env",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://chiefsofit.com/.env gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://chiefsofit.com/.env"
+    },
+    {
+      "id": "sensitive-path-/.git/HEAD",
+      "status": "pass",
+      "severity": "low",
+      "category": "security",
+      "title": "Gevoelig endpoint lijkt afgeschermd.",
+      "detail": "https://chiefsofit.com/.git/HEAD gaf 403 terug.",
+      "recommendation": "",
+      "page_url": "https://chiefsofit.com/.git/HEAD"
+    },
+    {
+      "id": "sensitive-path-/phpinfo.php",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Mogelijke blootstelling van diagnostiek-endpoint",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/phpinfo.php",
+      "recommendation": "Verwijder phpinfo- en debugdiagnostiekpagina's uit productie.",
+      "page_url": "https://chiefsofit.com/phpinfo.php"
+    },
+    {
+      "id": "sensitive-path-/server-status",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Mogelijke server-status blootstelling",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/server-status",
+      "recommendation": "Beperk server-status-endpoints tot intern of geauthenticeerd gebruik.",
+      "page_url": "https://chiefsofit.com/server-status"
+    },
+    {
+      "id": "sensitive-path-/actuator/env",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Mogelijke blootstelling van actuator-omgeving",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/actuator/env",
+      "recommendation": "Schakel gevoelige actuator-endpoints uit of bescherm ze met authenticatie en IP-controles.",
+      "page_url": "https://chiefsofit.com/actuator/env"
+    },
+    {
+      "id": "sensitive-path-/debug",
+      "status": "fail",
+      "severity": "medium",
+      "category": "security",
+      "title": "Mogelijke blootstelling van debug-endpoint",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/debug",
+      "recommendation": "Schakel debugroutes uit in productiebuilds.",
+      "page_url": "https://chiefsofit.com/debug"
+    },
+    {
+      "id": "performance-average",
+      "status": "pass",
+      "severity": "low",
+      "category": "performance",
+      "title": "Gemiddelde paginalaadtijd valt binnen baseline-drempel.",
+      "detail": "Gemiddelde paginalaadtijd: 268 ms.",
+      "recommendation": "",
+      "page_url": ""
+    }
+  ],
+  "findings": [
+    {
+      "id": "header-hsts",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "HSTS-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Voeg Strict-Transport-Security toe met veilige max-age en includeSubDomains.",
+      "page_url": ""
+    },
+    {
+      "id": "sensitive-path-/actuator/env",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Mogelijke blootstelling van actuator-omgeving",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/actuator/env",
+      "recommendation": "Schakel gevoelige actuator-endpoints uit of bescherm ze met authenticatie en IP-controles.",
+      "page_url": "https://chiefsofit.com/actuator/env"
+    },
+    {
+      "id": "sensitive-path-/phpinfo.php",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Mogelijke blootstelling van diagnostiek-endpoint",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/phpinfo.php",
+      "recommendation": "Verwijder phpinfo- en debugdiagnostiekpagina's uit productie.",
+      "page_url": "https://chiefsofit.com/phpinfo.php"
+    },
+    {
+      "id": "sensitive-path-/server-status",
+      "status": "fail",
+      "severity": "high",
+      "category": "security",
+      "title": "Mogelijke server-status blootstelling",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/server-status",
+      "recommendation": "Beperk server-status-endpoints tot intern of geauthenticeerd gebruik.",
+      "page_url": "https://chiefsofit.com/server-status"
+    },
+    {
+      "id": "sensitive-path-/debug",
+      "status": "fail",
+      "severity": "medium",
+      "category": "security",
+      "title": "Mogelijke blootstelling van debug-endpoint",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/debug",
+      "recommendation": "Schakel debugroutes uit in productiebuilds.",
+      "page_url": "https://chiefsofit.com/debug"
+    },
+    {
+      "id": "transport-http-redirect",
+      "status": "warn",
+      "severity": "high",
+      "category": "security",
+      "title": "HTTP-naar-HTTPS-redirect ontbreekt of is inconsistent.",
+      "detail": "HTTP-probestatus 200 eind-URL https://chiefsofit.com/.",
+      "recommendation": "Dwing HTTP 301/308-redirects naar HTTPS af op alle publieke routes.",
+      "page_url": ""
+    },
+    {
+      "id": "header-csp",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Content-Security-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Voeg een CSP toe om script-injectierisico te verkleinen.",
+      "page_url": ""
+    },
+    {
+      "id": "header-framing",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "Framing-bescherming ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Frame-Options of frame-ancestors in CSP in.",
+      "page_url": ""
+    },
+    {
+      "id": "header-nosniff",
+      "status": "warn",
+      "severity": "medium",
+      "category": "security",
+      "title": "X-Content-Type-Options nosniff ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel X-Content-Type-Options: nosniff in.",
+      "page_url": ""
+    },
+    {
+      "id": "links-checked",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Er zijn geen interne links gecontroleerd.",
+      "detail": "",
+      "recommendation": "Zorg dat er minstens één crawlbare interne link is voor baselinechecks.",
+      "page_url": ""
+    },
+    {
+      "id": "forms-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen formulieren gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "Als formulieren verwacht zijn, controleer routes en gerenderde HTML op form-elementen.",
+      "page_url": ""
+    },
+    {
+      "id": "buttons-presence",
+      "status": "warn",
+      "severity": "low",
+      "category": "functional",
+      "title": "Geen knopbediening gevonden in gescande pagina's.",
+      "detail": "",
+      "recommendation": "",
+      "page_url": ""
+    },
+    {
+      "id": "header-permissions-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Permissions-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel een restrictieve Permissions-Policy in voor ongebruikte browserfeatures.",
+      "page_url": ""
+    },
+    {
+      "id": "header-referrer-policy",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Referrer-Policy-header ontbreekt.",
+      "detail": "",
+      "recommendation": "Stel Referrer-Policy in op een privacyvriendelijke waarde.",
+      "page_url": ""
+    },
+    {
+      "id": "header-server-disclosure",
+      "status": "warn",
+      "severity": "low",
+      "category": "security",
+      "title": "Servertechnologie-headers geven stackdetails prijs.",
+      "detail": "LiteSpeed",
+      "recommendation": "Minimaliseer of maskeer Server/X-Powered-By-headers.",
+      "page_url": ""
+    }
+  ],
+  "remediation_plan": [
+    {
+      "priority": 1,
+      "category": "security",
+      "severity": "high",
+      "status": "fail",
+      "title": "HSTS-header ontbreekt.",
+      "recommendation": "Voeg Strict-Transport-Security toe met veilige max-age en includeSubDomains.",
+      "detail": "",
+      "page_url": "",
+      "expected_impact": 84,
+      "source_check_id": "header-hsts"
+    },
+    {
+      "priority": 2,
+      "category": "security",
+      "severity": "high",
+      "status": "fail",
+      "title": "Mogelijke blootstelling van actuator-omgeving",
+      "recommendation": "Schakel gevoelige actuator-endpoints uit of bescherm ze met authenticatie en IP-controles.",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/actuator/env",
+      "page_url": "https://chiefsofit.com/actuator/env",
+      "expected_impact": 84,
+      "source_check_id": "sensitive-path-/actuator/env"
+    },
+    {
+      "priority": 3,
+      "category": "security",
+      "severity": "high",
+      "status": "fail",
+      "title": "Mogelijke blootstelling van diagnostiek-endpoint",
+      "recommendation": "Verwijder phpinfo- en debugdiagnostiekpagina's uit productie.",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/phpinfo.php",
+      "page_url": "https://chiefsofit.com/phpinfo.php",
+      "expected_impact": 84,
+      "source_check_id": "sensitive-path-/phpinfo.php"
+    },
+    {
+      "priority": 4,
+      "category": "security",
+      "severity": "high",
+      "status": "fail",
+      "title": "Mogelijke server-status blootstelling",
+      "recommendation": "Beperk server-status-endpoints tot intern of geauthenticeerd gebruik.",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/server-status",
+      "page_url": "https://chiefsofit.com/server-status",
+      "expected_impact": 84,
+      "source_check_id": "sensitive-path-/server-status"
+    },
+    {
+      "priority": 5,
+      "category": "security",
+      "severity": "high",
+      "status": "warn",
+      "title": "HTTP-naar-HTTPS-redirect ontbreekt of is inconsistent.",
+      "recommendation": "Dwing HTTP 301/308-redirects naar HTTPS af op alle publieke routes.",
+      "detail": "HTTP-probestatus 200 eind-URL https://chiefsofit.com/.",
+      "page_url": "",
+      "expected_impact": 50,
+      "source_check_id": "transport-http-redirect"
+    },
+    {
+      "priority": 6,
+      "category": "security",
+      "severity": "medium",
+      "status": "fail",
+      "title": "Mogelijke blootstelling van debug-endpoint",
+      "recommendation": "Schakel debugroutes uit in productiebuilds.",
+      "detail": "Endpoint reageerde met HTTP 200: https://chiefsofit.com/debug",
+      "page_url": "https://chiefsofit.com/debug",
+      "expected_impact": 48,
+      "source_check_id": "sensitive-path-/debug"
+    },
+    {
+      "priority": 7,
+      "category": "security",
+      "severity": "medium",
+      "status": "warn",
+      "title": "Content-Security-Policy-header ontbreekt.",
+      "recommendation": "Voeg een CSP toe om script-injectierisico te verkleinen.",
+      "detail": "",
+      "page_url": "",
+      "expected_impact": 29,
+      "source_check_id": "header-csp"
+    },
+    {
+      "priority": 8,
+      "category": "security",
+      "severity": "medium",
+      "status": "warn",
+      "title": "Framing-bescherming ontbreekt.",
+      "recommendation": "Stel X-Frame-Options of frame-ancestors in CSP in.",
+      "detail": "",
+      "page_url": "",
+      "expected_impact": 29,
+      "source_check_id": "header-framing"
+    },
+    {
+      "priority": 9,
+      "category": "security",
+      "severity": "medium",
+      "status": "warn",
+      "title": "X-Content-Type-Options nosniff ontbreekt.",
+      "recommendation": "Stel X-Content-Type-Options: nosniff in.",
+      "detail": "",
+      "page_url": "",
+      "expected_impact": 29,
+      "source_check_id": "header-nosniff"
+    },
+    {
+      "priority": 10,
+      "category": "security",
+      "severity": "low",
+      "status": "warn",
+      "title": "Permissions-Policy-header ontbreekt.",
+      "recommendation": "Stel een restrictieve Permissions-Policy in voor ongebruikte browserfeatures.",
+      "detail": "",
+      "page_url": "",
+      "expected_impact": 14,
+      "source_check_id": "header-permissions-policy"
+    }
+  ],
+  "pages": [
+    {
+      "url": "https://chiefsofit.com/",
+      "status": 200,
+      "load_ms": 268,
+      "title": "Chiefs of IT | Uw IT‑partner voor rust, grip en groei",
+      "links": 0,
+      "forms": 0,
+      "buttons": 0,
+      "content_type": "text/html"
+    }
+  ],
+  "links": [],
+  "limits": {
+    "max_pages": 5,
+    "max_links_per_page": 10,
+    "max_total_links": 26,
+    "max_form_checks": 14,
+    "max_button_checks": 12,
+    "sensitive_path_limit": 6
+  },
+  "notes": [
+    "Dit is een passieve baseline-scan en voert geen exploitpogingen uit.",
+    "Combineer dit met browser-E2E-tests voor volledige validatie van knopflows."
+  ],
+  "result_message": "Website-audit afgerond voor https://chiefsofit.com/. Score 0/100 (E, risiconiveau Hoog). Fail: 5, waarschuwingen: 10, pass: 11.",
+  "report_files": {
+    "json": "reports\\website-audits\\audit-20260915-095146-b6b080.json",
+    "markdown": "reports\\website-audits\\audit-20260915-095146-b6b080.md",
+    "pdf": "reports\\website-audits\\audit-20260915-095146-b6b080.pdf"
+  }
+}
