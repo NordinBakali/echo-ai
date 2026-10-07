@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echo Website Functional Report</title>
+<style>
+body { margin: 0; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: linear-gradient(160deg, #071a2b 0%, #102a43 52%, #0b1f36 100%); color: #e9f2ff; }
+.wrap { width: min(1280px, 94vw); margin: 20px auto 36px; display: grid; gap: 14px; }
+.header { background: rgba(7, 26, 43, 0.72); border: 1px solid rgba(97, 218, 251, 0.24); border-radius: 14px; padding: 16px 18px; }
+.kicker { letter-spacing: 0.12em; text-transform: uppercase; color: #8ed0ff; font-size: 12px; margin: 0 0 8px; }
+h1 { margin: 0 0 8px; font-size: clamp(1.4rem, 2.2vw, 2rem); }
+.meta { margin: 0; opacity: 0.92; word-break: break-all; }
+.overall-pill { display: inline-block; margin-top: 10px; padding: 6px 12px; border-radius: 999px; font-weight: 700; letter-spacing: 0.06em; }
+.summary-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.metric-card { background: rgba(6, 21, 36, 0.72); border: 1px solid rgba(97, 218, 251, 0.22); border-radius: 12px; padding: 12px; }
+.metric-card h3 { margin: 0; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #8ed0ff; }
+.metric-value { margin: 8px 0 4px; font-size: 1.34rem; font-weight: 700; }
+.metric-subtitle { margin: 0; font-size: 0.92rem; color: #cde6ff; opacity: 0.92; }
+.section-card { background: rgba(6, 21, 36, 0.72); border: 1px solid rgba(97, 218, 251, 0.22); border-radius: 12px; padding: 12px; }
+.section-card h2 { margin: 0 0 8px; font-size: 1.02rem; letter-spacing: 0.04em; text-transform: uppercase; color: #9dd9ff; }
+.table-wrap { overflow: auto; border-radius: 8px; }
+.result-table { width: 100%; border-collapse: collapse; min-width: 860px; font-size: 0.93rem; }
+.result-table th, .result-table td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(128, 178, 215, 0.2); vertical-align: top; }
+.result-table th { position: sticky; top: 0; background: rgba(3, 12, 20, 0.98); color: #8ed0ff; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+.result-table a { color: #7fe6ff; text-decoration: none; word-break: break-all; }
+.result-table a:hover { text-decoration: underline; }
+.status-badge { display: inline-block; min-width: 72px; text-align: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; }
+.status-ok { background: rgba(20, 187, 96, 0.2); border: 1px solid rgba(44, 223, 129, 0.6); color: #b8ffd8; }
+.status-warning { background: rgba(219, 147, 27, 0.18); border: 1px solid rgba(255, 190, 92, 0.58); color: #ffddb2; }
+.status-failed { background: rgba(205, 68, 68, 0.2); border: 1px solid rgba(255, 111, 111, 0.58); color: #ffd2d2; }
+.status-unknown { background: rgba(102, 139, 171, 0.2); border: 1px solid rgba(150, 190, 226, 0.55); color: #d8edff; }
+.empty-row { text-align: center; opacity: 0.86; font-style: italic; }
+.notes { background: rgba(5, 18, 32, 0.75); border: 1px solid rgba(97, 218, 251, 0.22); border-radius: 12px; padding: 12px 14px; }
+.notes h2 { margin: 0 0 8px; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.06em; color: #9dd9ff; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 6px 0; }
+@media (max-width: 1100px) { .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 780px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .wrap { width: 96vw; } .summary-grid { grid-template-columns: 1fr; } .result-table { min-width: 640px; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+<section class="header">
+<p class="kicker">Echo Functional Scanner</p>
+<h1>Website Functional Report</h1>
+<p class="meta">Target: https://rapidlogistics.nl/</p>
+<p class="meta">Scanned at: 2026-10-02T13:59:00.538929+00:00</p>
+<span class="overall-pill status-failed">Overall: ISSUES</span>
+</section>
+<section class="summary-grid">
+<article class="metric-card"><h3>Homepage</h3><p class="metric-value">OK</p><p class="metric-subtitle">HTTP 200</p></article>
+<article class="metric-card"><h3>Links</h3><p class="metric-value">35/35</p><p class="metric-subtitle">Failed: 0 | Warning: 0</p></article>
+<article class="metric-card"><h3>Buttons</h3><p class="metric-value">3/4</p><p class="metric-subtitle">Failed: 1 | Warning: 0</p></article>
+<article class="metric-card"><h3>Search Bars</h3><p class="metric-value">0/1</p><p class="metric-subtitle">Failed: 1 | Warning: 0</p></article>
+<article class="metric-card"><h3>Stylesheets</h3><p class="metric-value">2/2</p><p class="metric-subtitle">Failed: 0 | Warning: 0</p></article>
+</section>
+<section class="section-card">
+<h2>Links</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>link-1</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl</a></td><td>Reachable</td></tr>
+<tr><td>link-2</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cases/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cases/</a></td><td>Reachable</td></tr>
+<tr><td>link-3</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/about/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/about/</a></td><td>Reachable</td></tr>
+<tr><td>link-4</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/</a></td><td>Reachable</td></tr>
+<tr><td>link-5</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/sustainability/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/sustainability/</a></td><td>Reachable</td></tr>
+<tr><td>link-6</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact/</a></td><td>Reachable</td></tr>
+<tr><td>link-7</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cases/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cases/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-8</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/about/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/about/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-9</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-10</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/sustainability/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/sustainability/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-11</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/working-at/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/working-at/</a></td><td>Reachable</td></tr>
+<tr><td>link-12</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-13</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cases/ebay-authentication-services/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cases/ebay-authentication-services/</a></td><td>Reachable</td></tr>
+<tr><td>link-14</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cases/ebay-authentication-services/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cases/ebay-authentication-services/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-15</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cases/ebay-authentication-services/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cases/ebay-authentication-services/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-16</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services</a></td><td>Reachable</td></tr>
+<tr><td>link-17</td><td><span class="status-badge status-ok">OK</span></td><td>N/A</td><td>-</td><td><a href="#" target="_blank" rel="noopener noreferrer">#</a></td><td>In-page anchor link (no HTTP probe needed).</td></tr>
+<tr><td>link-18</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/warehousing/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/warehousing/</a></td><td>Reachable</td></tr>
+<tr><td>link-19</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/transport/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/transport/</a></td><td>Reachable</td></tr>
+<tr><td>link-20</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/import-and-export/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/import-and-export/</a></td><td>Reachable</td></tr>
+<tr><td>link-21</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/software-2/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/software-2/</a></td><td>Reachable</td></tr>
+<tr><td>link-22</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact</a></td><td>Reachable</td></tr>
+<tr><td>link-23</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-24</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cases/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cases/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-25</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/about/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/about/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-26</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/services/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/services/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-27</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/sustainability/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/sustainability/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-28</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/working-at/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/working-at/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-29</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact/</a></td><td>Reachable (shared target)</td></tr>
+<tr><td>link-30</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/integrations/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/integrations/</a></td><td>Reachable</td></tr>
+<tr><td>link-31</td><td><span class="status-badge status-ok">OK</span></td><td>N/A</td><td>-</td><td><a href="tel:+31(0)20 653 23 23" target="_blank" rel="noopener noreferrer">tel:+31(0)20 653 23 23</a></td><td>TEL link detected.</td></tr>
+<tr><td>link-32</td><td><span class="status-badge status-ok">OK</span></td><td>N/A</td><td>-</td><td><a href="mailto:sales@rapidlogistics.nl" target="_blank" rel="noopener noreferrer">mailto:sales@rapidlogistics.nl</a></td><td>MAILTO link detected.</td></tr>
+<tr><td>link-33</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/conditions/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/conditions/</a></td><td>Reachable</td></tr>
+<tr><td>link-34</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/privacy-statement/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/privacy-statement/</a></td><td>Reachable</td></tr>
+<tr><td>link-35</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/cookies/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/cookies/</a></td><td>Reachable</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section-card">
+<h2>Buttons</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>back button</td><td><span class="status-badge status-failed">FAILED</span></td><td>N/A</td><td>-</td><td>-</td><td>Button link has empty href.</td></tr>
+<tr><td>relative flex items-center justify-center py-[1.1875rem] md:py-[2.25rem] text-wh</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact/</a></td><td>Button target reachable</td></tr>
+<tr><td>relative flex items-center justify-center py-[1.1875rem] md:py-[2.25rem] text-wh</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/contact/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/contact/</a></td><td>Button target reachable</td></tr>
+<tr><td>Sluiten</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/</a></td><td>Button target reachable</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section-card">
+<h2>Search Bars</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>search-1</td><td><span class="status-badge status-failed">FAILED</span></td><td>N/A</td><td>-</td><td>-</td><td>No search bar detected on the page.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section-card">
+<h2>Stylesheets</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>css-1</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://rapidlogistics.nl/wp-content/themes/rapidlogistics/dist/main.css?1769170747" target="_blank" rel="noopener noreferrer">https://rapidlogistics.nl/wp-content/themes/rapidlogistics/dist/main.css?1769170747</a></td><td>Stylesheet loaded successfully. | rel=stylesheet</td></tr>
+<tr><td>inline-style</td><td><span class="status-badge status-ok">OK</span></td><td>INLINE</td><td>-</td><td><a href="inline &lt;style&gt;" target="_blank" rel="noopener noreferrer">inline &lt;style&gt;</a></td><td>Detected 4 inline &lt;style&gt; block(s).</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="notes">
+<h2>Notes</h2>
+<ul>
+<li>Checks are HTTP-based and safe by default.</li>
+<li>Non-GET actions are reported as warnings to avoid side effects.</li>
+<li>Stylesheet checks validate CSS resource loading and basic content sanity.</li>
+<li>Dynamic JavaScript interactions are best validated with browser automation.</li>
+</ul>
+</section>
+</main>
+</body>
+</html>

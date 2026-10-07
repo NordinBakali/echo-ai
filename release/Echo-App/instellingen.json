@@ -1,22 +1,22 @@
 {
   "naam": "Echo",
-  "taal": "Nederlands",
+  "taal": "English",
   "verkenner_start_map": "C:\\Users\\nordi",
   "youtube_url": "https://youtube.com",
   "google_url": "https://google.com",
   "emoji_gebruik": true,
   "begroeting_tonen": true,
-  "spraak_ingang": true,
-  "spraak_uitgang": false,
-  "spraak_taal": "nl-NL",
+  "spraak_ingang": false,
+  "spraak_uitgang": true,
+  "spraak_taal": "en-US",
   "wake_word": "wake up",
   "browser_stem": "Google Nederlands",
   "agent_modus": true,
   "geheugen_modus": true,
-  "prioriteit_modus": false,
-  "computerbesturing_toestaan": true,
+  "prioriteit_modus": true,
+  "computerbesturing_toestaan": false,
   "client_naam": "Nordin",
-  "spraak_input_provider": "whisper",
+  "spraak_input_provider": "google",
   "whisper_model": "small",
   "whisper_device": "auto",
   "whisper_compute_type": "auto",
@@ -30,7 +30,7 @@
   "online_ai_model": "gemini-1.5-flash",
   "ai_agent_primair": true,
   "premium_tts_voice_id": "",
-  "instellingen_profiel": "streaming",
+  "instellingen_profiel": "normal",
   "instellingen_profielen": {
     "normal": {
       "agent_modus": true,
@@ -97,8 +97,67 @@
   "website_audit_schedule_frequency": "daily",
   "website_audit_schedule_time": "04:30",
   "website_audit_schedule_target_url": "",
-  "website_audit_schedule_profile": "quick",
+  "website_audit_schedule_profile": "standard",
   "website_audit_alert_webhook": "",
   "website_audit_alert_score_drop": 12,
-  "website_audit_alert_on_critical": true
+  "website_audit_alert_on_critical": true,
+  "instellingen_profiel_acties": {
+    "normal": [
+      {
+        "command": "system info and show agenda and show tasks",
+        "label": "Daily Briefing"
+      },
+      {
+        "command": "show tasks",
+        "label": "Task Radar"
+      },
+      {
+        "command": "phone status",
+        "label": "Phone Link Status"
+      },
+      {
+        "command": "take screenshot",
+        "label": "Take Screenshot"
+      }
+    ],
+    "streaming": [
+      {
+        "command": "stream mode on",
+        "label": "Stream Mode"
+      },
+      {
+        "command": "stream start",
+        "label": "Go Live"
+      },
+      {
+        "command": "stream recording start",
+        "label": "Start Recording"
+      },
+      {
+        "command": "stream help",
+        "label": "Stream Help"
+      }
+    ],
+    "security": [
+      {
+        "command": "website audit status",
+        "label": "Audit Status"
+      },
+      {
+        "command": "website audit report latest",
+        "label": "Latest Audit Report"
+      },
+      {
+        "command": "website audit schedule status",
+        "label": "Audit Schedule"
+      },
+      {
+        "command": "enable automation mode",
+        "label": "Enable Automation"
+      }
+    ]
+  },
+  "profiel_auto_router_enabled": true,
+  "profiel_auto_router_suggest_threshold": 62,
+  "profiel_auto_router_auto_threshold": 86
 }

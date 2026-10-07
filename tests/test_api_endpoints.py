@@ -115,6 +115,167 @@ def test_index_route_returns_html(client):
 
     assert response.status_code == 200
     assert b"<html" in response.data.lower()
+    assert b"Vraag de bedrijfsdocumenten" in response.data
+
+
+def test_company_knowledge_command_answers_with_document_citations(client, monkeypatch, tmp_path):
+    (tmp_path / "beleid.md").write_text(
+        "# Retourbeleid\nKlanten kunnen ongebruikte producten binnen 30 dagen retourneren.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "BEDRIJFSDOCUMENTEN_PAD", tmp_path)
+    monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
+    ai_calls = []
+
+    def fake_ai(messages, temperatuur=0.4, **_kwargs):
+        ai_calls.append(messages)
+        return "Klanten mogen binnen 30 dagen retourneren [1] [9]."
+
+    monkeypatch.setattr(server, "vraag_online_ai_bericht", fake_ai)
+
+    response = client.post(
+        "/api/commando",
+        json={"commando": "vraag bedrijfsdocumenten: wat is het retourbeleid?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert "binnen 30 dagen" in payload["message"]
+    assert "[1] beleid.md:1-2" in payload["message"]
+    assert "[9]" not in payload["message"]
+    assert len(ai_calls) == 1
+    prompt = ai_calls[0][1]["content"]
+    assert "beleid.md:1-2" in prompt
+    assert "ongebruikte producten binnen 30 dagen" in prompt
+
+
+def test_company_knowledge_example_document_can_answer_demo_question(monkeypatch):
+    monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
+    monkeypatch.setattr(
+        server,
+        "vraag_online_ai_bericht",
+        lambda *_args, **_kwargs: "Ongebruikte producten mogen binnen 30 kalenderdagen retour [1].",
+    )
+
+    antwoord = server.vraag_bedrijfsdocumenten("wat is het retourbeleid?")
+
+    assert "30 kalenderdagen" in antwoord
+    assert "[1] voorbeeld-bedrijf.md:" in antwoord
+
+
+def test_company_knowledge_does_not_guess_without_matching_source(client, monkeypatch, tmp_path):
+    (tmp_path / "beleid.md").write_text(
+        "Retouren kunnen binnen 30 dagen worden gemeld.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "BEDRIJFSDOCUMENTEN_PAD", tmp_path)
+    ai_calls = []
+    monkeypatch.setattr(server, "vraag_online_ai_bericht", lambda *_args, **_kwargs: ai_calls.append(True))
+
+    response = client.post(
+        "/api/commando",
+        json={"commando": "vraag bedrijfsdocumenten: wat is de garantieperiode voor laptops?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert "matching passage" in payload["message"].lower()
+    assert ai_calls == []
+
+
+def configureer_demo_modus(monkeypatch):
+    wachtwoord = "veilige-echo-demo-code"
+    sessiesleutel = "test-sessiesleutel-met-minimaal-32-tekens"
+    monkeypatch.setattr(server, "ECHO_DEMO_MODE", True)
+    monkeypatch.setattr(server, "ECHO_DEMO_PASSWORD", wachtwoord)
+    monkeypatch.setattr(server, "ECHO_SESSION_SECRET", sessiesleutel)
+    monkeypatch.setattr(server.app, "secret_key", sessiesleutel)
+    monkeypatch.setitem(server.app.config, "SESSION_COOKIE_SECURE", False)
+    with server.DEMO_LOGIN_ATTEMPTS_LOCK:
+        server.DEMO_LOGIN_ATTEMPTS.clear()
+    return wachtwoord
+
+
+def test_demo_mode_requires_login_for_pages_and_api(client, monkeypatch):
+    configureer_demo_modus(monkeypatch)
+
+    page_response = client.get("/")
+    api_response = client.get("/api/dashboard")
+
+    assert page_response.status_code == 302
+    assert page_response.headers["Location"].endswith("/login")
+    assert api_response.status_code == 401
+    assert api_response.get_json()["login_url"] == "/login"
+
+
+def test_demo_mode_login_and_logout_protect_api(client, monkeypatch):
+    wachtwoord = configureer_demo_modus(monkeypatch)
+
+    login_page = client.get("/login")
+    failed_login = client.post("/login", data={"password": "verkeerde-code"})
+    login = client.post("/login", data={"password": wachtwoord})
+
+    assert login_page.status_code == 200
+    assert b"Toegangscode" in login_page.data
+    assert failed_login.status_code == 401
+    assert b"De toegangscode klopt niet" in failed_login.data
+    assert login.status_code == 302
+    assert "HttpOnly" in login.headers["Set-Cookie"]
+    assert "SameSite=Lax" in login.headers["Set-Cookie"]
+    assert client.get("/api/dashboard").status_code == 200
+
+    logout = client.post("/logout")
+
+    assert logout.status_code == 302
+    assert client.get("/api/dashboard").status_code == 401
+
+
+def test_demo_mode_fails_closed_without_secure_configuration(client, monkeypatch):
+    monkeypatch.setattr(server, "ECHO_DEMO_MODE", True)
+    monkeypatch.setattr(server, "ECHO_DEMO_PASSWORD", "")
+    monkeypatch.setattr(server, "ECHO_SESSION_SECRET", "")
+
+    response = client.get("/")
+
+    assert response.status_code == 503
+    assert b"ECHO_DEMO_PASSWORD" in response.data
+    assert client.get("/api/dashboard").status_code == 503
+
+
+def test_demo_mode_limits_failed_login_attempts(client, monkeypatch):
+    configureer_demo_modus(monkeypatch)
+
+    for _ in range(server.DEMO_LOGIN_MAX_ATTEMPTS):
+        response = client.post("/login", data={"password": "verkeerde-code"})
+        assert response.status_code == 401
+
+    limited_response = client.post("/login", data={"password": "verkeerde-code"})
+
+    assert limited_response.status_code == 429
+
+
+def test_demo_mode_blocks_cross_origin_and_computer_control(client, monkeypatch):
+    wachtwoord = configureer_demo_modus(monkeypatch)
+    client.post("/login", data={"password": wachtwoord})
+    monkeypatch.setattr(server, "sla_instellingen_op", lambda _instellingen: None)
+
+    cross_origin = client.post(
+        "/api/commando",
+        json={"commando": "bereken 2+2"},
+        headers={"Origin": "https://evil.example"},
+    )
+    update = client.post("/api/instellingen", json={
+        "instellingen_profiel": "streaming",
+        "apply_profile": True,
+    })
+
+    assert cross_origin.status_code == 403
+    assert "Access-Control-Allow-Origin" not in cross_origin.headers
+    assert update.status_code == 200
+    assert server.instellingen["computerbesturing_toestaan"] is False
+    assert server.instellingen["instellingen_profielen"]["streaming"]["computerbesturing_toestaan"] is False
 
 
 # API-shape validatie voor command- en settings-endpoints.
@@ -635,6 +796,127 @@ def test_quick_check_status_endpoint_returns_completed_task_with_result(client):
 
 def test_quick_check_status_endpoint_returns_404_for_unknown_task(client):
     response = client.get("/api/quick-check/status/quick-check-missing")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_website_functional_check_run_rejects_invalid_json_shape(client):
+    response = client.post("/api/website-functional-check/run", data="[]", content_type="application/json")
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_website_functional_check_run_returns_report_payload(client, monkeypatch):
+    monkeypatch.setattr(server, "run_website_functional_visual_check", lambda _url: {
+        "scan_id": "functional-check-abc123def456",
+        "target_url": "https://example.com",
+        "scanned_at": "2026-10-02T09:00:00+00:00",
+        "summary": {
+            "overall_status": "ok",
+            "links_total": 3,
+        },
+        "report_path": "reports/website-audits/functional-check-abc123def456.html",
+        "report_url": "/api/website-functional-check/report/functional-check-abc123def456",
+    })
+
+    response = client.post("/api/website-functional-check/run", json={"url": "https://example.com"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["check"]["scan_id"] == "functional-check-abc123def456"
+    assert payload["check"]["report_url"].endswith("/api/website-functional-check/report/functional-check-abc123def456")
+
+
+def test_website_functional_check_start_returns_task_payload(client, monkeypatch):
+    monkeypatch.setattr(server, "start_website_functional_check_taak", lambda _url, _client: {
+        "id": "functional-task-test-1",
+        "status": "running",
+        "running": True,
+        "stage": "links",
+        "progress_percent": 42,
+        "message": "Testing links",
+        "target_url": "https://example.com",
+        "current_test": {
+            "type": "link",
+            "id": "link-2",
+            "target": "https://example.com/about",
+        },
+    })
+
+    response = client.post("/api/website-functional-check/start", json={"url": "https://example.com"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["task"]["id"] == "functional-task-test-1"
+    assert payload["task"]["running"] is True
+    assert payload["task"]["stage"] == "links"
+
+
+def test_website_functional_check_status_returns_completed_task_with_result(client):
+    task_data = server.standaard_website_functional_check_task_data(
+        "functional-task-test-2",
+        "https://example.com",
+        "127.0.0.1",
+    )
+    task_data.update({
+        "status": "completed",
+        "running": False,
+        "stage": "completed",
+        "progress_percent": 100,
+        "message": "Visual functional check completed.",
+        "payload": {
+            "scan_id": "functional-check-abc123def456",
+            "report_url": "/api/website-functional-check/report/functional-check-abc123def456",
+            "summary": {
+                "overall_status": "ok",
+                "links_total": 2,
+            },
+        },
+    })
+    server.registreer_website_functional_check_taak(task_data)
+
+    response = client.get("/api/website-functional-check/status/functional-task-test-2")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "success"
+    assert payload["task"]["status"] == "completed"
+    assert payload["task"]["result"]["scan_id"] == "functional-check-abc123def456"
+
+
+def test_website_functional_check_status_returns_404_for_unknown_task(client):
+    response = client.get("/api/website-functional-check/status/functional-task-missing")
+
+    assert response.status_code == 404
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_website_functional_check_report_endpoint_returns_html_file(client, monkeypatch, tmp_path):
+    report_dir = tmp_path / "website-audits"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    report_id = "functional-check-abc123def456"
+    report_pad = report_dir / f"{report_id}.html"
+    report_pad.write_text("<html><body>functional check</body></html>", encoding="utf-8")
+
+    monkeypatch.setattr(server, "WEBSITE_AUDIT_REPORT_DIR", report_dir)
+
+    response = client.get(f"/api/website-functional-check/report/{report_id}")
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Type", "").startswith("text/html")
+    assert b"functional check" in response.data
+
+
+def test_website_functional_check_report_endpoint_rejects_invalid_id(client):
+    response = client.get("/api/website-functional-check/report/not-valid")
 
     assert response.status_code == 404
     payload = response.get_json()

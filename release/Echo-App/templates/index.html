@@ -152,6 +152,8 @@
                         <button id="sendBtn" type="submit">Send</button>
                     </form>
                     <div class="command-suggestions" id="commandSuggestions" aria-live="polite"></div>
+                    <p class="panel-note">Bedrijfskennis-demo · antwoorden met bronverwijzingen uit lokale documenten.</p>
+                    <button type="button" class="panel-action" data-command="vraag bedrijfsdocumenten: wat is het retourbeleid?">Vraag de bedrijfsdocumenten</button>
                 </div>
 
                 <div class="panel-block settings-profile-panel" id="settingsProfilePanel">
@@ -206,7 +208,7 @@
 
                 <div class="panel-block website-audit-panel quick-checker-only" id="websiteAuditPanel">
                     <p class="panel-kicker" id="websiteAuditKicker">Website Audit</p>
-                    <p class="panel-note" id="websiteAuditState">Open de Quick Checker popup om direct een website scan te starten.</p>
+                    <p class="panel-note" id="websiteAuditState">Open Quick Checker popup of Functional Checker popup binnen Echo.</p>
                     <div class="website-audit-progress" aria-hidden="true">
                         <div class="website-audit-progress__fill" id="websiteAuditProgressBar"></div>
                     </div>
@@ -241,6 +243,65 @@
                         >
                             Quick Checker Popup
                         </button>
+                        <button id="websiteAuditVisualCheckBtn" type="button" class="panel-action">Functional Checker Popup</button>
+                    </div>
+                    <div class="website-functional-visual-popup" id="websiteFunctionalVisualWrap" aria-hidden="true">
+                        <div class="website-functional-visual-popup__backdrop" id="websiteFunctionalVisualBackdrop"></div>
+                        <section class="website-functional-visual-popup__panel" role="dialog" aria-modal="true" aria-labelledby="websiteFunctionalVisualTitle">
+                            <header class="website-functional-visual-popup__header">
+                                <div>
+                                    <p class="panel-kicker">Functional Visual Popup</p>
+                                    <h3 class="website-functional-visual-popup__title" id="websiteFunctionalVisualTitle">Live Website Functional Check</h3>
+                                    <p class="panel-note website-functional-visual-popup__target" id="websiteFunctionalVisualPopupTarget">Doel: wacht op URL-invoer</p>
+                                </div>
+                                <div class="website-functional-visual-popup__actions">
+                                    <button id="websiteFunctionalVisualStartBtn" type="button" class="panel-action">Start Visual Check</button>
+                                    <button id="websiteFunctionalVisualOpenReportBtn" type="button" class="panel-action" disabled>Open Rapport in Tab</button>
+                                    <button id="websiteFunctionalVisualCloseBtn" type="button" class="panel-action">Sluit Popup</button>
+                                </div>
+                            </header>
+
+                            <p class="panel-note website-functional-visual__state" id="websiteFunctionalVisualState">Live visual stand-by. Start Visuele Check om het rapport hier te zien.</p>
+                            <div class="website-functional-visual__progress" aria-hidden="true">
+                                <div class="website-functional-visual__progress-fill" id="websiteFunctionalVisualProgressFill"></div>
+                            </div>
+
+                            <div class="website-functional-visual-popup__content">
+                                <article class="website-functional-visual-popup__column">
+                                    <p class="panel-kicker">Live Stages</p>
+                                    <ol class="website-functional-visual__stage-list" id="websiteFunctionalVisualStages">
+                                        <li data-stage="queued"><span>Wachtrij</span><small>Wacht op start.</small></li>
+                                        <li data-stage="module_load"><span>Module</span><small>Checker-module laden.</small></li>
+                                        <li data-stage="homepage"><span>Homepage</span><small>Doel-homepage openen.</small></li>
+                                        <li data-stage="parse_dom"><span>DOM Parse</span><small>DOM-elementen scannen.</small></li>
+                                        <li data-stage="links"><span>Links</span><small>Alle links testen.</small></li>
+                                        <li data-stage="buttons"><span>Knoppen</span><small>Alle knoppen testen.</small></li>
+                                        <li data-stage="search_bars"><span>Zoekbalk</span><small>Zoekflow testen.</small></li>
+                                        <li data-stage="summary"><span>Samenvatting</span><small>Resultaten samenvatten.</small></li>
+                                        <li data-stage="report_build"><span>Rapport</span><small>Visueel rapport opbouwen.</small></li>
+                                        <li data-stage="completed"><span>Klaar</span><small>Scan en rapport gereed.</small></li>
+                                    </ol>
+
+                                    <div class="website-functional-visual__counters" id="websiteFunctionalVisualCounters" aria-live="polite"></div>
+
+                                    <p class="panel-kicker">Live Test Log</p>
+                                    <div class="website-functional-visual__live-log" id="websiteFunctionalVisualLiveLog" aria-live="polite"></div>
+                                </article>
+
+                                <article class="website-functional-visual-popup__column website-functional-visual-popup__column--frame">
+                                    <p class="panel-kicker">Visual Report</p>
+                                    <div class="website-functional-visual__frame-shell">
+                                        <iframe
+                                            id="websiteFunctionalVisualFrame"
+                                            class="website-functional-visual__frame"
+                                            title="Website functional visual report"
+                                            loading="lazy"
+                                            referrerpolicy="no-referrer"
+                                        ></iframe>
+                                    </div>
+                                </article>
+                            </div>
+                        </section>
                     </div>
                     <p class="panel-note website-audit-score" id="websiteAuditScore">Score: --</p>
                     <p class="panel-note website-audit-meta" id="websiteAuditMeta">Pass: 0 | Warn: 0 | Fail: 0</p>
@@ -352,6 +413,15 @@
     <button class="language-toggle" id="languageToggleBtn" type="button" aria-label="Schakel taal naar Engels">
         <span class="language-toggle__text" id="languageToggleLabel">NL -> EN</span>
     </button>
+
+    {% if demo_mode %}
+    <div class="demo-session-bar">
+        <span>BEVEILIGDE DEMO · COMPUTERBESTURING UIT</span>
+        <form action="{{ url_for('demo_logout') }}" method="post">
+            <button type="submit">AFMELDEN</button>
+        </form>
+    </div>
+    {% endif %}
 
     <script src="{{ url_for('static', filename='gemini-api-client.js') }}?v={{ build_id }}"></script>
     <script src="{{ url_for('static', filename='script.js') }}?v={{ build_id }}"></script>

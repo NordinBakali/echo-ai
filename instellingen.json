@@ -1,6 +1,6 @@
 {
   "naam": "Echo",
-  "taal": "Nederlands",
+  "taal": "English",
   "verkenner_start_map": "C:\\Users\\nordi",
   "youtube_url": "https://youtube.com",
   "google_url": "https://google.com",
@@ -8,7 +8,7 @@
   "begroeting_tonen": true,
   "spraak_ingang": false,
   "spraak_uitgang": true,
-  "spraak_taal": "nl-NL",
+  "spraak_taal": "en-US",
   "wake_word": "wake up",
   "browser_stem": "Google Nederlands",
   "agent_modus": true,

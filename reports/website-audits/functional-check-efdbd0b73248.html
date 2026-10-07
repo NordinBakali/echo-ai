@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echo Website Functional Report</title>
+<style>
+body { margin: 0; font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: linear-gradient(160deg, #071a2b 0%, #102a43 52%, #0b1f36 100%); color: #e9f2ff; }
+.wrap { width: min(1280px, 94vw); margin: 20px auto 36px; display: grid; gap: 14px; }
+.header { background: rgba(7, 26, 43, 0.72); border: 1px solid rgba(97, 218, 251, 0.24); border-radius: 14px; padding: 16px 18px; }
+.kicker { letter-spacing: 0.12em; text-transform: uppercase; color: #8ed0ff; font-size: 12px; margin: 0 0 8px; }
+h1 { margin: 0 0 8px; font-size: clamp(1.4rem, 2.2vw, 2rem); }
+.meta { margin: 0; opacity: 0.92; word-break: break-all; }
+.overall-pill { display: inline-block; margin-top: 10px; padding: 6px 12px; border-radius: 999px; font-weight: 700; letter-spacing: 0.06em; }
+.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.metric-card { background: rgba(6, 21, 36, 0.72); border: 1px solid rgba(97, 218, 251, 0.22); border-radius: 12px; padding: 12px; }
+.metric-card h3 { margin: 0; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #8ed0ff; }
+.metric-value { margin: 8px 0 4px; font-size: 1.34rem; font-weight: 700; }
+.metric-subtitle { margin: 0; font-size: 0.92rem; color: #cde6ff; opacity: 0.92; }
+.section-card { background: rgba(6, 21, 36, 0.72); border: 1px solid rgba(97, 218, 251, 0.22); border-radius: 12px; padding: 12px; }
+.section-card h2 { margin: 0 0 8px; font-size: 1.02rem; letter-spacing: 0.04em; text-transform: uppercase; color: #9dd9ff; }
+.table-wrap { overflow: auto; border-radius: 8px; }
+.result-table { width: 100%; border-collapse: collapse; min-width: 860px; font-size: 0.93rem; }
+.result-table th, .result-table td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(128, 178, 215, 0.2); vertical-align: top; }
+.result-table th { position: sticky; top: 0; background: rgba(3, 12, 20, 0.98); color: #8ed0ff; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+.result-table a { color: #7fe6ff; text-decoration: none; word-break: break-all; }
+.result-table a:hover { text-decoration: underline; }
+.status-badge { display: inline-block; min-width: 72px; text-align: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; }
+.status-ok { background: rgba(20, 187, 96, 0.2); border: 1px solid rgba(44, 223, 129, 0.6); color: #b8ffd8; }
+.status-warning { background: rgba(219, 147, 27, 0.18); border: 1px solid rgba(255, 190, 92, 0.58); color: #ffddb2; }
+.status-failed { background: rgba(205, 68, 68, 0.2); border: 1px solid rgba(255, 111, 111, 0.58); color: #ffd2d2; }
+.status-unknown { background: rgba(102, 139, 171, 0.2); border: 1px solid rgba(150, 190, 226, 0.55); color: #d8edff; }
+.empty-row { text-align: center; opacity: 0.86; font-style: italic; }
+.notes { background: rgba(5, 18, 32, 0.75); border: 1px solid rgba(97, 218, 251, 0.22); border-radius: 12px; padding: 12px 14px; }
+.notes h2 { margin: 0 0 8px; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.06em; color: #9dd9ff; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 6px 0; }
+@media (max-width: 980px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .wrap { width: 96vw; } .summary-grid { grid-template-columns: 1fr; } .result-table { min-width: 640px; } }
+</style>
+</head>
+<body>
+<main class="wrap">
+<section class="header">
+<p class="kicker">Echo Functional Scanner</p>
+<h1>Website Functional Report</h1>
+<p class="meta">Target: https://romslab.com/</p>
+<p class="meta">Scanned at: 2026-10-02T12:46:56.776561+00:00</p>
+<span class="overall-pill status-failed">Overall: ISSUES</span>
+</section>
+<section class="summary-grid">
+<article class="metric-card"><h3>Homepage</h3><p class="metric-value">OK</p><p class="metric-subtitle">HTTP 200</p></article>
+<article class="metric-card"><h3>Links</h3><p class="metric-value">47/49</p><p class="metric-subtitle">Failed: 2</p></article>
+<article class="metric-card"><h3>Buttons</h3><p class="metric-value">20/23</p><p class="metric-subtitle">Failed: 0 | Warning: 3</p></article>
+<article class="metric-card"><h3>Search Bars</h3><p class="metric-value">3/3</p><p class="metric-subtitle">Failed: 0 | Warning: 0</p></article>
+</section>
+<section class="section-card">
+<h2>Links</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>link-1</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/" target="_blank" rel="noopener noreferrer">https://romslab.com/</a></td><td>Reachable</td></tr>
+<tr><td>link-4</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/series" target="_blank" rel="noopener noreferrer">https://romslab.com/series</a></td><td>Reachable</td></tr>
+<tr><td>link-5</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/games-index/" target="_blank" rel="noopener noreferrer">https://romslab.com/games-index/</a></td><td>Reachable</td></tr>
+<tr><td>link-6</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/game-updates/" target="_blank" rel="noopener noreferrer">https://romslab.com/game-updates/</a></td><td>Reachable</td></tr>
+<tr><td>link-7</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/playstation-5/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/playstation-5/</a></td><td>Reachable</td></tr>
+<tr><td>link-8</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/retro-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/retro-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-9</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/all-emulators-and-tool/" target="_blank" rel="noopener noreferrer">https://romslab.com/all-emulators-and-tool/</a></td><td>Reachable</td></tr>
+<tr><td>link-10</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/category/software/" target="_blank" rel="noopener noreferrer">https://repacklab.com/category/software/</a></td><td>Reachable</td></tr>
+<tr><td>link-11</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/" target="_blank" rel="noopener noreferrer">https://repacklab.com/</a></td><td>Reachable</td></tr>
+<tr><td>link-12</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/community/login/" target="_blank" rel="noopener noreferrer">https://romslab.com/community/login/</a></td><td>Reachable</td></tr>
+<tr><td>link-13</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com" target="_blank" rel="noopener noreferrer">https://romslab.com</a></td><td>Reachable</td></tr>
+<tr><td>link-18</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://x.com/GAMESFEEDA" target="_blank" rel="noopener noreferrer">https://x.com/GAMESFEEDA</a></td><td>Reachable</td></tr>
+<tr><td>link-19</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://www.reddit.com/r/Gamesfeed/" target="_blank" rel="noopener noreferrer">https://www.reddit.com/r/Gamesfeed/</a></td><td>Reachable</td></tr>
+<tr><td>link-20</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://www.facebook.com/61566334498009/" target="_blank" rel="noopener noreferrer">https://www.facebook.com/61566334498009/</a></td><td>Reachable</td></tr>
+<tr><td>link-22</td><td><span class="status-badge status-failed">FAILED</span></td><td>GET</td><td>404</td><td><a href="https://romslab.com/cdn-cgi/l/email-protection" target="_blank" rel="noopener noreferrer">https://romslab.com/cdn-cgi/l/email-protection</a></td><td>HTTP Error 404: Not Found</td></tr>
+<tr><td>link-26</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/super-smash-bros-ultimate-switch-nsp-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/super-smash-bros-ultimate-switch-nsp-free-download/</a></td><td>Reachable</td></tr>
+<tr><td>link-27</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/action-adventure-games-1/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/action-adventure-games-1/</a></td><td>Reachable</td></tr>
+<tr><td>link-28</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/education-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/education-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-29</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/first-person-action-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/first-person-action-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-30</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/music-fitness-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/music-fitness-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-31</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/party-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/party-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-34</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/puzzle-strategy-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/puzzle-strategy-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-35</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/role-playing-games-rpg/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/role-playing-games-rpg/</a></td><td>Reachable</td></tr>
+<tr><td>link-36</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/simulation-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/simulation-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-37</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/category/sports-racing-games/" target="_blank" rel="noopener noreferrer">https://romslab.com/category/sports-racing-games/</a></td><td>Reachable</td></tr>
+<tr><td>link-39</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/games-index-1/" target="_blank" rel="noopener noreferrer">https://romslab.com/games-index-1/</a></td><td>Reachable</td></tr>
+<tr><td>link-40</td><td><span class="status-badge status-failed">FAILED</span></td><td>GET</td><td>404</td><td><a href="https://romslab.com/fifa-20-legacy-edition-switch-nsp-update-dlcs-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/fifa-20-legacy-edition-switch-nsp-update-dlcs-free-download/</a></td><td>HTTP Error 404: Not Found</td></tr>
+<tr><td>link-43</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/animal-crossing-new-horizons-free-download-switch-nsp/" target="_blank" rel="noopener noreferrer">https://romslab.com/animal-crossing-new-horizons-free-download-switch-nsp/</a></td><td>Reachable</td></tr>
+<tr><td>link-45</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/honey-select-2-free-download/" target="_blank" rel="noopener noreferrer">https://repacklab.com/honey-select-2-free-download/</a></td><td>Reachable</td></tr>
+<tr><td>link-67</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/pokemon-legends-z-a-switch-nsp-free-download-32/" target="_blank" rel="noopener noreferrer">https://romslab.com/pokemon-legends-z-a-switch-nsp-free-download-32/</a></td><td>Reachable</td></tr>
+<tr><td>link-68</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/hollow-knight-silksong-switch-nsp-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/hollow-knight-silksong-switch-nsp-free-download/</a></td><td>Reachable</td></tr>
+<tr><td>link-69</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/the-witcher-3-wild-hunt-free-download-switch-nsp-97/" target="_blank" rel="noopener noreferrer">https://romslab.com/the-witcher-3-wild-hunt-free-download-switch-nsp-97/</a></td><td>Reachable</td></tr>
+<tr><td>link-70</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/dragon-ball-sparking-zero-switch-xci-free-download-13/" target="_blank" rel="noopener noreferrer">https://romslab.com/dragon-ball-sparking-zero-switch-xci-free-download-13/</a></td><td>Reachable</td></tr>
+<tr><td>link-71</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://discord.gg/MmTjxwYvG9" target="_blank" rel="noopener noreferrer">https://discord.gg/MmTjxwYvG9</a></td><td>Reachable</td></tr>
+<tr><td>link-72</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/metroid-prime-4-beyond-switch-xci-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/metroid-prime-4-beyond-switch-xci-free-download/</a></td><td>Reachable</td></tr>
+<tr><td>link-73</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/the-legend-of-zelda-echoes-of-wisdom-switch-nsp-free-download-133/" target="_blank" rel="noopener noreferrer">https://romslab.com/the-legend-of-zelda-echoes-of-wisdom-switch-nsp-free-download-133/</a></td><td>Reachable</td></tr>
+<tr><td>link-74</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/naruto-x-boruto-ultimate-ninja-storm-connections-ultimate-edition-switch-nsp-free-download-103/" target="_blank" rel="noopener noreferrer">https://romslab.com/naruto-x-boruto-ultimate-ninja-storm-connections-ultimate-edition-switch-nsp-free-download-103/</a></td><td>Reachable</td></tr>
+<tr><td>link-75</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/ea-sports-fc-26-switch-nsp-free-download-21/" target="_blank" rel="noopener noreferrer">https://romslab.com/ea-sports-fc-26-switch-nsp-free-download-21/</a></td><td>Reachable</td></tr>
+<tr><td>link-78</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/gta-v-ps5-free-download-2/" target="_blank" rel="noopener noreferrer">https://romslab.com/gta-v-ps5-free-download-2/</a></td><td>Reachable</td></tr>
+<tr><td>link-79</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/super-mario-galaxy-super-mario-galaxy-2-switch-xci-free-download-34/" target="_blank" rel="noopener noreferrer">https://romslab.com/super-mario-galaxy-super-mario-galaxy-2-switch-xci-free-download-34/</a></td><td>Reachable</td></tr>
+<tr><td>link-80</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/inazuma-eleven-victory-road-switch-nsp-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/inazuma-eleven-victory-road-switch-nsp-free-download/</a></td><td>Reachable</td></tr>
+<tr><td>link-83</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/donations/" target="_blank" rel="noopener noreferrer">https://romslab.com/donations/</a></td><td>Reachable</td></tr>
+<tr><td>link-84</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/faqs/" target="_blank" rel="noopener noreferrer">https://romslab.com/faqs/</a></td><td>Reachable</td></tr>
+<tr><td>link-86</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://t.me/GameCentrala" target="_blank" rel="noopener noreferrer">https://t.me/GameCentrala</a></td><td>Reachable</td></tr>
+<tr><td>link-87</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="http://www.feedburner.com" target="_blank" rel="noopener noreferrer">http://www.feedburner.com</a></td><td>Reachable</td></tr>
+<tr><td>link-96</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/about-us/" target="_blank" rel="noopener noreferrer">https://repacklab.com/about-us/</a></td><td>Reachable</td></tr>
+<tr><td>link-97</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/privacy-policy/" target="_blank" rel="noopener noreferrer">https://repacklab.com/privacy-policy/</a></td><td>Reachable</td></tr>
+<tr><td>link-98</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/contact-us/" target="_blank" rel="noopener noreferrer">https://repacklab.com/contact-us/</a></td><td>Reachable</td></tr>
+<tr><td>link-100</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://repacklab.com/faq/" target="_blank" rel="noopener noreferrer">https://repacklab.com/faq/</a></td><td>Reachable</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section-card">
+<h2>Buttons</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>rcf-nav-login-btn</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/community/login/" target="_blank" rel="noopener noreferrer">https://romslab.com/community/login/</a></td><td>Button target reachable</td></tr>
+<tr><td>searchsubmit-2000510864</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/?s=echo+test" target="_blank" rel="noopener noreferrer">https://romslab.com/?s=echo+test</a></td><td>Button target reachable</td></tr>
+<tr><td>searchsubmit</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/?s=echo-test" target="_blank" rel="noopener noreferrer">https://romslab.com/?s=echo-test</a></td><td>Button target reachable</td></tr>
+<tr><td>rcf-nav-login-btn</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/community/login/" target="_blank" rel="noopener noreferrer">https://romslab.com/community/login/</a></td><td>Button target reachable</td></tr>
+<tr><td>rcf-nav-login-btn</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/community/login/" target="_blank" rel="noopener noreferrer">https://romslab.com/community/login/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-53-layer-5</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/pokemon-legends-z-a-switch-nsp-free-download-32/" target="_blank" rel="noopener noreferrer">https://romslab.com/pokemon-legends-z-a-switch-nsp-free-download-32/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-53-layer-6</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/hollow-knight-silksong-switch-nsp-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/hollow-knight-silksong-switch-nsp-free-download/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-53-layer-7</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/the-witcher-3-wild-hunt-free-download-switch-nsp-97/" target="_blank" rel="noopener noreferrer">https://romslab.com/the-witcher-3-wild-hunt-free-download-switch-nsp-97/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-53-layer-27</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/dragon-ball-sparking-zero-switch-xci-free-download-13/" target="_blank" rel="noopener noreferrer">https://romslab.com/dragon-ball-sparking-zero-switch-xci-free-download-13/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-52-layer-5</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/metroid-prime-4-beyond-switch-xci-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/metroid-prime-4-beyond-switch-xci-free-download/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-52-layer-6</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/the-legend-of-zelda-echoes-of-wisdom-switch-nsp-free-download-133/" target="_blank" rel="noopener noreferrer">https://romslab.com/the-legend-of-zelda-echoes-of-wisdom-switch-nsp-free-download-133/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-52-layer-7</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/naruto-x-boruto-ultimate-ninja-storm-connections-ultimate-edition-switch-nsp-free-download-103/" target="_blank" rel="noopener noreferrer">https://romslab.com/naruto-x-boruto-ultimate-ninja-storm-connections-ultimate-edition-switch-nsp-free-download-103/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-52-layer-27</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/ea-sports-fc-26-switch-nsp-free-download-21/" target="_blank" rel="noopener noreferrer">https://romslab.com/ea-sports-fc-26-switch-nsp-free-download-21/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-54-layer-5</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/pokemon-legends-z-a-switch-nsp-free-download-32/" target="_blank" rel="noopener noreferrer">https://romslab.com/pokemon-legends-z-a-switch-nsp-free-download-32/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-54-layer-6</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/gta-v-ps5-free-download-2/" target="_blank" rel="noopener noreferrer">https://romslab.com/gta-v-ps5-free-download-2/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-54-layer-7</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/super-mario-galaxy-super-mario-galaxy-2-switch-xci-free-download-34/" target="_blank" rel="noopener noreferrer">https://romslab.com/super-mario-galaxy-super-mario-galaxy-2-switch-xci-free-download-34/</a></td><td>Button target reachable</td></tr>
+<tr><td>slider-1-slide-54-layer-27</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/inazuma-eleven-victory-road-switch-nsp-free-download/" target="_blank" rel="noopener noreferrer">https://romslab.com/inazuma-eleven-victory-road-switch-nsp-free-download/</a></td><td>Button target reachable</td></tr>
+<tr><td>alm-load-more-btn</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/" target="_blank" rel="noopener noreferrer">https://romslab.com/</a></td><td>Button target reachable</td></tr>
+<tr><td>alm-load-more-btn</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/" target="_blank" rel="noopener noreferrer">https://romslab.com/</a></td><td>Button target reachable</td></tr>
+<tr><td>alm-load-more-btn</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/" target="_blank" rel="noopener noreferrer">https://romslab.com/</a></td><td>Button target reachable</td></tr>
+<tr><td>Subscribe</td><td><span class="status-badge status-warning">WARNING</span></td><td>POST</td><td>-</td><td><a href="https://feedburner.google.com/fb/a/mailverify" target="_blank" rel="noopener noreferrer">https://feedburner.google.com/fb/a/mailverify</a></td><td>Non-GET button was not auto-executed to avoid side effects.</td></tr>
+<tr><td>feedback-button wd-prettyPhoto</td><td><span class="status-badge status-warning">WARNING</span></td><td>GET</td><td>-</td><td><a href="#wd_contact_content" target="_blank" rel="noopener noreferrer">#wd_contact_content</a></td><td>Button target uses non-HTTP scheme and was skipped.</td></tr>
+<tr><td>Back to Top</td><td><span class="status-badge status-warning">WARNING</span></td><td>GET</td><td>-</td><td><a href="javascript:void(0)" target="_blank" rel="noopener noreferrer">javascript:void(0)</a></td><td>Button target uses non-HTTP scheme and was skipped.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="section-card">
+<h2>Search Bars</h2>
+<div class="table-wrap">
+<table class="result-table">
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Method</th>
+<th>HTTP</th>
+<th>Target</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr><td>search-1</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/?s=echo+test" target="_blank" rel="noopener noreferrer">https://romslab.com/?s=echo+test</a></td><td>Search request responded</td></tr>
+<tr><td>search-2</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/?s=echo+test&amp;searchsubmit-2000510864=echo+test" target="_blank" rel="noopener noreferrer">https://romslab.com/?s=echo+test&amp;searchsubmit-2000510864=echo+test</a></td><td>Search request responded</td></tr>
+<tr><td>search-3</td><td><span class="status-badge status-ok">OK</span></td><td>GET</td><td>200</td><td><a href="https://romslab.com/?s=echo-test&amp;q=echo+test&amp;searchsubmit=echo+test" target="_blank" rel="noopener noreferrer">https://romslab.com/?s=echo-test&amp;q=echo+test&amp;searchsubmit=echo+test</a></td><td>Search request responded</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+<section class="notes">
+<h2>Notes</h2>
+<ul>
+<li>Checks are HTTP-based and safe by default.</li>
+<li>Non-GET actions are reported as warnings to avoid side effects.</li>
+<li>Dynamic JavaScript interactions are best validated with browser automation.</li>
+</ul>
+</section>
+</main>
+</body>
+</html>

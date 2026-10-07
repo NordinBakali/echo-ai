@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#00060a">
+    <title>Echo beveiligde demo</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="demo-login-page">
+    <main class="demo-login-card">
+        <img src="{{ url_for('static', filename='echo-circle-logo.svg') }}" alt="" width="54" height="54">
+        <p class="demo-login-kicker">ECHO · BEVEILIGDE DEMO</p>
+        <h1>Welkom</h1>
+        <p class="demo-login-intro">Voer de toegangscode in om Echo te openen.</p>
+        {% if fout %}
+        <p class="demo-login-error" role="alert">{{ fout }}</p>
+        {% endif %}
+        <form action="{{ url_for('demo_login') }}" method="post">
+            <label for="password">Toegangscode</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+            <button type="submit">INLOGGEN</button>
+        </form>
+        <p class="demo-login-footnote">Deze demonstratie is afgeschermd. Computerbesturing staat uit.</p>
+    </main>
+</body>
+</html>

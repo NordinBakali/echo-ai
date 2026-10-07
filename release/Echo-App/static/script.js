@@ -105,6 +105,19 @@ const websiteAuditDownloadJsonBtn = document.getElementById('websiteAuditDownloa
 const websiteAuditDownloadMdBtn = document.getElementById('websiteAuditDownloadMdBtn');
 const websiteAuditDownloadPdfBtn = document.getElementById('websiteAuditDownloadPdfBtn');
 const websiteAuditScheduleStatusBtn = document.getElementById('websiteAuditScheduleStatusBtn');
+const websiteAuditVisualCheckBtn = document.getElementById('websiteAuditVisualCheckBtn');
+const websiteFunctionalVisualWrap = document.getElementById('websiteFunctionalVisualWrap');
+const websiteFunctionalVisualBackdrop = document.getElementById('websiteFunctionalVisualBackdrop');
+const websiteFunctionalVisualCloseBtn = document.getElementById('websiteFunctionalVisualCloseBtn');
+const websiteFunctionalVisualStartBtn = document.getElementById('websiteFunctionalVisualStartBtn');
+const websiteFunctionalVisualOpenReportBtn = document.getElementById('websiteFunctionalVisualOpenReportBtn');
+const websiteFunctionalVisualPopupTarget = document.getElementById('websiteFunctionalVisualPopupTarget');
+const websiteFunctionalVisualState = document.getElementById('websiteFunctionalVisualState');
+const websiteFunctionalVisualProgressFill = document.getElementById('websiteFunctionalVisualProgressFill');
+const websiteFunctionalVisualStages = document.getElementById('websiteFunctionalVisualStages');
+const websiteFunctionalVisualLiveLog = document.getElementById('websiteFunctionalVisualLiveLog');
+const websiteFunctionalVisualCounters = document.getElementById('websiteFunctionalVisualCounters');
+const websiteFunctionalVisualFrame = document.getElementById('websiteFunctionalVisualFrame');
 const websiteAuditScore = document.getElementById('websiteAuditScore');
 const websiteAuditMeta = document.getElementById('websiteAuditMeta');
 const websiteAuditScheduleState = document.getElementById('websiteAuditScheduleState');
@@ -269,6 +282,18 @@ const appState = {
         alert_webhook_configured: false,
         last_alert_result: '',
     },
+    websiteFunctionalVisualRunning: false,
+    websiteFunctionalVisualPopupOpen: false,
+    websiteFunctionalVisualProgress: 0,
+    websiteFunctionalVisualProgressTimer: 0,
+    websiteFunctionalVisualStartedAt: 0,
+    websiteFunctionalVisualTaskId: '',
+    websiteFunctionalVisualTaskPollTimer: 0,
+    websiteFunctionalVisualTaskPollInFlight: false,
+    websiteFunctionalVisualLoadedTaskId: '',
+    websiteFunctionalVisualLastLogKey: '',
+    websiteFunctionalVisualReportUrl: '',
+    websiteFunctionalVisualRawReportUrl: '',
     mobilePrimaryUrl: '',
     commandHistory: [],
     commandHistoryCursor: -1,
@@ -344,6 +369,19 @@ const LOCAL_SLASH_SUGGESTIONS = [
     '/camera off',
     '/clear',
     '/lang',
+];
+
+const WEBSITE_FUNCTIONAL_STAGE_ORDER = [
+    'queued',
+    'module_load',
+    'homepage',
+    'parse_dom',
+    'links',
+    'buttons',
+    'search_bars',
+    'summary',
+    'report_build',
+    'completed',
 ];
 
 // Threat-profielen sturen visuele state en contextlabels in de UI.
@@ -3015,6 +3053,672 @@ function resolveWebsiteAuditDownloadUrl(formaat, snapshot = appState.websiteAudi
     return combineerApiUrl(pad, basis);
 }
 
+function resolveWebsiteFunctionalCheckReportUrl(reportPad) {
+    const pad = String(reportPad || '').trim();
+    if (!pad) {
+        return '';
+    }
+
+    if (pad.startsWith('http://') || pad.startsWith('https://')) {
+        return pad;
+    }
+
+    const basis = normaliseerApiBaseUrl(appState.apiBaseUrl)
+        || (isHttpPaginaContext() ? normaliseerApiBaseUrl(window.location.origin) : '');
+    return combineerApiUrl(pad, basis);
+}
+
+function normaliseerWebsiteFunctionalVisualStage(waarde) {
+    const stage = String(waarde || '').trim().toLowerCase();
+    return WEBSITE_FUNCTIONAL_STAGE_ORDER.includes(stage) ? stage : 'queued';
+}
+
+function websiteFunctionalVisualStageIndex(stage) {
+    const normalized = normaliseerWebsiteFunctionalVisualStage(stage);
+    return WEBSITE_FUNCTIONAL_STAGE_ORDER.indexOf(normalized);
+}
+
+function websiteFunctionalVisualStageLabel(stage) {
+    const normalized = normaliseerWebsiteFunctionalVisualStage(stage);
+    const labels = {
+        queued: tekstVoorTaal('Queue', 'Wachtrij'),
+        module_load: tekstVoorTaal('Module', 'Module'),
+        homepage: tekstVoorTaal('Homepage', 'Homepage'),
+        parse_dom: tekstVoorTaal('DOM Parse', 'DOM Parse'),
+        links: tekstVoorTaal('Links', 'Links'),
+        buttons: tekstVoorTaal('Buttons', 'Knoppen'),
+        search_bars: tekstVoorTaal('Search', 'Zoekbalk'),
+        summary: tekstVoorTaal('Summary', 'Samenvatting'),
+        report_build: tekstVoorTaal('Report', 'Rapport'),
+        completed: tekstVoorTaal('Done', 'Klaar'),
+    };
+    return labels[normalized] || normalized;
+}
+
+function setWebsiteFunctionalVisualPopupOpen(open) {
+    const isOpen = Boolean(open);
+    appState.websiteFunctionalVisualPopupOpen = isOpen;
+
+    if (websiteFunctionalVisualWrap) {
+        websiteFunctionalVisualWrap.classList.toggle('is-open', isOpen);
+        websiteFunctionalVisualWrap.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    }
+
+    if (body) {
+        body.classList.toggle('website-functional-popup-open', isOpen);
+    }
+}
+
+function openWebsiteFunctionalVisualPopup() {
+    setWebsiteFunctionalVisualPopupOpen(true);
+}
+
+function closeWebsiteFunctionalVisualPopup() {
+    setWebsiteFunctionalVisualPopupOpen(false);
+}
+
+function setWebsiteFunctionalVisualTargetLine(targetUrl = '') {
+    if (!websiteFunctionalVisualPopupTarget) {
+        return;
+    }
+
+    const cleanTarget = String(targetUrl || '').trim();
+    websiteFunctionalVisualPopupTarget.textContent = cleanTarget
+        ? tekstVoorTaal(`Target: ${cleanTarget}`, `Doel: ${cleanTarget}`)
+        : tekstVoorTaal('Target: waiting for URL input', 'Doel: wacht op URL-invoer');
+}
+
+function setWebsiteFunctionalVisualState(message, tone = 'idle') {
+    if (!websiteFunctionalVisualState) {
+        return;
+    }
+
+    websiteFunctionalVisualState.textContent = String(message || '').trim();
+    websiteFunctionalVisualState.dataset.tone = String(tone || 'idle').trim().toLowerCase();
+}
+
+function setWebsiteFunctionalVisualProgress(value) {
+    const normalized = Math.max(0, Math.min(100, Number(value || 0)));
+    appState.websiteFunctionalVisualProgress = normalized;
+
+    if (websiteFunctionalVisualProgressFill) {
+        websiteFunctionalVisualProgressFill.style.width = `${normalized}%`;
+    }
+}
+
+function stopWebsiteFunctionalVisualProgressLoop() {
+    if (appState.websiteFunctionalVisualProgressTimer) {
+        window.clearInterval(appState.websiteFunctionalVisualProgressTimer);
+        appState.websiteFunctionalVisualProgressTimer = 0;
+    }
+}
+
+function startWebsiteFunctionalVisualProgressLoop() {
+    stopWebsiteFunctionalVisualProgressLoop();
+    appState.websiteFunctionalVisualStartedAt = Date.now();
+
+    appState.websiteFunctionalVisualProgressTimer = window.setInterval(() => {
+        if (!appState.websiteFunctionalVisualRunning) {
+            return;
+        }
+        const current = appState.websiteFunctionalVisualProgress;
+        const target = 26;
+        if (current < target) {
+            const step = current < 10 ? 1.1 : 0.45;
+            setWebsiteFunctionalVisualProgress(current + step);
+        }
+    }, 420);
+}
+
+function stopWebsiteFunctionalVisualTaskPolling() {
+    if (appState.websiteFunctionalVisualTaskPollTimer) {
+        window.clearInterval(appState.websiteFunctionalVisualTaskPollTimer);
+        appState.websiteFunctionalVisualTaskPollTimer = 0;
+    }
+    appState.websiteFunctionalVisualTaskPollInFlight = false;
+}
+
+function resetWebsiteFunctionalVisualStages() {
+    const nodes = websiteFunctionalVisualStages
+        ? Array.from(websiteFunctionalVisualStages.querySelectorAll('li'))
+        : [];
+    nodes.forEach((node) => {
+        node.dataset.state = 'idle';
+    });
+}
+
+function updateWebsiteFunctionalVisualStages(stage, status = 'running') {
+    const nodes = websiteFunctionalVisualStages
+        ? Array.from(websiteFunctionalVisualStages.querySelectorAll('li'))
+        : [];
+    if (!nodes.length) {
+        return;
+    }
+
+    const currentIndex = websiteFunctionalVisualStageIndex(stage);
+    const normalizedStatus = String(status || 'running').trim().toLowerCase();
+
+    nodes.forEach((node, index) => {
+        let state = 'idle';
+
+        if (normalizedStatus === 'completed') {
+            state = 'completed';
+        } else if (normalizedStatus === 'failed') {
+            if (index < currentIndex) {
+                state = 'completed';
+            } else if (index === currentIndex) {
+                state = 'failed';
+            }
+        } else {
+            if (index < currentIndex) {
+                state = 'completed';
+            } else if (index === currentIndex) {
+                state = 'active';
+            }
+        }
+
+        node.dataset.state = state;
+    });
+}
+
+function clearWebsiteFunctionalVisualLiveLog() {
+    if (!websiteFunctionalVisualLiveLog) {
+        return;
+    }
+
+    websiteFunctionalVisualLiveLog.innerHTML = '';
+    const empty = document.createElement('p');
+    empty.className = 'website-functional-visual__live-empty';
+    empty.textContent = tekstVoorTaal(
+        'No live checks yet. Start Visual Check to stream steps.',
+        'Nog geen live checks. Start Visuele Check om stappen live te zien.'
+    );
+    websiteFunctionalVisualLiveLog.appendChild(empty);
+}
+
+function appendWebsiteFunctionalVisualLiveLog(message, tone = 'info') {
+    if (!websiteFunctionalVisualLiveLog) {
+        return;
+    }
+
+    const tekst = String(message || '').trim();
+    if (!tekst) {
+        return;
+    }
+
+    const leeg = websiteFunctionalVisualLiveLog.querySelector('.website-functional-visual__live-empty');
+    if (leeg) {
+        leeg.remove();
+    }
+
+    const regel = document.createElement('p');
+    regel.className = 'website-functional-visual__live-line';
+    regel.dataset.tone = String(tone || 'info').trim().toLowerCase();
+    const tijd = new Date().toLocaleTimeString(isNederlandsActief() ? 'nl-NL' : 'en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+    regel.textContent = `[${tijd}] ${tekst}`;
+    websiteFunctionalVisualLiveLog.appendChild(regel);
+
+    const regels = Array.from(websiteFunctionalVisualLiveLog.querySelectorAll('.website-functional-visual__live-line'));
+    if (regels.length > 26) {
+        regels.slice(0, regels.length - 26).forEach((item) => item.remove());
+    }
+
+    websiteFunctionalVisualLiveLog.scrollTop = websiteFunctionalVisualLiveLog.scrollHeight;
+}
+
+function renderWebsiteFunctionalVisualCounters(summary = null) {
+    if (!websiteFunctionalVisualCounters) {
+        return;
+    }
+
+    if (!summary || typeof summary !== 'object') {
+        websiteFunctionalVisualCounters.innerHTML = '';
+        const wacht = document.createElement('p');
+        wacht.className = 'website-functional-visual__counter-note';
+        wacht.textContent = tekstVoorTaal('Waiting for scan summary...', 'Wachten op scan-samenvatting...');
+        websiteFunctionalVisualCounters.appendChild(wacht);
+        return;
+    }
+
+    const linksOk = Number(summary.links_ok || 0);
+    const linksTotal = Number(summary.links_total || 0);
+    const buttonsOk = Number(summary.buttons_ok || 0);
+    const buttonsTotal = Number(summary.buttons_total || 0);
+    const searchOk = Number(summary.search_ok || 0);
+    const searchTotal = Number(summary.search_total || 0);
+    const cssOk = Number(summary.css_ok || 0);
+    const cssTotal = Number(summary.css_total || 0);
+    const overall = String(summary.overall_status || '-').toUpperCase();
+
+    websiteFunctionalVisualCounters.innerHTML = '';
+    const regels = [
+        `${tekstVoorTaal('Overall', 'Overall')}: ${overall}`,
+        `${tekstVoorTaal('Links', 'Links')}: ${linksOk}/${linksTotal}`,
+        `${tekstVoorTaal('Buttons', 'Knoppen')}: ${buttonsOk}/${buttonsTotal}`,
+        `${tekstVoorTaal('Search', 'Zoekbalk')}: ${searchOk}/${searchTotal}`,
+        `${tekstVoorTaal('CSS', 'CSS')}: ${cssOk}/${cssTotal}`,
+    ];
+
+    regels.forEach((regel) => {
+        const item = document.createElement('p');
+        item.className = 'website-functional-visual__counter-line';
+        item.textContent = regel;
+        websiteFunctionalVisualCounters.appendChild(item);
+    });
+}
+
+function setWebsiteFunctionalVisualFramePlaceholder() {
+    if (!websiteFunctionalVisualFrame) {
+        return;
+    }
+
+    const tekst = escapeHtml(tekstVoorTaal(
+        'Visual report appears here after you start Visual Check.',
+        'Het visuele rapport verschijnt hier nadat je Visuele Check start.'
+    ));
+
+    websiteFunctionalVisualFrame.srcdoc = `<html><body style="margin:0;font-family:Segoe UI,Tahoma,Arial,sans-serif;background:#03111a;color:#c9ecff;display:flex;align-items:center;justify-content:center;min-height:100%;padding:16px;text-align:center;">${tekst}</body></html>`;
+}
+
+function resetWebsiteFunctionalVisualPanel() {
+    appState.websiteFunctionalVisualRunning = false;
+    appState.websiteFunctionalVisualTaskId = '';
+    appState.websiteFunctionalVisualLoadedTaskId = '';
+    appState.websiteFunctionalVisualLastLogKey = '';
+    appState.websiteFunctionalVisualReportUrl = '';
+    appState.websiteFunctionalVisualRawReportUrl = '';
+    stopWebsiteFunctionalVisualTaskPolling();
+    stopWebsiteFunctionalVisualProgressLoop();
+    setWebsiteFunctionalVisualProgress(0);
+    setWebsiteFunctionalVisualState(
+        tekstVoorTaal(
+            'Live visual stand-by. Start Visual Check to show report here.',
+            'Live visual stand-by. Start Visuele Check om het rapport hier te tonen.'
+        ),
+        'idle'
+    );
+    setWebsiteFunctionalVisualTargetLine('');
+    resetWebsiteFunctionalVisualStages();
+    renderWebsiteFunctionalVisualCounters(null);
+    clearWebsiteFunctionalVisualLiveLog();
+    setWebsiteFunctionalVisualFramePlaceholder();
+    setWebsiteFunctionalVisualPopupOpen(false);
+    updateWebsiteFunctionalVisualControls();
+}
+
+function laadWebsiteFunctionalRapportInEcho(rapportUrl) {
+    if (!websiteFunctionalVisualFrame) {
+        return false;
+    }
+
+    const url = String(rapportUrl || '').trim();
+    if (!url) {
+        return false;
+    }
+
+    const framedUrl = `${url}${url.includes('?') ? '&' : '?'}embed=echo&t=${Date.now()}`;
+    appState.websiteFunctionalVisualRawReportUrl = url;
+    appState.websiteFunctionalVisualReportUrl = framedUrl;
+
+    websiteFunctionalVisualFrame.addEventListener('load', () => {
+        appState.websiteFunctionalVisualRunning = false;
+        stopWebsiteFunctionalVisualTaskPolling();
+        stopWebsiteFunctionalVisualProgressLoop();
+        setWebsiteFunctionalVisualProgress(100);
+        updateWebsiteFunctionalVisualStages('completed', 'completed');
+        setWebsiteFunctionalVisualState(
+            tekstVoorTaal('Live visual rapport geladen in Echo.', 'Live visual rapport geladen in Echo.'),
+            'success'
+        );
+        appendWebsiteFunctionalVisualLiveLog(
+            tekstVoorTaal('Visual report loaded in popup frame.', 'Visueel rapport geladen in popup-frame.'),
+            'success'
+        );
+        updateWebsiteFunctionalVisualControls();
+        renderWebsiteAuditPanel(appState.websiteAuditSnapshot);
+    }, { once: true });
+
+    websiteFunctionalVisualFrame.src = framedUrl;
+    updateWebsiteFunctionalVisualControls();
+    return true;
+}
+
+function openWebsiteFunctionalVisualReportInTab() {
+    const url = String(appState.websiteFunctionalVisualRawReportUrl || '').trim();
+    if (!url) {
+        const melding = tekstVoorTaal('No visual report available yet.', 'Nog geen visueel rapport beschikbaar.');
+        setWebsiteFunctionalVisualState(melding, 'error');
+        triggerHapticFeedback([90, 35, 90]);
+        return false;
+    }
+
+    window.open(url, '_blank', 'noopener');
+    return true;
+}
+
+function openWebsiteFunctionalCheckerPopup() {
+    const doelUrl = websiteAuditUrlInput ? String(websiteAuditUrlInput.value || '').trim() : '';
+    const popupUrl = doelUrl
+        ? `/functional-checker?view=popup&url=${encodeURIComponent(doelUrl)}`
+        : '/functional-checker?view=popup';
+
+    const popup = window.open(
+        popupUrl,
+        'echoFunctionalChecker',
+        'popup=yes,width=1480,height=920,resizable=yes,scrollbars=yes'
+    );
+
+    if (popup) {
+        popup.focus();
+        return true;
+    }
+
+    const melding = tekstVoorTaal(
+        'Could not open Functional Checker popup (popup blocked).',
+        'Kon Functional Checker popup niet openen (popup geblokkeerd).'
+    );
+    setCommandStatus(melding);
+    triggerHapticFeedback([90, 35, 90]);
+    return false;
+}
+
+function updateWebsiteFunctionalVisualControls() {
+    const auditRunning = Boolean(appState.websiteAuditSnapshot && appState.websiteAuditSnapshot.running);
+    const visualRunning = Boolean(appState.websiteFunctionalVisualRunning);
+
+    if (websiteAuditVisualCheckBtn) {
+        websiteAuditVisualCheckBtn.disabled = auditRunning || visualRunning;
+    }
+
+    if (websiteFunctionalVisualStartBtn) {
+        websiteFunctionalVisualStartBtn.disabled = auditRunning || visualRunning;
+    }
+
+    if (websiteFunctionalVisualOpenReportBtn) {
+        websiteFunctionalVisualOpenReportBtn.disabled = !String(appState.websiteFunctionalVisualRawReportUrl || '').trim();
+    }
+}
+
+function applyWebsiteFunctionalTaskPayload(taskPayload = {}) {
+    if (!taskPayload || typeof taskPayload !== 'object') {
+        return;
+    }
+
+    const taskId = String(taskPayload.id || '').trim();
+    const status = String(taskPayload.status || 'queued').trim().toLowerCase();
+    const stage = normaliseerWebsiteFunctionalVisualStage(taskPayload.stage || 'queued');
+    const progress = Math.max(0, Math.min(100, Number(taskPayload.progress_percent || 0)));
+    const message = String(taskPayload.message || '').trim();
+    const currentTest = taskPayload.current_test && typeof taskPayload.current_test === 'object'
+        ? taskPayload.current_test
+        : {};
+
+    appState.websiteFunctionalVisualTaskId = taskId || appState.websiteFunctionalVisualTaskId;
+    appState.websiteFunctionalVisualRunning = status !== 'completed' && status !== 'failed';
+
+    setWebsiteFunctionalVisualProgress(progress);
+    updateWebsiteFunctionalVisualStages(stage, status);
+
+    if (message) {
+        const tone = status === 'failed' ? 'error' : (status === 'completed' ? 'success' : 'running');
+        setWebsiteFunctionalVisualState(message, tone);
+    }
+
+    const currentType = String(currentTest.type || '').trim().toLowerCase();
+    const currentId = String(currentTest.id || '').trim();
+    const currentTarget = String(currentTest.target || '').trim();
+    const logKey = `${stage}|${currentType}|${currentId}|${currentTarget}|${status}|${Math.round(progress)}`;
+
+    if ((currentId || currentTarget) && logKey !== appState.websiteFunctionalVisualLastLogKey) {
+        const typeLabel = currentType ? currentType.toUpperCase() : websiteFunctionalVisualStageLabel(stage).toUpperCase();
+        const details = [currentId, currentTarget].filter(Boolean).join(' | ');
+        appendWebsiteFunctionalVisualLiveLog(`${typeLabel}: ${details || message || stage}`);
+        appState.websiteFunctionalVisualLastLogKey = logKey;
+    }
+
+    const resultPayload = taskPayload.result && typeof taskPayload.result === 'object'
+        ? taskPayload.result
+        : null;
+    if (resultPayload && resultPayload.summary && typeof resultPayload.summary === 'object') {
+        renderWebsiteFunctionalVisualCounters(resultPayload.summary);
+    }
+
+    if (status === 'completed') {
+        appState.websiteFunctionalVisualRunning = false;
+        stopWebsiteFunctionalVisualProgressLoop();
+        stopWebsiteFunctionalVisualTaskPolling();
+
+        const reportPad = resultPayload ? String(resultPayload.report_url || '').trim() : '';
+        const reportUrl = resolveWebsiteFunctionalCheckReportUrl(reportPad);
+        if (reportUrl && taskId && appState.websiteFunctionalVisualLoadedTaskId !== taskId) {
+            appState.websiteFunctionalVisualLoadedTaskId = taskId;
+            setWebsiteFunctionalVisualState(
+                tekstVoorTaal('Loading visual report in popup...', 'Visueel rapport wordt geladen in popup...'),
+                'running'
+            );
+            const geladen = laadWebsiteFunctionalRapportInEcho(reportUrl);
+            if (!geladen) {
+                setWebsiteFunctionalVisualState(
+                    tekstVoorTaal('Could not load visual report frame.', 'Kon visueel rapport-frame niet laden.'),
+                    'error'
+                );
+            }
+        }
+    } else if (status === 'failed') {
+        appState.websiteFunctionalVisualRunning = false;
+        stopWebsiteFunctionalVisualProgressLoop();
+        stopWebsiteFunctionalVisualTaskPolling();
+        setWebsiteFunctionalVisualState(
+            message || tekstVoorTaal('Visual check failed.', 'Visuele check is mislukt.'),
+            'error'
+        );
+        appendWebsiteFunctionalVisualLiveLog(
+            message || tekstVoorTaal('Visual check failed.', 'Visuele check is mislukt.'),
+            'error'
+        );
+    }
+
+    updateWebsiteFunctionalVisualControls();
+}
+
+async function pollWebsiteFunctionalVisualTaskStatus(taskId) {
+    const veiligTaskId = String(taskId || '').trim();
+    if (!veiligTaskId || appState.websiteFunctionalVisualTaskPollInFlight) {
+        return;
+    }
+
+    appState.websiteFunctionalVisualTaskPollInFlight = true;
+    try {
+        const response = await fetchEchoApi(`/api/website-functional-check/status/${encodeURIComponent(veiligTaskId)}`, {
+            method: 'GET',
+        }, 12000);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        if (!response.ok || data.status !== 'success' || !data.task || typeof data.task !== 'object') {
+            const melding = String(data.message || '').trim() || tekstVoorTaal(
+                'Could not retrieve visual check task status.',
+                'Kon status van visuele check-taak niet ophalen.'
+            );
+            if (response.status === 404) {
+                appState.websiteFunctionalVisualRunning = false;
+                stopWebsiteFunctionalVisualTaskPolling();
+                stopWebsiteFunctionalVisualProgressLoop();
+                setWebsiteFunctionalVisualState(melding, 'error');
+                appendWebsiteFunctionalVisualLiveLog(melding, 'error');
+                updateWebsiteFunctionalVisualControls();
+            }
+            return;
+        }
+
+        applyWebsiteFunctionalTaskPayload(data.task);
+    } catch (_error) {
+        // Polling errors are transient; keep task running unless backend says otherwise.
+    } finally {
+        appState.websiteFunctionalVisualTaskPollInFlight = false;
+    }
+}
+
+function startWebsiteFunctionalVisualTaskPolling(taskId) {
+    const veiligTaskId = String(taskId || '').trim();
+    if (!veiligTaskId) {
+        return;
+    }
+
+    stopWebsiteFunctionalVisualTaskPolling();
+    appState.websiteFunctionalVisualTaskId = veiligTaskId;
+    appState.websiteFunctionalVisualTaskPollTimer = window.setInterval(() => {
+        void pollWebsiteFunctionalVisualTaskStatus(veiligTaskId);
+    }, 850);
+
+    void pollWebsiteFunctionalVisualTaskStatus(veiligTaskId);
+}
+
+async function startWebsiteFunctionalVisualCheck() {
+    openWebsiteFunctionalVisualPopup();
+
+    const doelUrl = String(
+        (websiteAuditUrlInput && websiteAuditUrlInput.value)
+        || (websiteAuditScheduleUrlInput && websiteAuditScheduleUrlInput.value)
+        || (appState.websiteAuditSnapshot && appState.websiteAuditSnapshot.target_url)
+        || ''
+    ).trim();
+
+    setWebsiteFunctionalVisualTargetLine(doelUrl);
+
+    if (!doelUrl) {
+        const melding = tekstVoorTaal(
+            'Provide a website URL first for the visual functional check.',
+            'Vul eerst een website-URL in voor de visuele functionele check.'
+        );
+        setWebsiteFunctionalVisualProgress(0);
+        setWebsiteFunctionalVisualState(melding, 'error');
+        setCommandStatus(melding);
+        triggerHapticFeedback([90, 35, 90]);
+        if (websiteAuditUrlInput) {
+            websiteAuditUrlInput.focus();
+        }
+        return;
+    }
+
+    if (appState.websiteFunctionalVisualRunning) {
+        const melding = tekstVoorTaal(
+            'Visual check already running in popup.',
+            'Visuele check draait al in de popup.'
+        );
+        setWebsiteFunctionalVisualState(melding, 'running');
+        return;
+    }
+
+    appState.websiteFunctionalVisualRunning = true;
+    appState.websiteFunctionalVisualTaskId = '';
+    appState.websiteFunctionalVisualLoadedTaskId = '';
+    appState.websiteFunctionalVisualLastLogKey = '';
+    appState.websiteFunctionalVisualRawReportUrl = '';
+    appState.websiteFunctionalVisualReportUrl = '';
+    stopWebsiteFunctionalVisualTaskPolling();
+    stopWebsiteFunctionalVisualProgressLoop();
+    resetWebsiteFunctionalVisualStages();
+    clearWebsiteFunctionalVisualLiveLog();
+    renderWebsiteFunctionalVisualCounters(null);
+    setWebsiteFunctionalVisualFramePlaceholder();
+    setWebsiteFunctionalVisualProgress(3);
+    updateWebsiteFunctionalVisualStages('queued', 'running');
+    setWebsiteFunctionalVisualState(
+        tekstVoorTaal('Visual check queued and starting...', 'Visuele check staat in de wachtrij en start nu...'),
+        'running'
+    );
+    appendWebsiteFunctionalVisualLiveLog(
+        tekstVoorTaal('Queue accepted. Preparing scan module...', 'Wachtrij bevestigd. Scanmodule wordt voorbereid...')
+    );
+    startWebsiteFunctionalVisualProgressLoop();
+    updateWebsiteFunctionalVisualControls();
+
+    try {
+        const response = await fetchEchoApi('/api/website-functional-check/start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                url: doelUrl,
+            }),
+        }, 15000);
+
+        const data = await response.json().catch(() => ({
+            status: 'error',
+            message: uiTekst('invalid_server_response'),
+        }));
+
+        const ok = response.ok && data.status === 'success' && data.task && typeof data.task === 'object';
+        if (!ok) {
+            appState.websiteFunctionalVisualRunning = false;
+            stopWebsiteFunctionalVisualProgressLoop();
+            stopWebsiteFunctionalVisualTaskPolling();
+            const melding = String(data.message || '').trim() || tekstVoorTaal(
+                'Visual functional check could not start.',
+                'Visuele functionele check kon niet starten.'
+            );
+            setWebsiteFunctionalVisualState(melding, 'error');
+            appendWebsiteFunctionalVisualLiveLog(melding, 'error');
+            addMessage('error', melding);
+            setCommandStatus(melding);
+            triggerHapticFeedback([90, 35, 90]);
+            updateWebsiteFunctionalVisualControls();
+            return;
+        }
+
+        const task = data.task;
+        const taskId = String(task.id || '').trim();
+        appState.websiteFunctionalVisualTaskId = taskId;
+
+        if (taskId) {
+            appendWebsiteFunctionalVisualLiveLog(
+                tekstVoorTaal(`Task gestart: ${taskId}`, `Taak gestart: ${taskId}`),
+                'success'
+            );
+        }
+
+        applyWebsiteFunctionalTaskPayload(task);
+        const status = String(task.status || '').trim().toLowerCase();
+        if (taskId && status !== 'completed' && status !== 'failed') {
+            startWebsiteFunctionalVisualTaskPolling(taskId);
+        }
+
+        const melding = String(data.message || '').trim() || tekstVoorTaal(
+            'Visual functional check started.',
+            'Visuele functionele check gestart.'
+        );
+        addMessage('ai', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback(55);
+    } catch (error) {
+        appState.websiteFunctionalVisualRunning = false;
+        stopWebsiteFunctionalVisualProgressLoop();
+        stopWebsiteFunctionalVisualTaskPolling();
+        const rawMessage = error instanceof Error ? String(error.message || '').trim() : '';
+        const melding = rawMessage || tekstVoorTaal(
+            'Visual functional check request failed.',
+            'Verzoek voor visuele functionele check is mislukt.'
+        );
+        setWebsiteFunctionalVisualState(melding, 'error');
+        appendWebsiteFunctionalVisualLiveLog(melding, 'error');
+        addMessage('error', melding);
+        setCommandStatus(melding);
+        triggerHapticFeedback([90, 35, 90]);
+        updateWebsiteFunctionalVisualControls();
+    } finally {
+        renderWebsiteAuditPanel(appState.websiteAuditSnapshot);
+    }
+}
+
 function heeftWebsiteAuditRapport(snapshot = appState.websiteAuditSnapshot) {
     const data = snapshot && typeof snapshot === 'object' ? snapshot : {};
     return Boolean(
@@ -3330,6 +4034,9 @@ function renderWebsiteAuditPanel(payload = {}) {
     if (websiteAuditStartBtn) {
         websiteAuditStartBtn.disabled = snapshot.running;
     }
+    if (websiteAuditVisualCheckBtn) {
+        websiteAuditVisualCheckBtn.disabled = snapshot.running || appState.websiteFunctionalVisualRunning;
+    }
     if (websiteAuditProfileSelect) {
         websiteAuditProfileSelect.disabled = snapshot.running;
         if (websiteAuditProfileSelect.value !== snapshot.profile) {
@@ -3344,6 +4051,8 @@ function renderWebsiteAuditPanel(payload = {}) {
     if (websiteAuditScheduleSaveBtn) {
         websiteAuditScheduleSaveBtn.disabled = snapshot.running;
     }
+
+    updateWebsiteFunctionalVisualControls();
 
     updateWebsiteAuditDownloadButtons(snapshot);
     renderWebsiteAuditFindings(snapshot);
@@ -6237,6 +6946,59 @@ function updateLocalizedUiLabels() {
         websiteAuditScheduleStatusBtn.textContent = uiTekst('website_audit_schedule_status_button');
     }
 
+    if (websiteAuditVisualCheckBtn) {
+        websiteAuditVisualCheckBtn.textContent = tekstVoorTaal('Functional Checker Popup', 'Functional Checker Popup');
+    }
+
+    if (websiteFunctionalVisualStartBtn) {
+        websiteFunctionalVisualStartBtn.textContent = tekstVoorTaal('Start Visual Check', 'Start Visuele Check');
+    }
+
+    if (websiteFunctionalVisualOpenReportBtn) {
+        websiteFunctionalVisualOpenReportBtn.textContent = tekstVoorTaal('Open Report in Tab', 'Open Rapport in Tab');
+    }
+
+    if (websiteFunctionalVisualCloseBtn) {
+        websiteFunctionalVisualCloseBtn.textContent = tekstVoorTaal('Close Popup', 'Sluit Popup');
+    }
+
+    if (websiteFunctionalVisualStages) {
+        const detailByStage = {
+            queued: tekstVoorTaal('Waiting to start.', 'Wacht op start.'),
+            module_load: tekstVoorTaal('Loading checker module.', 'Checker-module laden.'),
+            homepage: tekstVoorTaal('Opening target homepage.', 'Doel-homepage openen.'),
+            parse_dom: tekstVoorTaal('Scanning DOM elements.', 'DOM-elementen scannen.'),
+            links: tekstVoorTaal('Testing all links.', 'Alle links testen.'),
+            buttons: tekstVoorTaal('Testing all buttons.', 'Alle knoppen testen.'),
+            search_bars: tekstVoorTaal('Testing search flow.', 'Zoekflow testen.'),
+            summary: tekstVoorTaal('Building result summary.', 'Resultaatsamenvatting maken.'),
+            report_build: tekstVoorTaal('Building visual report.', 'Visueel rapport maken.'),
+            completed: tekstVoorTaal('Scan and report done.', 'Scan en rapport gereed.'),
+        };
+
+        Array.from(websiteFunctionalVisualStages.querySelectorAll('li')).forEach((node) => {
+            const stage = normaliseerWebsiteFunctionalVisualStage(node.dataset.stage || 'queued');
+            const label = node.querySelector('span');
+            const detail = node.querySelector('small');
+            if (label) {
+                label.textContent = websiteFunctionalVisualStageLabel(stage);
+            }
+            if (detail) {
+                detail.textContent = detailByStage[stage] || '';
+            }
+        });
+    }
+
+    if (!appState.websiteFunctionalVisualRunning && !appState.websiteFunctionalVisualReportUrl) {
+        setWebsiteFunctionalVisualState(
+            tekstVoorTaal(
+                'Live visual stand-by. Start Visual Check to show report here.',
+                'Live visual stand-by. Start Visuele Check om het rapport hier te tonen.'
+            ),
+            'idle'
+        );
+    }
+
     if (websiteAuditScheduleUrlInput) {
         websiteAuditScheduleUrlInput.placeholder = uiTekst('website_audit_schedule_url_placeholder');
     }
@@ -7823,6 +8585,40 @@ function wireEvents() {
         });
     }
 
+    if (websiteAuditVisualCheckBtn) {
+        websiteAuditVisualCheckBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            openWebsiteFunctionalCheckerPopup();
+        });
+    }
+
+    if (websiteFunctionalVisualStartBtn) {
+        websiteFunctionalVisualStartBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            void startWebsiteFunctionalVisualCheck();
+        });
+    }
+
+    if (websiteFunctionalVisualOpenReportBtn) {
+        websiteFunctionalVisualOpenReportBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            openWebsiteFunctionalVisualReportInTab();
+        });
+    }
+
+    if (websiteFunctionalVisualCloseBtn) {
+        websiteFunctionalVisualCloseBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            closeWebsiteFunctionalVisualPopup();
+        });
+    }
+
+    if (websiteFunctionalVisualBackdrop) {
+        websiteFunctionalVisualBackdrop.addEventListener('click', () => {
+            closeWebsiteFunctionalVisualPopup();
+        });
+    }
+
     if (commandInput) {
         commandInput.addEventListener('input', () => {
             refreshCommandSuggestionsFromInput();
@@ -8042,6 +8838,12 @@ function wireEvents() {
             return;
         }
 
+        if (event.key === 'Escape' && appState.websiteFunctionalVisualPopupOpen) {
+            event.preventDefault();
+            closeWebsiteFunctionalVisualPopup();
+            return;
+        }
+
         if (event.key === 'Escape' && appState.dashboardActive) {
             setMode(false);
         }
@@ -8051,7 +8853,7 @@ function wireEvents() {
             setMode(!appState.dashboardActive);
         }
 
-        if (event.key === '/' && appState.dashboardActive) {
+        if (event.key === '/' && appState.dashboardActive && !appState.websiteFunctionalVisualPopupOpen) {
             event.preventDefault();
             if (commandInput) {
                 commandInput.focus();
@@ -8125,6 +8927,7 @@ async function init() {
     renderLatestScreenshotPanel({});
     renderWebsiteAuditPanel({});
     renderWebsiteAuditSchedulePanel({});
+    resetWebsiteFunctionalVisualPanel();
     renderCameraPanel();
     loadCommandHistory();
     updateViewportModeClass();
@@ -8155,6 +8958,9 @@ window.addEventListener('load', () => {
 window.addEventListener('beforeunload', () => {
     appState.listeningWanted = false;
     clearRecognitionRestartTimer();
+    appState.websiteFunctionalVisualRunning = false;
+    stopWebsiteFunctionalVisualTaskPolling();
+    stopWebsiteFunctionalVisualProgressLoop();
     stopVisualizer();
     stopCameraStream();
     stopDashboardWatcher();

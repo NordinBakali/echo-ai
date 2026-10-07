@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#00060a">
+    <title>{{ instellingen.naam }} | Functional Checker</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ build_id }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='functional-checker.css') }}?v={{ build_id }}">
+</head>
+<body class="functional-checker-body" data-threat="nominal">
+    <div class="atmo-layer" aria-hidden="true"></div>
+    <div class="hud-grid" aria-hidden="true"></div>
+    <div class="hud-noise" aria-hidden="true"></div>
+
+    <main class="functional-checker-shell">
+        <header class="panel-block functional-checker-header">
+            <div>
+                <p class="panel-kicker">Echo Functional Checker</p>
+                <h1 class="functional-checker-title">Live Website Functional Console</h1>
+                <p class="panel-note">
+                    Aparte tab voor links, knoppen en zoekbalk tests met live progress, log en direct rapport.
+                </p>
+            </div>
+            <div class="functional-checker-header__actions">
+                <button id="functionalCheckerOpenQuickBtn" type="button" class="panel-action">Open Quick Checker</button>
+                <button id="functionalCheckerOpenReportBtn" type="button" class="panel-action" disabled>Open Rapport Tab</button>
+                <button id="functionalCheckerBackBtn" type="button" class="panel-action">Terug naar Echo</button>
+            </div>
+        </header>
+
+        <section class="functional-checker-layout">
+            <article class="panel-block functional-checker-control">
+                <p class="panel-kicker">Scan Start</p>
+                <form id="functionalCheckerForm" autocomplete="off" class="functional-checker-form">
+                    <label class="overview-filter-label" for="functionalCheckerUrlInput">Website URL</label>
+                    <input id="functionalCheckerUrlInput" type="text" placeholder="bijv: bedrijf.nl of https://bedrijf.nl" inputmode="url" spellcheck="false">
+                    <button id="functionalCheckerStartBtn" type="submit" class="panel-action functional-checker-start-btn">Start Functional Check</button>
+                </form>
+
+                <p class="panel-note functional-checker-target" id="functionalCheckerTarget">Doel: wacht op URL-invoer</p>
+                <p class="panel-note functional-checker-status" id="functionalCheckerState" data-tone="idle">
+                    Stand-by. Vul een URL in en start de scan.
+                </p>
+
+                <div class="website-audit-progress" aria-hidden="true">
+                    <div class="website-audit-progress__fill" id="functionalCheckerProgressFill"></div>
+                </div>
+                <div class="functional-checker-progress-meta">
+                    <span id="functionalCheckerProgressPercent">0%</span>
+                    <span id="functionalCheckerDuration">Tijd: --</span>
+                </div>
+
+                <p class="panel-note functional-checker-current-test" id="functionalCheckerCurrentTest">Huidige test: -</p>
+
+                <div class="functional-checker-live-block">
+                    <p class="panel-kicker functional-checker-subtitle">Live Stages</p>
+                    <ol class="functional-checker-stage-list" id="functionalCheckerStages">
+                        <li data-stage="queued"><span>Wachtrij</span><small>Wacht op start.</small></li>
+                        <li data-stage="module_load"><span>Module</span><small>Checker-module laden.</small></li>
+                        <li data-stage="homepage"><span>Homepage</span><small>Doel-homepage openen.</small></li>
+                        <li data-stage="parse_dom"><span>DOM Parse</span><small>DOM-elementen scannen.</small></li>
+                        <li data-stage="links"><span>Links</span><small>Alle links testen.</small></li>
+                        <li data-stage="buttons"><span>Knoppen</span><small>Alle knoppen testen.</small></li>
+                        <li data-stage="search_bars"><span>Zoekbalk</span><small>Zoekflow testen.</small></li>
+                        <li data-stage="summary"><span>Samenvatting</span><small>Resultaten samenvatten.</small></li>
+                        <li data-stage="report_build"><span>Rapport</span><small>Visueel rapport opbouwen.</small></li>
+                        <li data-stage="completed"><span>Klaar</span><small>Scan en rapport gereed.</small></li>
+                    </ol>
+                </div>
+
+                <p class="panel-kicker functional-checker-subtitle">Scan Snapshot</p>
+                <div class="functional-checker-counters" id="functionalCheckerCounters" aria-live="polite"></div>
+            </article>
+
+            <article class="panel-block functional-checker-monitor">
+                <p class="panel-kicker">Live Test Log</p>
+                <div class="functional-checker-live-log" id="functionalCheckerLiveLog" aria-live="polite"></div>
+
+                <p class="panel-kicker functional-checker-subtitle">Visual Report</p>
+                <div class="functional-checker-frame-shell">
+                    <iframe
+                        id="functionalCheckerFrame"
+                        class="functional-checker-frame"
+                        title="Website functional visual report"
+                        loading="lazy"
+                        referrerpolicy="no-referrer"
+                    ></iframe>
+                </div>
+            </article>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='functional-checker.js') }}?v={{ build_id }}"></script>
+</body>
+</html>

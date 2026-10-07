@@ -140,6 +140,27 @@ Dit artifact bevat `Echo-App-Portable.zip` zodat clients direct kunnen reviewen.
 - ⚙️ **Instellingen** - Pas je voorkeuren aan via het instellingenmenu
 - 💬 **Live chat** - Zie alle communicatie in het chatvenster
 
+## Beveiligde bedrijfsdemo
+
+Gebruik de demo-modus wanneer je Echo op een vertrouwd netwerk aan anderen laat zien. Echo vraagt dan om een toegangscode, beschermt de API met een sessie en schakelt computerbesturing uit. Zonder geldige configuratie blijft de demo gesloten.
+
+Stel de volgende variabelen in voordat je Echo start:
+
+```powershell
+$env:ECHO_DEMO_MODE = "true"
+$env:ECHO_DEMO_PASSWORD = "kies-een-unieke-code-van-minimaal-12-tekens"
+$env:ECHO_SESSION_SECRET = (python -c "import secrets; print(secrets.token_urlsafe(48))")
+python server.py
+```
+
+Je kunt dezelfde variabelen in het lokale `.env`-bestand zetten. Gebruik een eigen toegangscode en bewaar `.env` buiten Git. In demo-modus luistert Echo, als `ECHO_HOST` niet is ingesteld, alleen op deze computer. Wil je andere apparaten toegang geven, stel dan bewust `ECHO_HOST=0.0.0.0` in en gebruik een HTTPS-proxy met `ECHO_COOKIE_SECURE=true`; stel de demo niet rechtstreeks via onbeveiligde HTTP aan een netwerk bloot. De demo gebruikt één gedeelde sessie en biedt geen gebruikers- of bedrijfsisolatie: gebruik hem niet voor vertrouwelijke bedrijfsgegevens.
+
+## Bedrijfskennis-demo
+
+Echo kan vragen beantwoorden op basis van uitsluitend Markdown- en tekstbestanden in `bedrijfsdocumenten/`. Elk antwoord toont de bestandsnaam en regelnummers van de gevonden fragmenten. Andere projectbestanden worden niet gebruikt voor deze antwoorden. Voeg alleen informatie toe die je voor je demo mag delen; het gevonden fragment wordt naar het ingestelde AI-model gestuurd.
+
+Probeer bijvoorbeeld `vraag bedrijfsdocumenten: wat is het retourbeleid?` of klik op **Vraag de bedrijfsdocumenten** in Echo. Het voorbeeldbestand `bedrijfsdocumenten/voorbeeld-bedrijf.md` bevat fictief retourbeleid. Zet je goedgekeurde bedrijfsdocumenten in deze map om de demonstratie met je eigen toegestane voorbeeldmateriaal te personaliseren. Als Echo geen relevante bron vindt of er geen AI-model beschikbaar is, meldt het dat expliciet in plaats van een antwoord te verzinnen.
+
 ## Beschikbare commando's
 
 - `open youtube` - Opent YouTube

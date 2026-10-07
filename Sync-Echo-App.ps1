@@ -17,6 +17,7 @@ $itemsToCopy = @(
     'server.py',
     'ai_core.py',
     'quick-check.py',
+    'website_functional_check.py',
     'README.md',
     'requirements.txt',
     'pytest.ini',
