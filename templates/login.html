@@ -4,25 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#00060a">
-    <title>Echo beveiligde demo</title>
+    <title>{% if enterprise_mode %}Echo bedrijfsomgeving{% else %}Echo beveiligde demo{% endif %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="demo-login-page">
     <main class="demo-login-card">
         <img src="{{ url_for('static', filename='echo-circle-logo.svg') }}" alt="" width="54" height="54">
-        <p class="demo-login-kicker">ECHO · BEVEILIGDE DEMO</p>
+        <p class="demo-login-kicker">{% if enterprise_mode %}ECHO · BEDRIJFSOMGEVING{% else %}ECHO · BEVEILIGDE DEMO{% endif %}</p>
         <h1>Welkom</h1>
-        <p class="demo-login-intro">Voer de toegangscode in om Echo te openen.</p>
+        <p class="demo-login-intro">{% if enterprise_mode %}Log in met je bedrijfsaccount.{% else %}Voer de toegangscode in om Echo te openen.{% endif %}</p>
         {% if fout %}
         <p class="demo-login-error" role="alert">{{ fout }}</p>
         {% endif %}
         <form action="{{ url_for('demo_login') }}" method="post">
-            <label for="password">Toegangscode</label>
-            <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+            {% if enterprise_mode %}
+            <label for="username">Gebruikersnaam</label>
+            <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+            {% endif %}
+            <label for="password">{% if enterprise_mode %}Wachtwoord{% else %}Toegangscode{% endif %}</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required {% if not enterprise_mode %}autofocus{% endif %}>
             <button type="submit">INLOGGEN</button>
         </form>
-        <p class="demo-login-footnote">Deze demonstratie is afgeschermd. Computerbesturing staat uit.</p>
+        <p class="demo-login-footnote">{% if enterprise_mode %}Accounttoegang wordt verstrekt door je Echo-beheerder.{% else %}Deze demonstratie is afgeschermd. Computerbesturing staat uit.{% endif %}</p>
     </main>
 </body>
 </html>

@@ -6,5 +6,7 @@ release/Echo-App.__staging/
 release/Echo-App.__backup/
 echo_geheugen.json
 echo_planning.json
+echo_knowledge_metrics.json
+enterprise-data/
 __pycache__/
 *.pyc

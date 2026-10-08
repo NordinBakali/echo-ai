@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#00060a">
+    <title>Echo · {{ gebruiker.company_name }}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="enterprise-page" data-company-id="{{ gebruiker.company_id }}" data-user-role="{{ gebruiker.role }}">
+    <main class="enterprise-shell">
+        <header class="enterprise-header">
+            <div>
+                <p class="demo-login-kicker">ECHO · BEDRIJFSKENNIS</p>
+                <h1>{{ gebruiker.company_name }}</h1>
+                <p class="panel-note">Aangemeld als {{ gebruiker.username }}</p>
+            </div>
+            <nav class="enterprise-nav">
+                {% if beheerder %}<a class="panel-action" href="{{ url_for('enterprise_admin') }}">Gebruikers beheren</a>{% endif %}
+                <form action="{{ url_for('demo_logout') }}" method="post"><button class="panel-action" type="submit">Uitloggen</button></form>
+            </nav>
+        </header>
+        <section class="enterprise-card">
+            <h2>Vraag je bedrijfsdocumenten</h2>
+            <p class="panel-note">Echo gebruikt alleen documenten die bij jouw bedrijfsomgeving horen en toont de gebruikte bronnen.</p>
+            <form id="enterpriseQuestionForm" class="enterprise-question-form">
+                <label for="enterpriseQuestion">Je vraag</label>
+                <textarea id="enterpriseQuestion" maxlength="1200" required placeholder="Bijvoorbeeld: Wat is ons retourbeleid?"></textarea>
+                <button class="panel-action" type="submit">Vraag Echo</button>
+            </form>
+            <p id="enterpriseQuestionStatus" class="panel-note" aria-live="polite"></p>
+            <article id="enterpriseAnswer" class="enterprise-answer" aria-live="polite"></article>
+            <div id="enterpriseFeedback" class="company-knowledge-feedback" hidden></div>
+        </section>
+        <section class="enterprise-card">
+            <h2>Beschikbare bedrijfsdocumenten</h2>
+            <p class="panel-note">Alleen bestandsnamen, grootte en wijzigingsdatum worden hier getoond.</p>
+            <p id="enterpriseDocumentsStatus" class="panel-note" aria-live="polite">Documenten laden...</p>
+            <div id="enterpriseDocumentsList" class="enterprise-list" aria-live="polite"></div>
+        </section>
+        <section class="enterprise-card">
+            <h2>Kwaliteitsoverzicht</h2>
+            <p id="enterpriseMetricsStatus" class="panel-note" aria-live="polite">Cijfers laden...</p>
+            <p id="enterpriseMetricsValues" class="company-knowledge-metrics__values"></p>
+            <button id="enterpriseMetricsRefresh" class="panel-action" type="button">Ververs cijfers</button>
+            <p class="panel-note">Dit zijn gebruiks- en feedbackcijfers, geen onafhankelijke controle van feitelijke juistheid.</p>
+        </section>
+    </main>
+    <script src="{{ url_for('static', filename='enterprise.js') }}" defer></script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#00060a">
+    <title>Echo · beheer</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="enterprise-page" data-user-role="{{ gebruiker.role }}" data-company-id="{{ gebruiker.company_id or '' }}">
+    <main class="enterprise-shell">
+        <header class="enterprise-header">
+            <div>
+                <p class="demo-login-kicker">ECHO · BEHEER</p>
+                <h1>{% if gebruiker.role == 'superadmin' %}Bedrijven beheren{% else %}Gebruikers beheren{% endif %}</h1>
+                <p class="panel-note">Aangemeld als {{ gebruiker.username }} · {{ gebruiker.role }}</p>
+            </div>
+            <nav class="enterprise-nav">
+                {% if gebruiker.role == 'company_admin' %}<a class="panel-action" href="{{ url_for('index') }}">Naar bedrijfsomgeving</a>{% endif %}
+                <form action="{{ url_for('demo_logout') }}" method="post"><button class="panel-action" type="submit">Uitloggen</button></form>
+            </nav>
+        </header>
+
+        {% if gebruiker.role == 'superadmin' %}
+        <section class="enterprise-card">
+            <h2>Bedrijf aanmaken</h2>
+            <p class="panel-note">Maak een bedrijfsomgeving en de eerste beheerder aan. Deel het wachtwoord alleen rechtstreeks met die beheerder.</p>
+            <form id="createCompanyForm" class="enterprise-question-form">
+                <label for="companyName">Bedrijfsnaam</label>
+                <input id="companyName" name="company_name" maxlength="120" required>
+                <label for="firstAdminUsername">Gebruikersnaam eerste beheerder</label>
+                <input id="firstAdminUsername" name="admin_username" maxlength="80" autocomplete="off" required>
+                <label for="firstAdminPassword">Tijdelijk wachtwoord (minimaal 12 tekens)</label>
+                <input id="firstAdminPassword" name="admin_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+                <button class="panel-action" type="submit">Bedrijf aanmaken</button>
+            </form>
+            <p id="createCompanyStatus" class="panel-note" aria-live="polite"></p>
+            <div id="companyList" class="enterprise-list" aria-live="polite"></div>
+        </section>
+        {% else %}
+        <section class="enterprise-card">
+            <h2>Medewerker toevoegen</h2>
+            <p class="panel-note">Nieuwe medewerkers krijgen alleen toegang tot {{ gebruiker.company_name }}.</p>
+            <form id="createUserForm" class="enterprise-question-form">
+                <label for="newUsername">Gebruikersnaam</label>
+                <input id="newUsername" name="username" maxlength="80" autocomplete="off" required>
+                <label for="newPassword">Tijdelijk wachtwoord (minimaal 12 tekens)</label>
+                <input id="newPassword" name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+                <button class="panel-action" type="submit">Medewerker toevoegen</button>
+            </form>
+            <p id="createUserStatus" class="panel-note" aria-live="polite"></p>
+            <div id="userList" class="enterprise-list" aria-live="polite"></div>
+        </section>
+        <section class="enterprise-card">
+            <h2>Bedrijfsdocumenten beheren</h2>
+            <p class="panel-note">Upload alleen Markdown- of UTF-8-tekstbestanden. Maximaal 100 bestanden van 200 KB per bestand.</p>
+            <form id="uploadCompanyDocumentForm" class="enterprise-question-form">
+                <label for="companyDocumentFile">Document (.md of .txt)</label>
+                <input id="companyDocumentFile" name="document" type="file" accept=".md,.txt,text/markdown,text/plain" required>
+                <button class="panel-action" type="submit">Document uploaden</button>
+            </form>
+            <p id="companyDocumentsStatus" class="panel-note" aria-live="polite"></p>
+            <div id="companyDocumentsList" class="enterprise-list" aria-live="polite"></div>
+        </section>
+        <section class="enterprise-card">
+            <h2>Activiteitenlogboek</h2>
+            <p class="panel-note">Beheeracties van jouw bedrijfsomgeving. Geen wachtwoorden, vragen, antwoorden of documentinhoud. De laatste 500 activiteiten worden bewaard.</p>
+            <p id="enterpriseAuditStatus" class="panel-note" aria-live="polite">Activiteiten laden...</p>
+            <button id="enterpriseAuditRefresh" class="panel-action" type="button">Ververs activiteiten</button>
+            <div id="enterpriseAuditLog" class="enterprise-list" aria-live="polite"></div>
+        </section>
+        {% endif %}
+    </main>
+    <script src="{{ url_for('static', filename='enterprise.js') }}" defer></script>
+</body>
+</html>

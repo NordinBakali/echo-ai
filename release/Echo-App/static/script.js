@@ -7155,7 +7155,7 @@ async function toggleAppLanguage() {
 
 function addMessage(kind, text) {
     if (!messages) {
-        return;
+        return null;
     }
 
     const zatDichtbijOnderkant = (messages.scrollHeight - (messages.scrollTop + messages.clientHeight)) < 40;
@@ -7184,6 +7184,85 @@ function addMessage(kind, text) {
     if (zatDichtbijOnderkant || kind === 'user') {
         messages.scrollTop = messages.scrollHeight;
     }
+    return row;
+}
+
+async function refreshCompanyKnowledgeMetrics() {
+    const status = document.getElementById('companyKnowledgeMetricsStatus');
+    const values = document.getElementById('companyKnowledgeMetricsValues');
+    if (!status || !values) {
+        return;
+    }
+
+    try {
+        const response = await fetchEchoApi('/api/company-knowledge/metrics', { method: 'GET' }, 8000);
+        const data = await response.json();
+        if (!response.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Metrics unavailable');
+        }
+
+        const feedbackCountLabel = isNederlandsActief() ? 'beoordelingen' : 'ratings';
+        const answerLabel = isNederlandsActief() ? 'beantwoord' : 'answered';
+        const noSourceLabel = isNederlandsActief() ? 'zonder bron' : 'no source';
+        const modelIssueLabel = isNederlandsActief() ? 'modelproblemen' : 'model issues';
+        const rated = data.positive_feedback_percent === null
+            ? (isNederlandsActief() ? 'nog geen beoordelingen' : 'no ratings yet')
+            : `${data.positive_feedback_percent}% ${isNederlandsActief() ? 'positief' : 'positive'} (${data.feedback_count} ${feedbackCountLabel})`;
+        values.textContent = `${data.total_questions} ${isNederlandsActief() ? 'vragen' : 'questions'} · ${data.answered} ${answerLabel} · ${data.no_sources} ${noSourceLabel} · ${data.model_unavailable + data.model_error} ${modelIssueLabel} · ${rated}`;
+        status.textContent = isNederlandsActief()
+            ? 'Lokale totalen; vragen en antwoorden worden niet opgeslagen.'
+            : 'Local totals; questions and answers are not stored.';
+    } catch (error) {
+        status.textContent = isNederlandsActief()
+            ? `Kwaliteitsmetingen zijn momenteel niet beschikbaar${error.message ? `: ${error.message}` : '.'}`
+            : `Quality metrics are currently unavailable${error.message ? `: ${error.message}` : '.'}`;
+        values.textContent = '';
+    }
+}
+
+function attachCompanyKnowledgeFeedback(messageRow, feedbackId) {
+    if (!messageRow || !/^[a-f0-9]{32}$/.test(String(feedbackId || ''))) {
+        return;
+    }
+
+    const feedback = document.createElement('div');
+    feedback.className = 'company-knowledge-feedback';
+    const prompt = document.createElement('span');
+    prompt.textContent = isNederlandsActief() ? 'Was dit antwoord nuttig?' : 'Was this answer helpful?';
+    feedback.appendChild(prompt);
+
+    [
+        { rating: 'positive', label: isNederlandsActief() ? 'Ja' : 'Yes' },
+        { rating: 'negative', label: isNederlandsActief() ? 'Nee' : 'No' },
+    ].forEach(({ rating, label }) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'company-knowledge-feedback__button';
+        button.textContent = label;
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            try {
+                const response = await fetchEchoApi('/api/company-knowledge/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ feedback_id: feedbackId, rating }),
+                }, 8000);
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.message || 'Feedback could not be saved');
+                }
+                feedback.textContent = isNederlandsActief() ? 'Bedankt voor je feedback.' : 'Thanks for your feedback.';
+                void refreshCompanyKnowledgeMetrics();
+            } catch (error) {
+                button.disabled = false;
+                prompt.textContent = error.message || (isNederlandsActief()
+                    ? 'Feedback kon niet worden opgeslagen. Probeer opnieuw.'
+                    : 'Feedback could not be saved. Please try again.');
+            }
+        });
+        feedback.appendChild(button);
+    });
+    messageRow.appendChild(feedback);
 }
 
 function setCommandStatus(text) {
@@ -7539,7 +7618,13 @@ async function sendCommand(command, source = 'text') {
         const isDuplicateReply = isRecentDuplicateAssistantMessage(spokenText);
 
         if (ok && !isDuplicateReply) {
-            addMessage('ai', message);
+            const messageRow = addMessage('ai', message);
+            const route = data.route && typeof data.route === 'object' ? data.route : {};
+            if (route.tool === 'company_knowledge') {
+                const metrics = route.metrics && typeof route.metrics === 'object' ? route.metrics : {};
+                attachCompanyKnowledgeFeedback(messageRow, metrics.feedback_id);
+                void refreshCompanyKnowledgeMetrics();
+            }
             setCommandStatus(uiTekst('command_completed_ms', { duration: String(data.duration_ms || 0) }));
             triggerHapticFeedback(50);
 
@@ -8927,6 +9012,13 @@ async function init() {
     renderLatestScreenshotPanel({});
     renderWebsiteAuditPanel({});
     renderWebsiteAuditSchedulePanel({});
+    void refreshCompanyKnowledgeMetrics();
+    const companyKnowledgeMetricsRefresh = document.getElementById('companyKnowledgeMetricsRefresh');
+    if (companyKnowledgeMetricsRefresh) {
+        companyKnowledgeMetricsRefresh.addEventListener('click', () => {
+            void refreshCompanyKnowledgeMetrics();
+        });
+    }
     resetWebsiteFunctionalVisualPanel();
     renderCameraPanel();
     loadCommandHistory();

@@ -2,6 +2,7 @@ import pytest
 import datetime
 import io
 import copy
+import sqlite3
 
 import server
 
@@ -14,6 +15,11 @@ def client():
     app.config.update(TESTING=True)
     with app.test_client() as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def isolate_company_knowledge_metrics(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "BEDRIJFSDOCUMENT_METRICS_PAD", tmp_path / "company-metrics.json")
 
 
 @pytest.fixture(autouse=True)
@@ -141,6 +147,9 @@ def test_company_knowledge_command_answers_with_document_citations(client, monke
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "success"
+    assert payload["route"]["tool"] == "company_knowledge"
+    assert payload["route"]["metrics"]["knowledge_status"] == "answered"
+    assert len(payload["route"]["metrics"]["feedback_id"]) == 32
     assert "binnen 30 dagen" in payload["message"]
     assert "[1] beleid.md:1-2" in payload["message"]
     assert "[9]" not in payload["message"]
@@ -160,8 +169,61 @@ def test_company_knowledge_example_document_can_answer_demo_question(monkeypatch
 
     antwoord = server.vraag_bedrijfsdocumenten("wat is het retourbeleid?")
 
-    assert "30 kalenderdagen" in antwoord
-    assert "[1] voorbeeld-bedrijf.md:" in antwoord
+    assert "30 kalenderdagen" in antwoord["answer"]
+    assert "[1] voorbeeld-bedrijf.md:" in antwoord["answer"]
+    assert antwoord["status"] == "answered"
+
+
+def test_company_knowledge_metrics_and_feedback_are_aggregated_without_text(client, monkeypatch, tmp_path):
+    (tmp_path / "beleid.md").write_text(
+        "# Retourbeleid\nKlanten kunnen ongebruikte producten binnen 30 dagen retourneren.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "BEDRIJFSDOCUMENTEN_PAD", tmp_path)
+    monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
+    monkeypatch.setattr(server, "vraag_online_ai_bericht", lambda *_args, **_kwargs: "Retour binnen 30 dagen.")
+
+    answer_response = client.post(
+        "/api/commando",
+        json={"commando": "vraag bedrijfsdocumenten: wat is het retourbeleid?"},
+    )
+    feedback_id = answer_response.get_json()["route"]["metrics"]["feedback_id"]
+    assert server.re.fullmatch(r"[a-f0-9]{32}", feedback_id), repr(feedback_id)
+    feedback_response = client.post(
+        "/api/company-knowledge/feedback",
+        json={"feedback_id": feedback_id, "rating": "positive"},
+    )
+    duplicate_response = client.post(
+        "/api/company-knowledge/feedback",
+        json={"feedback_id": feedback_id, "rating": "negative"},
+    )
+    metrics_response = client.get("/api/company-knowledge/metrics")
+
+    assert answer_response.status_code == 200
+    assert feedback_response.status_code == 200, feedback_response.get_json()
+    assert duplicate_response.status_code == 409
+    assert metrics_response.status_code == 200
+    assert metrics_response.get_json()["answered"] == 1
+    assert metrics_response.get_json()["positive_feedback"] == 1
+    assert metrics_response.get_json()["positive_feedback_percent"] == 100.0
+    opgeslagen_metrics = (server.BEDRIJFSDOCUMENT_METRICS_PAD).read_text(encoding="utf-8")
+    assert "wat is het retourbeleid" not in opgeslagen_metrics
+    assert "Retour binnen 30 dagen" not in opgeslagen_metrics
+    assert "beleid.md" not in opgeslagen_metrics
+
+
+def test_company_knowledge_feedback_rejects_invalid_payloads(client):
+    invalid_rating = client.post(
+        "/api/company-knowledge/feedback",
+        json={"feedback_id": "a" * 32, "rating": "maybe"},
+    )
+    malformed_id = client.post(
+        "/api/company-knowledge/feedback",
+        json={"feedback_id": "../metrics", "rating": "positive"},
+    )
+
+    assert invalid_rating.status_code == 400
+    assert malformed_id.status_code == 400
 
 
 def test_company_knowledge_does_not_guess_without_matching_source(client, monkeypatch, tmp_path):
@@ -181,7 +243,7 @@ def test_company_knowledge_does_not_guess_without_matching_source(client, monkey
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "success"
-    assert "matching passage" in payload["message"].lower()
+    assert "matching passage" in payload["message"].lower() or "passend fragment" in payload["message"].lower()
     assert ai_calls == []
 
 
@@ -196,6 +258,587 @@ def configureer_demo_modus(monkeypatch):
     with server.DEMO_LOGIN_ATTEMPTS_LOCK:
         server.DEMO_LOGIN_ATTEMPTS.clear()
     return wachtwoord
+
+
+def configureer_enterprise_modus(monkeypatch, tmp_path):
+    sessiesleutel = "test-enterprise-sessiesleutel-met-minimaal-32-tekens"
+    monkeypatch.setattr(server, "ECHO_ENTERPRISE_MODE", True)
+    monkeypatch.setattr(server, "ECHO_ENTERPRISE_ADMIN_USERNAME", "platform-admin")
+    monkeypatch.setattr(server, "ECHO_ENTERPRISE_ADMIN_PASSWORD", "platform-admin-wachtwoord")
+    monkeypatch.setattr(server, "ECHO_ENTERPRISE_DATA_DIR", tmp_path / "enterprise-data")
+    monkeypatch.setattr(server, "ECHO_ENTERPRISE_DATABASE", tmp_path / "enterprise.sqlite3")
+    monkeypatch.setattr(server, "ECHO_SESSION_SECRET", sessiesleutel)
+    monkeypatch.setattr(server.app, "secret_key", sessiesleutel)
+    monkeypatch.setitem(server.app.config, "SESSION_COOKIE_SECURE", False)
+    with server.ENTERPRISE_LOGIN_ATTEMPTS_LOCK:
+        server.ENTERPRISE_LOGIN_ATTEMPTS.clear()
+
+
+def login_enterprise(client, username, password):
+    return client.post("/login", data={"username": username, "password": password})
+
+
+def create_enterprise_company(client, name, username, password):
+    return client.post(
+        "/api/admin/companies",
+        json={
+            "company_name": name,
+            "admin_username": username,
+            "admin_password": password,
+        },
+    )
+
+
+def test_enterprise_mode_requires_named_account_and_restricts_personal_api(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+
+    page_response = client.get("/")
+    settings_response = client.get("/api/instellingen")
+    admin_response = client.get("/api/admin/companies")
+    login_page = client.get("/login")
+
+    assert page_response.status_code == 302
+    assert page_response.headers["Location"].endswith("/login")
+    assert settings_response.status_code == 401
+    assert admin_response.status_code == 401
+    assert b"Gebruikersnaam" in login_page.data
+    assert b"Toegangscode" not in login_page.data
+
+
+def test_enterprise_platform_admin_creates_company_and_company_scoped_users(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login = login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    admin_page = client.get("/admin")
+    created = create_enterprise_company(
+        client,
+        "Bedrijf Een",
+        "bedrijf-een-admin",
+        "bedrijf-een-admin-wachtwoord",
+    )
+    company_id = created.get_json()["company"]["id"]
+    members = client.post(
+        "/api/admin/users",
+        json={
+            "username": "company-member",
+            "password": "company-member-wachtwoord",
+            "company_id": company_id,
+            "role": "company_admin",
+        },
+    )
+
+    assert login.status_code == 302
+    assert login.headers["Location"].endswith("/admin")
+    assert admin_page.status_code == 200
+    assert b"createCompanyForm" in admin_page.data
+    assert created.status_code == 201
+    assert created.get_json()["company"]["name"] == "Bedrijf Een"
+    assert created.get_json()["admin"]["username"] == "bedrijf-een-admin"
+    assert members.status_code == 201
+    assert members.get_json()["user"]["role"] == "company_admin"
+    assert client.get("/api/admin/companies").get_json()["companies"][0]["user_count"] == 2
+
+
+def test_enterprise_company_documents_and_metrics_are_isolated(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    company_a = create_enterprise_company(
+        client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord",
+    ).get_json()["company"]["id"]
+    company_b = create_enterprise_company(
+        client, "Bedrijf Twee", "bedrijf-twee-admin", "bedrijf-twee-admin-wachtwoord",
+    ).get_json()["company"]["id"]
+    docs_a = server.enterprise_documents_path(company_a)
+    docs_a.mkdir(parents=True, exist_ok=True)
+    (docs_a / "beleid.md").write_text(
+        "# Retourbeleid\nRetourtermijn voor het zilveren product is 47 dagen.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
+    monkeypatch.setattr(server, "vraag_online_ai_bericht", lambda *_args, **_kwargs: "De retourtermijn is 47 dagen [1].")
+
+    company_a_client = server.app.test_client()
+    company_b_client = server.app.test_client()
+    login_a = login_enterprise(company_a_client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    with company_a_client.session_transaction() as company_a_session:
+        company_a_user = server.enterprise_get_user(company_a_session.get("echo_enterprise_user_id"))
+    answer_a = company_a_client.post(
+        "/api/company-knowledge/query",
+        json={"question": "Wat is de retourtermijn van het zilveren product?"},
+    )
+    login_b = login_enterprise(company_b_client, "bedrijf-twee-admin", "bedrijf-twee-admin-wachtwoord")
+    answer_b = company_b_client.post(
+        "/api/company-knowledge/query",
+        json={"question": "Wat is de retourtermijn van het zilveren product?"},
+    )
+    documents_b = company_b_client.get("/api/company-knowledge/documents").get_json()
+    metrics_a = company_a_client.get("/api/company-knowledge/metrics").get_json()
+    metrics_b = company_b_client.get("/api/company-knowledge/metrics").get_json()
+
+    assert login_a.status_code == 302
+    assert login_b.status_code == 302
+    assert company_a_user["username"] == "bedrijf-een-admin"
+    assert company_a_user["company_id"] == company_a
+    assert answer_a.status_code == 200, answer_a.get_json()
+    assert "47 dagen" in answer_a.get_json()["answer"]
+    assert answer_a.get_json()["knowledge_status"] == "answered"
+    assert b"enterpriseDocumentsList" in company_a_client.get("/").data
+    assert answer_b.status_code == 200
+    assert answer_b.get_json()["knowledge_status"] == "no_sources"
+    assert "47 dagen" not in answer_b.get_json()["answer"]
+    assert documents_b["documents"] == []
+    assert metrics_a["answered"] == 1
+    assert metrics_b["no_sources"] == 1
+
+
+def test_enterprise_company_admin_can_upload_list_and_delete_safe_documents(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    company_id = create_enterprise_company(
+        client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord",
+    ).get_json()["company"]["id"]
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+
+    uploaded = client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"# Retourbeleid\nBinnen 30 dagen.\n"), "../../beleid.md")},
+        content_type="multipart/form-data",
+    )
+    listed = client.get("/api/company-knowledge/documents")
+    duplicate = client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"Vervangende tekst"), "beleid.md")},
+        content_type="multipart/form-data",
+    )
+    deleted = client.delete("/api/company-knowledge/documents/beleid.md")
+    listing_after_delete = client.get("/api/company-knowledge/documents").get_json()
+    audit_log = client.get("/api/admin/audit-log")
+    audit_events = audit_log.get_json()["events"]
+
+    assert uploaded.status_code == 201
+    assert uploaded.get_json()["document"]["name"] == "beleid.md"
+    assert uploaded.get_json()["document"]["size_bytes"] == len(b"# Retourbeleid\nBinnen 30 dagen.\n")
+    assert listed.status_code == 200
+    assert listed.get_json()["documents"][0]["name"] == "beleid.md"
+    assert "Binnen 30 dagen" not in listed.get_data(as_text=True)
+    assert duplicate.status_code == 409
+    assert deleted.status_code == 200
+    assert listing_after_delete["documents"] == []
+    assert not (tmp_path / "beleid.md").exists()
+    assert not (server.enterprise_documents_path(company_id) / "beleid.md").exists()
+    assert audit_log.status_code == 200
+    assert [event["action"] for event in audit_events[:2]] == ["document_deleted", "document_uploaded"]
+    assert all(event["actor_username"] == "bedrijf-een-admin" for event in audit_events[:2])
+    assert all(event["target"] == "beleid.md" for event in audit_events[:2])
+    assert "Binnen 30 dagen" not in audit_log.get_data(as_text=True)
+    with pytest.raises(ValueError):
+        server.enterprise_safe_document_path(company_id, "../outside.md")
+
+
+def test_enterprise_document_upload_rejects_unsupported_invalid_and_oversized_content(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    create_enterprise_company(client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+
+    unsupported = client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"no"), "beleid.pdf")},
+        content_type="multipart/form-data",
+    )
+    invalid_utf8 = client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"\xff\xfe"), "beleid.txt")},
+        content_type="multipart/form-data",
+    )
+    oversized = client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"x" * (server.MAX_BEDRIJFSDOCUMENT_GROOTTE + 1)), "groot.md")},
+        content_type="multipart/form-data",
+    )
+
+    assert unsupported.status_code == 400
+    assert invalid_utf8.status_code == 400
+    assert oversized.status_code == 413
+    assert client.get("/api/company-knowledge/documents").get_json()["documents"] == []
+
+
+def test_enterprise_document_upload_enforces_company_document_count(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    company_id = create_enterprise_company(
+        client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord",
+    ).get_json()["company"]["id"]
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    document_root = server.enterprise_documents_path(company_id)
+    document_root.mkdir(parents=True, exist_ok=True)
+    for index in range(server.MAX_BEDRIJFSDOCUMENTEN):
+        (document_root / f"policy-{index}.md").write_text("Policy text.", encoding="utf-8")
+
+    response = client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"New policy."), "new-policy.md")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 409
+    assert len(client.get("/api/company-knowledge/documents").get_json()["documents"]) == 100
+
+
+def test_enterprise_members_can_list_but_cannot_change_company_documents(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    create_enterprise_company(client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    created_member = client.post(
+        "/api/admin/users",
+        json={"username": "gebruiker-een", "password": "gebruiker-een-wachtwoord"},
+    )
+    admin_logout = client.post("/logout")
+    member_client = server.app.test_client()
+    login_member = login_enterprise(member_client, "gebruiker-een", "gebruiker-een-wachtwoord")
+    listed = member_client.get("/api/company-knowledge/documents")
+    upload = member_client.post(
+        "/api/company-knowledge/documents",
+        data={"document": (io.BytesIO(b"tekst"), "nieuw.txt")},
+        content_type="multipart/form-data",
+    )
+    delete = member_client.delete("/api/company-knowledge/documents/nieuw.txt")
+
+    assert created_member.status_code == 201
+    assert admin_logout.status_code == 302
+    assert login_member.status_code == 302
+    assert listed.status_code == 200
+    assert upload.status_code == 403
+    assert delete.status_code == 403
+
+
+def test_enterprise_company_admin_cannot_create_accounts_in_another_company(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    create_enterprise_company(client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    admin_page = client.get("/admin")
+
+    response = client.post(
+        "/api/admin/users",
+        json={
+            "username": "foreign-member",
+            "password": "foreign-member-wachtwoord",
+            "company_id": "a" * 32,
+        },
+    )
+
+    assert admin_page.status_code == 200
+    assert b"createUserForm" in admin_page.data
+    assert b"uploadCompanyDocumentForm" in admin_page.data
+    assert b"enterpriseAuditLog" in client.get("/admin").data
+    assert response.status_code == 403
+    assert response.get_json()["status"] == "error"
+
+
+def test_enterprise_member_cannot_manage_users_and_logout_revokes_access(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    created = create_enterprise_company(
+        client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord",
+    )
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    created_member = client.post(
+        "/api/admin/users",
+        json={"username": "gebruiker-een", "password": "gebruiker-een-wachtwoord"},
+    )
+    logout_admin = client.post("/logout")
+    login_member = login_enterprise(client, "gebruiker-een", "gebruiker-een-wachtwoord")
+    admin_page = client.get("/admin")
+    member_portal = client.get("/")
+    account_list = client.get("/api/admin/users")
+    logout_member = client.post("/logout")
+    after_logout = client.get("/api/company-knowledge/metrics")
+
+    assert created.status_code == 201
+    assert created_member.status_code == 201
+    assert logout_admin.status_code == 302
+    assert login_member.status_code == 302
+    assert admin_page.status_code == 403
+    assert member_portal.status_code == 200
+    assert account_list.status_code == 403
+    assert logout_member.status_code == 302
+    assert after_logout.status_code == 401
+
+
+def test_enterprise_company_admin_can_disable_own_member(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    create_enterprise_company(
+        client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord",
+    )
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    created_member = client.post(
+        "/api/admin/users",
+        json={"username": "uit-te-schakelen", "password": "lid-wachtwoord-langer-dan-12"},
+    )
+    member = next(
+        user for user in client.get("/api/admin/users").get_json()["users"]
+        if user["username"] == "uit-te-schakelen"
+    )
+    member_client = server.app.test_client()
+    login_member = login_enterprise(member_client, "uit-te-schakelen", "lid-wachtwoord-langer-dan-12")
+    disabled = client.patch(
+        f"/api/admin/users/{member['id']}/status",
+        json={"enabled": False},
+    )
+    audit_events = client.get("/api/admin/audit-log").get_json()["events"]
+    member_access = member_client.get("/api/company-knowledge/metrics")
+
+    assert created_member.status_code == 201
+    assert login_member.status_code == 302
+    assert disabled.status_code == 200
+    assert disabled.get_json()["enabled"] is False
+    assert member_access.status_code == 401
+    assert [event["action"] for event in audit_events[:2]] == ["account_disabled", "account_created"]
+    assert [event["target"] for event in audit_events[:2]] == ["uit-te-schakelen", "uit-te-schakelen"]
+
+
+def test_enterprise_audit_log_is_company_admin_only_and_company_scoped(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    create_enterprise_company(client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    create_enterprise_company(client, "Bedrijf Twee", "bedrijf-twee-admin", "bedrijf-twee-admin-wachtwoord")
+
+    company_a_client = server.app.test_client()
+    login_enterprise(company_a_client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    created = company_a_client.post(
+        "/api/admin/users",
+        json={"username": "audit-member", "password": "audit-member-wachtwoord"},
+    )
+    events_a = company_a_client.get("/api/admin/audit-log").get_json()["events"]
+    events_with_ignored_company_id = company_a_client.get(
+        "/api/admin/audit-log?company_id=not-a-company"
+    ).get_json()["events"]
+
+    member_client = server.app.test_client()
+    login_enterprise(member_client, "audit-member", "audit-member-wachtwoord")
+    denied = member_client.get("/api/admin/audit-log")
+
+    company_b_client = server.app.test_client()
+    login_enterprise(company_b_client, "bedrijf-twee-admin", "bedrijf-twee-admin-wachtwoord")
+    events_b = company_b_client.get("/api/admin/audit-log").get_json()["events"]
+
+    assert created.status_code == 201
+    assert events_a[0]["target"] == "audit-member"
+    assert events_with_ignored_company_id == events_a
+    assert denied.status_code == 403
+    assert client.get("/api/admin/audit-log").status_code == 403
+    assert all(event["target"] != "audit-member" for event in events_b)
+
+
+def test_enterprise_admin_password_reset_requires_password_change_and_revokes_sessions(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    create_enterprise_company(client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    login_enterprise(client, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    created = client.post(
+        "/api/admin/users",
+        json={"username": "wachtwoord-lid", "password": "oud-lid-wachtwoord"},
+    )
+    member = next(
+        user for user in client.get("/api/admin/users").get_json()["users"]
+        if user["username"] == "wachtwoord-lid"
+    )
+    member_client = server.app.test_client()
+    login_enterprise(member_client, "wachtwoord-lid", "oud-lid-wachtwoord")
+
+    reset = client.post(f"/api/admin/users/{member['id']}/password-reset", json={})
+    temporary_password = reset.get_json()["temporary_password"]
+    old_session_access = member_client.get("/api/company-knowledge/metrics")
+    old_password_login = login_enterprise(member_client, "wachtwoord-lid", "oud-lid-wachtwoord")
+    temporary_login = login_enterprise(member_client, "wachtwoord-lid", temporary_password)
+    blocked_api = member_client.get("/api/company-knowledge/metrics")
+    change_page = member_client.get("/account/change-password")
+    mismatched = member_client.post(
+        "/account/change-password",
+        data={"password": "nieuw-lid-wachtwoord", "confirm_password": "ander-lid-wachtwoord"},
+    )
+    changed = member_client.post(
+        "/account/change-password",
+        data={"password": "nieuw-lid-wachtwoord-veilig", "confirm_password": "nieuw-lid-wachtwoord-veilig"},
+    )
+    temporary_password_login = login_enterprise(
+        server.app.test_client(), "wachtwoord-lid", temporary_password,
+    )
+    new_password_client = server.app.test_client()
+    new_password_login = login_enterprise(
+        new_password_client, "wachtwoord-lid", "nieuw-lid-wachtwoord-veilig",
+    )
+    audit_actions = [
+        event["action"]
+        for event in client.get("/api/admin/audit-log").get_json()["events"]
+    ]
+
+    assert created.status_code == 201
+    assert reset.status_code == 200
+    assert reset.get_json()["must_change_password"] is True
+    assert len(temporary_password) >= 24
+    assert old_session_access.status_code == 401
+    assert old_password_login.status_code == 401
+    assert temporary_login.status_code == 302
+    assert temporary_login.headers["Location"].endswith("/account/change-password")
+    assert blocked_api.status_code == 403
+    assert change_page.status_code == 200
+    assert b"Stel je nieuwe wachtwoord in" in change_page.data
+    assert mismatched.status_code == 200
+    assert b"komen niet overeen" in mismatched.data
+    assert changed.status_code == 302
+    assert temporary_password_login.status_code == 401
+    assert new_password_login.status_code == 302
+    assert "password_changed" in audit_actions
+    assert "password_reset" in audit_actions
+
+    with server.enterprise_db_connect() as connection:
+        stored_hash = connection.execute(
+            "SELECT password_hash, must_change_password FROM users WHERE id = ?",
+            (member["id"],),
+        ).fetchone()
+    assert stored_hash["must_change_password"] == 0
+    assert server.check_password_hash(stored_hash["password_hash"], temporary_password) is False
+    assert server.check_password_hash(stored_hash["password_hash"], "nieuw-lid-wachtwoord-veilig")
+
+
+def test_enterprise_admin_password_reset_is_limited_to_managed_accounts(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+    company_a_id = create_enterprise_company(
+        client, "Bedrijf Een", "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord",
+    ).get_json()["company"]["id"]
+    company_b_id = create_enterprise_company(
+        client, "Bedrijf Twee", "bedrijf-twee-admin", "bedrijf-twee-admin-wachtwoord",
+    ).get_json()["company"]["id"]
+    member_b = client.post(
+        "/api/admin/users",
+        json={
+            "username": "ander-bedrijfslid",
+            "password": "ander-bedrijfslid-wachtwoord",
+            "company_id": company_b_id,
+            "role": "member",
+        },
+    )
+    member_b_id = next(
+        user["id"]
+        for user in client.get(f"/api/admin/users?company_id={company_b_id}").get_json()["users"]
+        if user["username"] == "ander-bedrijfslid"
+    )
+    company_a_admin_id = next(
+        user["id"]
+        for user in client.get(f"/api/admin/users?company_id={company_a_id}").get_json()["users"]
+        if user["username"] == "bedrijf-een-admin"
+    )
+    with server.enterprise_db_connect() as connection:
+        platform_admin_id = connection.execute(
+            "SELECT id FROM users WHERE role = 'superadmin'"
+        ).fetchone()["id"]
+
+    company_admin = server.app.test_client()
+    login_enterprise(company_admin, "bedrijf-een-admin", "bedrijf-een-admin-wachtwoord")
+    cross_company_reset = company_admin.post(
+        f"/api/admin/users/{member_b_id}/password-reset",
+        json={},
+    )
+    own_reset = company_admin.post(
+        f"/api/admin/users/{company_a_admin_id}/password-reset",
+        json={},
+    )
+    platform_admin_self_reset = client.post(
+        f"/api/admin/users/{platform_admin_id}/password-reset",
+        json={},
+    )
+
+    assert member_b.status_code == 201
+    assert cross_company_reset.status_code == 403
+    assert own_reset.status_code == 403
+    assert platform_admin_self_reset.status_code == 403
+
+
+def test_enterprise_database_migrates_existing_accounts_and_audit_log(monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    database = server.ECHO_ENTERPRISE_DATABASE
+    company_id = "a" * 32
+    old_audit_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE companies (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                company_id TEXT REFERENCES companies(id) ON DELETE CASCADE,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('superadmin', 'company_admin', 'member')),
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE enterprise_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                actor_username TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN (
+                    'company_created', 'member_created', 'member_enabled',
+                    'member_disabled', 'document_uploaded', 'document_deleted'
+                )),
+                target TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO companies VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Bedrijf Een', '2026-01-01T00:00:00+00:00');
+            INSERT INTO users VALUES ('admin-id', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bedrijf-admin', 'hash', 'company_admin', 1, '2026-01-01T00:00:00+00:00');
+            INSERT INTO enterprise_audit_log (company_id, actor_username, action, target, created_at)
+            VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bedrijf-admin', 'member_created', 'oud-lid', '2026-01-01T00:00:00+00:00');
+            """
+        )
+
+    server.initialize_enterprise_database()
+    server.initialize_enterprise_database()
+    with server.enterprise_db_connect() as connection:
+        user_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+        audit_rows = connection.execute(
+            "SELECT action, target FROM enterprise_audit_log"
+        ).fetchall()
+
+    assert {"must_change_password", "auth_version"}.issubset(user_columns)
+    assert [(row["action"], row["target"]) for row in audit_rows] == [("account_created", "oud-lid")]
+
+
+def test_enterprise_mode_requires_secure_cookie_for_network_bind(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    monkeypatch.setenv("ECHO_HOST", "0.0.0.0")
+    monkeypatch.setitem(server.app.config, "SESSION_COOKIE_SECURE", False)
+
+    response = client.get("/")
+
+    assert response.status_code == 503
+    assert b"ECHO_COOKIE_SECURE=true" in response.data
+
+
+def test_enterprise_mode_rejects_cross_origin_account_changes(client, monkeypatch, tmp_path):
+    configureer_enterprise_modus(monkeypatch, tmp_path)
+    login_enterprise(client, "platform-admin", "platform-admin-wachtwoord")
+
+    response = client.post(
+        "/api/admin/companies",
+        json={
+            "company_name": "Aanval",
+            "admin_username": "attacker-admin",
+            "admin_password": "attacker-admin-password",
+        },
+        headers={"Origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["status"] == "error"
 
 
 def test_demo_mode_requires_login_for_pages_and_api(client, monkeypatch):

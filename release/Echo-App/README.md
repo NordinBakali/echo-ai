@@ -161,6 +161,32 @@ Echo kan vragen beantwoorden op basis van uitsluitend Markdown- en tekstbestande
 
 Probeer bijvoorbeeld `vraag bedrijfsdocumenten: wat is het retourbeleid?` of klik op **Vraag de bedrijfsdocumenten** in Echo. Het voorbeeldbestand `bedrijfsdocumenten/voorbeeld-bedrijf.md` bevat fictief retourbeleid. Zet je goedgekeurde bedrijfsdocumenten in deze map om de demonstratie met je eigen toegestane voorbeeldmateriaal te personaliseren. Als Echo geen relevante bron vindt of er geen AI-model beschikbaar is, meldt het dat expliciet in plaats van een antwoord te verzinnen.
 
+Echo toont bij bedrijfskennis-antwoorden bronverwijzingen en vraagt of het antwoord nuttig was. Het kwaliteitsblok telt beantwoorde vragen, vragen zonder bron, modelproblemen en positieve/negatieve beoordelingen; het percentage is het aandeel positieve beoordelingen van alle ontvangen beoordelingen, geen automatische meting van feitelijke juistheid. Alleen aggregaten en tijdelijke, willekeurige feedback-ID's worden lokaal bewaard in `echo_knowledge_metrics.json`. Vraag-, antwoord- en documenttekst wordt niet in dit bestand opgeslagen. De laatste 500 feedback-ID's blijven beschikbaar; oudere onbeoordeelde feedback kan daardoor verlopen. Dit zijn lokale demonstratiemetrieken, geen onafhankelijke kwaliteits- of tijdsbesparingsmeting.
+
+## Gescheiden bedrijfsomgevingen (eerste versie)
+
+Voor een lokale proef met meerdere bedrijven kun je de bedrijfsomgeving inschakelen. Deze modus gebruikt accounts in plaats van één gedeelde toegangscode, heeft geen openbare registratie en beperkt elke bedrijfsaccount tot de eigen documenten, gebruikers en kwaliteitscijfers. Een platformbeheerder maakt bedrijven en de eerste bedrijfsbeheerder aan; bedrijfsbeheerders kunnen alleen medewerkers van hun eigen bedrijf toevoegen en uitschakelen. Medewerkers kunnen vragen stellen en feedback geven, maar geen accounts beheren. Persoonlijke Echo-modus en bedrijfsomgeving zijn bewust gescheiden.
+
+Stel vóór de eerste start lokale geheimen in (gebruik unieke wachtwoorden en commit ze nooit):
+
+```powershell
+$env:ECHO_ENTERPRISE_MODE = "true"
+$env:ECHO_ENTERPRISE_ADMIN_USERNAME = "platform-admin"
+$env:ECHO_ENTERPRISE_ADMIN_PASSWORD = "kies-een-uniek-wachtwoord-van-minimaal-12-tekens"
+$env:ECHO_SESSION_SECRET = (python -c "import secrets; print(secrets.token_urlsafe(48))")
+python server.py
+```
+
+De platformbeheerder wordt bij de eerste start aangemaakt in `enterprise-data/enterprise.sqlite3`; wachtwoorden worden gehasht opgeslagen. De omgeving luistert standaard alleen op localhost. Voor netwerkgebruik is HTTPS vereist: configureer een HTTPS-proxy en stel `ECHO_HOST=127.0.0.1` en `ECHO_COOKIE_SECURE=true` in. Als Echo direct op een netwerkinterface luistert, weigert de enterprise-modus te starten zonder Secure-cookies. Zet goedgekeurde `.md`- en `.txt`-bestanden handmatig in de documentenmap die bij het bedrijf wordt getoond. `ECHO_ENTERPRISE_DATA_DIR` en `ECHO_ENTERPRISE_DATABASE` kunnen worden gebruikt om de dataopslaglocatie te wijzigen. Metrics en SQLite-accountgegevens blijven lokaal onder de data-directory.
+
+Bedrijfsbeheerders beheren documenten via **Bedrijfsdocumenten beheren** in hun beheerpagina: één `.md`- of `.txt`-bestand per upload, UTF-8, maximaal 200 KB per bestand en 100 documenten per bedrijf. Bestaande bestandsnamen worden niet stilzwijgend overschreven; verwijder een oude versie eerst. Leden kunnen de documentlijst zien en ermee vragen stellen, maar niet uploaden of verwijderen. De documentlijst toont alleen naam, bestandsgrootte en wijzigingsdatum.
+
+De beheerpagina bevat ook een activiteitenlogboek met aanmaak van bedrijven/accounts, accountstatuswijzigingen en documentuploads/-verwijderingen. Alleen de bedrijfsbeheerder kan het logboek van het eigen bedrijf bekijken. Het logboek bewaart gebruikersnamen, actie, doel en tijdstip (geen wachtwoorden, vraag-/antwoordtekst of documentinhoud); per bedrijf blijven maximaal 500 activiteiten bewaard.
+
+Bedrijfsbeheerders kunnen het wachtwoord van een medewerker resetten. Echo toont dan één keer een willekeurig tijdelijk wachtwoord; geef dit rechtstreeks door via een vertrouwd kanaal. Bij de volgende login moet de medewerker een nieuw wachtwoord van minimaal 12 tekens kiezen. De reset meldt alle bestaande sessies van die account af en wordt zonder wachtwoordinhoud in het activiteitenlogboek vastgelegd. De resetfunctie verstuurt zelf geen e-mail.
+
+Dit is een eerste lokale multi-bedrijfsproef, geen volledige SaaS-beveiligingscertificering: accountuitnodigingen/e-mailverificatie, back-ups en externe databasehosting zijn nog niet inbegrepen. Publiceer de omgeving niet met echte vertrouwelijke documenten voordat die operationele onderdelen en je HTTPS/proxy-configuratie zijn gecontroleerd.
+
 ## Beschikbare commando's
 
 - `open youtube` - Opent YouTube

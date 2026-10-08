@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, g
 import ast
 import base64
 import copy
@@ -14,8 +14,10 @@ import os
 import json
 import platform
 import re
+import secrets
 import shutil
 import socket
+import sqlite3
 import ssl
 import subprocess
 import tempfile
@@ -28,6 +30,8 @@ from pathlib import Path
 import threading
 import time
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 try:
     import speech_recognition as sr
@@ -116,6 +120,8 @@ def registreer_demo_loginpoging(client_ip):
 
 @app.before_request
 def beveilig_demo_modus():
+    if ECHO_ENTERPRISE_MODE:
+        return beveilig_enterprise_modus()
     if not ECHO_DEMO_MODE:
         return None
 
@@ -152,11 +158,11 @@ def beveilig_demo_modus():
 @app.after_request
 def voeg_api_cors_headers_toe(response):
     pad = str(getattr(request, "path", "") or "")
-    if pad.startswith("/api/") and not ECHO_DEMO_MODE:
+    if pad.startswith("/api/") and not ECHO_DEMO_MODE and not ECHO_ENTERPRISE_MODE:
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    if ECHO_DEMO_MODE:
+    if ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -176,7 +182,12 @@ MAX_DOCUMENT_SNIPPETS = 3
 MAX_DOCUMENT_BESTANDSGROOTTE = 200_000
 MAX_BEDRIJFSDOCUMENTEN = 100
 MAX_BEDRIJFSDOCUMENT_SNIPPETS = 3
+MAX_BEDRIJFSDOCUMENT_GROOTTE = MAX_DOCUMENT_BESTANDSGROOTTE
+ENTERPRISE_DOCUMENT_UPLOAD_LOCK = threading.Lock()
 BEDRIJFSDOCUMENTEN_PAD = Path(__file__).resolve().parent / "bedrijfsdocumenten"
+BEDRIJFSDOCUMENT_METRICS_PAD = Path(__file__).resolve().parent / "echo_knowledge_metrics.json"
+BEDRIJFSDOCUMENT_FEEDBACK_MAX_ITEMS = 500
+BEDRIJFSDOCUMENT_METRICS_LOCK = threading.Lock()
 MAX_AUDIO_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_COMMAND_TEXT_CHARS = 1600
 MAX_QUICK_CHECK_URL_CHARS = 2048
@@ -246,6 +257,405 @@ DEMO_LOGIN_MAX_ATTEMPTS = 5
 DEMO_LOGIN_WINDOW_SECONDS = 300
 DEMO_LOGIN_ATTEMPTS = {}
 DEMO_LOGIN_ATTEMPTS_LOCK = threading.Lock()
+ECHO_ENTERPRISE_MODE = str(os.environ.get("ECHO_ENTERPRISE_MODE", "") or "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+ECHO_ENTERPRISE_ADMIN_USERNAME = str(os.environ.get("ECHO_ENTERPRISE_ADMIN_USERNAME", "") or "").strip()
+ECHO_ENTERPRISE_ADMIN_PASSWORD = str(os.environ.get("ECHO_ENTERPRISE_ADMIN_PASSWORD", "") or "")
+ECHO_ENTERPRISE_DATA_DIR = Path(
+    os.environ.get("ECHO_ENTERPRISE_DATA_DIR", str(Path(__file__).resolve().parent / "enterprise-data"))
+).resolve()
+ECHO_ENTERPRISE_DATABASE = Path(
+    os.environ.get("ECHO_ENTERPRISE_DATABASE", str(ECHO_ENTERPRISE_DATA_DIR / "enterprise.sqlite3"))
+).resolve()
+ENTERPRISE_LOGIN_ATTEMPTS = {}
+ENTERPRISE_LOGIN_ATTEMPTS_LOCK = threading.Lock()
+ENTERPRISE_AUDIT_ACTIONS = {
+    "company_created",
+    "account_created",
+    "account_enabled",
+    "account_disabled",
+    "password_reset",
+    "password_changed",
+    "document_uploaded",
+    "document_deleted",
+}
+ENTERPRISE_AUDIT_MAX_EVENTS = 500
+
+
+def enterprise_configuratiefout():
+    if not ECHO_ENTERPRISE_MODE:
+        return ""
+    if ECHO_DEMO_MODE:
+        return "Gebruik ECHO_ENTERPRISE_MODE niet tegelijk met ECHO_DEMO_MODE."
+    if len(ECHO_SESSION_SECRET) < 32:
+        return "Stel ECHO_SESSION_SECRET in op een willekeurige sleutel van minimaal 32 tekens."
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,80}", ECHO_ENTERPRISE_ADMIN_USERNAME):
+        return "Stel ECHO_ENTERPRISE_ADMIN_USERNAME in (3-80 letters, cijfers of ._@-)."
+    if len(ECHO_ENTERPRISE_ADMIN_PASSWORD) < 12:
+        return "Stel ECHO_ENTERPRISE_ADMIN_PASSWORD in op minimaal 12 tekens."
+    enterprise_host = str(os.environ.get("ECHO_HOST", "127.0.0.1") or "127.0.0.1").strip().lower()
+    if enterprise_host not in {"127.0.0.1", "localhost", "::1"} and not app.config.get("SESSION_COOKIE_SECURE"):
+        return "Gebruik HTTPS met ECHO_COOKIE_SECURE=true als ECHO_ENTERPRISE_MODE op een netwerkinterface luistert."
+    return ""
+
+
+def enterprise_db_connect():
+    ECHO_ENTERPRISE_DATABASE.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(ECHO_ENTERPRISE_DATABASE), timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def initialize_enterprise_database():
+    with enterprise_db_connect() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS companies (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                company_id TEXT REFERENCES companies(id) ON DELETE CASCADE,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('superadmin', 'company_admin', 'member')),
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
+                auth_version INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS users_company_id_idx ON users(company_id);
+            CREATE TABLE IF NOT EXISTS enterprise_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                actor_username TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN (
+                    'company_created', 'account_created', 'account_enabled',
+                    'account_disabled', 'password_reset', 'password_changed',
+                    'document_uploaded', 'document_deleted'
+                )),
+                target TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS enterprise_audit_company_id_id_idx
+                ON enterprise_audit_log(company_id, id DESC);
+            """
+        )
+        user_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "must_change_password" not in user_columns:
+            connection.execute(
+                "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+            )
+        if "auth_version" not in user_columns:
+            connection.execute(
+                "ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0"
+            )
+        audit_schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'enterprise_audit_log'"
+        ).fetchone()
+        if audit_schema and "password_reset" not in audit_schema["sql"]:
+            connection.execute("DROP INDEX IF EXISTS enterprise_audit_company_id_id_idx")
+            connection.execute("ALTER TABLE enterprise_audit_log RENAME TO enterprise_audit_log_legacy")
+            connection.execute(
+                """
+                CREATE TABLE enterprise_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                    actor_username TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK (action IN (
+                        'company_created', 'account_created', 'account_enabled',
+                        'account_disabled', 'password_reset', 'password_changed',
+                        'document_uploaded', 'document_deleted'
+                    )),
+                    target TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO enterprise_audit_log (id, company_id, actor_username, action, target, created_at)
+                SELECT id, company_id, actor_username,
+                       CASE action
+                           WHEN 'member_created' THEN 'account_created'
+                           WHEN 'member_enabled' THEN 'account_enabled'
+                           WHEN 'member_disabled' THEN 'account_disabled'
+                           ELSE action
+                       END,
+                       target, created_at
+                FROM enterprise_audit_log_legacy
+                """
+            )
+            connection.execute("DROP TABLE enterprise_audit_log_legacy")
+            connection.execute(
+                "CREATE INDEX enterprise_audit_company_id_id_idx ON enterprise_audit_log(company_id, id DESC)"
+            )
+        bootstrap = connection.execute(
+            "SELECT id FROM users WHERE role = 'superadmin' LIMIT 1"
+        ).fetchone()
+        if bootstrap is None:
+            connection.execute(
+                """
+                INSERT INTO users (id, company_id, username, password_hash, role, enabled, created_at)
+                VALUES (?, NULL, ?, ?, 'superadmin', 1, ?)
+                """,
+                (
+                    uuid.uuid4().hex,
+                    ECHO_ENTERPRISE_ADMIN_USERNAME,
+                    generate_password_hash(ECHO_ENTERPRISE_ADMIN_PASSWORD),
+                    datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                ),
+            )
+
+
+def enterprise_write_audit_event(connection, company_id, actor_username, action, target, created_at=None):
+    if action not in ENTERPRISE_AUDIT_ACTIONS:
+        raise ValueError("Unsupported enterprise audit action.")
+    timestamp = created_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
+    connection.execute(
+        """
+        INSERT INTO enterprise_audit_log
+            (company_id, actor_username, action, target, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            str(company_id),
+            str(actor_username)[:80],
+            action,
+            str(target)[:255],
+            timestamp,
+        ),
+    )
+    connection.execute(
+        """
+        DELETE FROM enterprise_audit_log
+        WHERE company_id = ? AND id NOT IN (
+            SELECT id FROM enterprise_audit_log
+            WHERE company_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+        )
+        """,
+        (str(company_id), str(company_id), ENTERPRISE_AUDIT_MAX_EVENTS),
+    )
+
+
+def enterprise_record_audit_event(company_id, actor_username, action, target, created_at=None):
+    with enterprise_db_connect() as connection:
+        enterprise_write_audit_event(
+            connection,
+            company_id,
+            actor_username,
+            action,
+            target,
+            created_at,
+        )
+
+
+def enterprise_get_user(user_id):
+    if not user_id:
+        return None
+    with enterprise_db_connect() as connection:
+        row = connection.execute(
+            """
+            SELECT users.id, users.company_id, users.username, users.role, users.enabled,
+                   users.must_change_password, users.auth_version, companies.name AS company_name
+            FROM users LEFT JOIN companies ON companies.id = users.company_id
+            WHERE users.id = ?
+            """,
+            (str(user_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def enterprise_current_user():
+    current = getattr(g, "enterprise_user", None)
+    if current is not None:
+        return current
+    current = enterprise_get_user(session.get("echo_enterprise_user_id"))
+    if (
+        current
+        and current["enabled"]
+        and session.get("echo_enterprise_auth_version") == current["auth_version"]
+    ):
+        g.enterprise_user = current
+        return current
+    return None
+
+
+def enterprise_documents_path(company_id):
+    if not re.fullmatch(r"[a-f0-9]{32}", str(company_id or "")):
+        raise ValueError("Ongeldige bedrijfs-ID.")
+    return ECHO_ENTERPRISE_DATA_DIR / "companies" / company_id / "bedrijfsdocumenten"
+
+
+def enterprise_document_records(company_id):
+    raw_root = enterprise_documents_path(company_id)
+    if raw_root.is_symlink():
+        raise OSError("The company document directory cannot be a symbolic link.")
+    root = raw_root.resolve()
+    if not root.exists():
+        return []
+    if not root.is_dir() or root.is_symlink():
+        raise OSError("The company document directory is not a safe directory.")
+
+    documents = []
+    for path in root.rglob("*"):
+        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {".md", ".txt"}:
+            continue
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        stat = resolved.stat()
+        documents.append({
+            "name": resolved.relative_to(root).as_posix(),
+            "size_bytes": stat.st_size,
+            "updated_at": datetime.datetime.fromtimestamp(
+                stat.st_mtime,
+                tz=datetime.timezone.utc,
+            ).isoformat(),
+        })
+    documents.sort(key=lambda item: item["name"].casefold())
+    return documents
+
+
+def enterprise_safe_document_path(company_id, document_name):
+    raw_root = enterprise_documents_path(company_id)
+    if raw_root.is_symlink():
+        raise ValueError("Company document directory is not safe.")
+    root = raw_root.resolve()
+    relative_path = Path(str(document_name or ""))
+    if relative_path.is_absolute() or not relative_path.parts or any(
+        part in {"", ".", ".."} for part in relative_path.parts
+    ):
+        raise ValueError("Invalid document path.")
+    candidate = root.joinpath(*relative_path.parts)
+    if candidate.is_symlink() or any(parent.is_symlink() for parent in candidate.parents if parent != root.parent):
+        raise ValueError("Symbolic links are not accepted as company documents.")
+    resolved = candidate.resolve(strict=False)
+    resolved.relative_to(root)
+    if resolved.suffix.lower() not in {".md", ".txt"}:
+        raise ValueError("Only Markdown and plain text documents are supported.")
+    return root, resolved
+
+
+def enterprise_metrics_path():
+    user = enterprise_current_user()
+    if ECHO_ENTERPRISE_MODE and user and user.get("company_id"):
+        return ECHO_ENTERPRISE_DATA_DIR / "companies" / user["company_id"] / "knowledge_metrics.json"
+    return BEDRIJFSDOCUMENT_METRICS_PAD
+
+
+def registreer_enterprise_loginpoging(client_ip):
+    nu = time.monotonic()
+    with ENTERPRISE_LOGIN_ATTEMPTS_LOCK:
+        pogingen = [
+            poging
+            for poging in ENTERPRISE_LOGIN_ATTEMPTS.get(client_ip, [])
+            if nu - poging < DEMO_LOGIN_WINDOW_SECONDS
+        ]
+        if len(pogingen) >= DEMO_LOGIN_MAX_ATTEMPTS:
+            ENTERPRISE_LOGIN_ATTEMPTS[client_ip] = pogingen
+            return False
+        pogingen.append(nu)
+        ENTERPRISE_LOGIN_ATTEMPTS[client_ip] = pogingen
+        while len(ENTERPRISE_LOGIN_ATTEMPTS) > 1024:
+            oudste_ip = min(ENTERPRISE_LOGIN_ATTEMPTS, key=lambda ip: ENTERPRISE_LOGIN_ATTEMPTS[ip][0])
+            ENTERPRISE_LOGIN_ATTEMPTS.pop(oudste_ip, None)
+        return True
+
+
+def beveilig_enterprise_modus():
+    g.enterprise_user = None
+    configuratiefout = enterprise_configuratiefout()
+    if configuratiefout:
+        if request.path.startswith("/api/"):
+            return jsonify({"status": "error", "message": configuratiefout}), 503
+        return render_template("login.html", fout=configuratiefout, enterprise_mode=True), 503
+
+    try:
+        initialize_enterprise_database()
+    except (OSError, sqlite3.Error):
+        app.logger.exception("Enterprise account database could not be initialized")
+        return jsonify({"status": "error", "message": "Enterprise account service is unavailable."}), 503
+
+    if request.endpoint in {"static", "service_worker", "demo_login"}:
+        return None
+
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("Origin", "").strip()
+        if origin and urlparse(origin).netloc.lower() != request.host.lower():
+            return jsonify({"status": "error", "message": "Cross-origin requests are not allowed."}), 403
+
+    user = enterprise_current_user()
+    if request.endpoint == "demo_logout":
+        if user:
+            return None
+        return jsonify({"status": "error", "message": "Login required.", "login_url": url_for("demo_login")}), 401
+    if request.endpoint == "demo_login":
+        return None
+    if user is None:
+        if request.path.startswith("/api/"):
+            return jsonify({"status": "error", "message": "Login required.", "login_url": url_for("demo_login")}), 401
+        return redirect(url_for("demo_login"))
+
+    if user["must_change_password"] and request.endpoint not in {
+        "enterprise_password_change",
+        "demo_logout",
+    }:
+        if request.path.startswith("/api/"):
+            return jsonify({
+                "status": "error",
+                "message": "Change your temporary password before continuing.",
+                "change_password_url": url_for("enterprise_password_change"),
+            }), 403
+        return redirect(url_for("enterprise_password_change"))
+
+    allowed = {
+        "index",
+        "enterprise_admin",
+        "enterprise_password_change",
+        "demo_logout",
+        "post_company_knowledge_query",
+        "get_company_knowledge_metrics",
+        "post_company_knowledge_feedback",
+        "enterprise_company_documents",
+        "enterprise_company_document_upload",
+        "enterprise_company_document_delete",
+        "enterprise_admin_audit_log",
+        "enterprise_admin_companies",
+        "enterprise_admin_users",
+        "enterprise_admin_user_status",
+        "enterprise_admin_user_password_reset",
+    }
+    if request.endpoint not in allowed:
+        if request.path.startswith("/api/"):
+            return jsonify({"status": "error", "message": "This feature is not available in enterprise workspace mode."}), 403
+        return "This feature is not available in enterprise workspace mode.", 403
+
+    if request.endpoint == "enterprise_admin" and user["role"] not in {"superadmin", "company_admin"}:
+        return "Administrator access required.", 403
+    if request.endpoint in {
+        "post_company_knowledge_query",
+        "get_company_knowledge_metrics",
+        "post_company_knowledge_feedback",
+        "enterprise_company_documents",
+        "enterprise_company_document_upload",
+        "enterprise_company_document_delete",
+    }:
+        if not user.get("company_id"):
+            return jsonify({"status": "error", "message": "A company workspace is required."}), 403
+    if request.endpoint in {"enterprise_company_document_upload", "enterprise_company_document_delete"}:
+        if user["role"] not in {"superadmin", "company_admin"}:
+            return jsonify({"status": "error", "message": "Company administrator access required."}), 403
+    return None
+
 
 # Standaard instellingen
 # Deze defaults worden gebruikt als het instellingenbestand velden mist.
@@ -8786,8 +9196,8 @@ def bedrijfsdocument_vraag_uit_commando(tekst):
     return str(match.group(1) or "").strip() if match else ""
 
 
-def iter_bedrijfsdocumenten():
-    basis_pad = Path(BEDRIJFSDOCUMENTEN_PAD).resolve()
+def iter_bedrijfsdocumenten(document_root=None):
+    basis_pad = Path(document_root or BEDRIJFSDOCUMENTEN_PAD).resolve()
     if not basis_pad.exists() or not basis_pad.is_dir():
         return
 
@@ -8808,13 +9218,14 @@ def iter_bedrijfsdocumenten():
         yield veilig_pad
 
 
-def bedrijfsdocument_snippets(vraag, max_snippets=MAX_BEDRIJFSDOCUMENT_SNIPPETS):
+def bedrijfsdocument_snippets(vraag, max_snippets=MAX_BEDRIJFSDOCUMENT_SNIPPETS, document_root=None):
     zoekwoorden = zoekwoorden_uit_tekst(vraag)
     if not zoekwoorden:
         return []
 
     kandidaten = []
-    for pad in iter_bedrijfsdocumenten() or ():
+    basis_pad = Path(document_root or BEDRIJFSDOCUMENTEN_PAD).resolve()
+    for pad in iter_bedrijfsdocumenten(basis_pad) or ():
         try:
             regels = pad.read_text(encoding="utf-8", errors="strict").splitlines()
         except (OSError, UnicodeError):
@@ -8856,7 +9267,7 @@ def bedrijfsdocument_snippets(vraag, max_snippets=MAX_BEDRIJFSDOCUMENT_SNIPPETS)
         score = beste_score * 10 + sum(inhoud_lower.count(woord) for woord in zoekwoorden[:5])
         kandidaten.append({
             "score": score,
-            "path": pad.relative_to(Path(BEDRIJFSDOCUMENTEN_PAD).resolve()).as_posix(),
+            "path": pad.relative_to(basis_pad).as_posix(),
             "line_start": begin + 1,
             "line_end": einde,
             "snippet": snippet,
@@ -8866,26 +9277,35 @@ def bedrijfsdocument_snippets(vraag, max_snippets=MAX_BEDRIJFSDOCUMENT_SNIPPETS)
     return kandidaten[:max_snippets]
 
 
-def vraag_bedrijfsdocumenten(vraag):
+def vraag_bedrijfsdocumenten(vraag, document_root=None):
     vraag = str(vraag or "").strip()
     if not vraag:
-        return tekst_voor_taal(
-            "Stel een vraag na de dubbele punt, bijvoorbeeld: ask company documents: what is the return policy?",
-            "Stel een vraag na de dubbele punt, bijvoorbeeld: vraag bedrijfsdocumenten: wat is het retourbeleid?",
-        )
+        return {
+            "answer": tekst_voor_taal(
+                "Stel een vraag na de dubbele punt, bijvoorbeeld: ask company documents: what is the return policy?",
+                "Stel een vraag na de dubbele punt, bijvoorbeeld: vraag bedrijfsdocumenten: wat is het retourbeleid?",
+            ),
+            "status": "invalid_question",
+        }
 
-    bronnen = bedrijfsdocument_snippets(vraag)
+    bronnen = bedrijfsdocument_snippets(vraag, document_root=document_root)
     if not bronnen:
-        return tekst_voor_taal(
-            "I could not find a matching passage in the .md or .txt files in the bedrijfsdocumenten folder. Add relevant documents there and try again.",
-            "Ik vond geen passend fragment in de .md- of .txt-bestanden in de map bedrijfsdocumenten. Voeg daar relevante documenten toe en probeer het opnieuw.",
-        )
+        return {
+            "answer": tekst_voor_taal(
+                "I could not find a matching passage in the .md or .txt files in the bedrijfsdocumenten folder. Add relevant documents there and try again.",
+                "Ik vond geen passend fragment in de .md- of .txt-bestanden in de map bedrijfsdocumenten. Voeg daar relevante documenten toe en probeer het opnieuw.",
+            ),
+            "status": "no_sources",
+        }
 
     if not online_ai_beschikbaar():
-        return tekst_voor_taal(
-            "I found relevant company documents, but no AI model is connected to form an answer. Connect an AI model and try again.",
-            "Ik vond relevante bedrijfsdocumenten, maar er is geen AI-model verbonden om een antwoord te maken. Verbind een AI-model en probeer het opnieuw.",
-        )
+        return {
+            "answer": tekst_voor_taal(
+                "I found relevant company documents, but no AI model is connected to form an answer. Connect an AI model and try again.",
+                "Ik vond relevante bedrijfsdocumenten, maar er is geen AI-model verbonden om een antwoord te maken. Verbind een AI-model en probeer het opnieuw.",
+            ),
+            "status": "model_unavailable",
+        }
 
     bronregels = []
     for index, bron in enumerate(bronnen, start=1):
@@ -8909,12 +9329,25 @@ def vraag_bedrijfsdocumenten(vraag):
             ),
         },
     ]
-    antwoord = str(vraag_online_ai_bericht(berichten, temperatuur=0.1) or "").strip()
+    try:
+        antwoord = str(vraag_online_ai_bericht(berichten, temperatuur=0.1) or "").strip()
+    except Exception:
+        app.logger.exception("Company-knowledge model request failed")
+        return {
+            "answer": tekst_voor_taal(
+                "The AI model request failed. Please try again.",
+                "Het verzoek aan het AI-model is mislukt. Probeer het opnieuw.",
+            ),
+            "status": "model_error",
+        }
     if not antwoord:
-        return tekst_voor_taal(
-            "The AI model did not return an answer. Please try again.",
-            "Het AI-model gaf geen antwoord terug. Probeer het opnieuw.",
-        )
+        return {
+            "answer": tekst_voor_taal(
+                "The AI model did not return an answer. Please try again.",
+                "Het AI-model gaf geen antwoord terug. Probeer het opnieuw.",
+            ),
+            "status": "model_error",
+        }
 
     geldige_bron_nummers = {str(index) for index in range(1, len(bronnen) + 1)}
     antwoord = re.sub(
@@ -8926,7 +9359,134 @@ def vraag_bedrijfsdocumenten(vraag):
         f"[{index}] {bron['path']}:{bron['line_start']}-{bron['line_end']}"
         for index, bron in enumerate(bronnen, start=1)
     )
-    return antwoord + "\n\n" + tekst_voor_taal("Bronnen:\n", "Bronnen:\n") + bronvermelding
+    return {
+        "answer": antwoord + "\n\n" + tekst_voor_taal("Bronnen:\n", "Bronnen:\n") + bronvermelding,
+        "status": "answered",
+    }
+
+
+def standaard_bedrijfskennis_metrics():
+    return {
+        "schema_version": 1,
+        "totals": {
+            "answered": 0,
+            "no_sources": 0,
+            "model_unavailable": 0,
+            "model_error": 0,
+            "positive": 0,
+            "negative": 0,
+        },
+        "feedback": {},
+    }
+
+
+def laad_bedrijfskennis_metrics(storage_path=None):
+    pad = Path(storage_path or BEDRIJFSDOCUMENT_METRICS_PAD)
+    try:
+        data = json.loads(pad.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return standaard_bedrijfskennis_metrics()
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Bedrijfskennis-statistieken konden niet veilig worden gelezen.") from exc
+
+    if not isinstance(data, dict) or not isinstance(data.get("totals"), dict) or not isinstance(data.get("feedback"), dict):
+        raise RuntimeError("Bedrijfskennis-statistieken hebben een ongeldig formaat.")
+
+    standaard = standaard_bedrijfskennis_metrics()
+    for sleutel in standaard["totals"]:
+        waarde = data["totals"].get(sleutel, 0)
+        if not isinstance(waarde, int) or waarde < 0:
+            raise RuntimeError("Bedrijfskennis-statistieken bevatten een ongeldige teller.")
+        standaard["totals"][sleutel] = waarde
+
+    for feedback_id, waardering in data["feedback"].items():
+        if (
+            not re.fullmatch(r"[a-f0-9]{32}", str(feedback_id))
+            or not isinstance(waardering, str)
+            or waardering not in {"pending", "positive", "negative"}
+        ):
+            raise RuntimeError("Bedrijfskennis-statistieken bevatten ongeldige feedbackgegevens.")
+        standaard["feedback"][feedback_id] = waardering
+    return standaard
+
+
+def sla_bedrijfskennis_metrics_op(metrics, storage_path=None):
+    doel_pad = Path(storage_path or BEDRIJFSDOCUMENT_METRICS_PAD)
+    doel_pad.parent.mkdir(parents=True, exist_ok=True)
+    tijdelijk_pad = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=doel_pad.parent,
+            prefix=doel_pad.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as tijdelijk_bestand:
+            tijdelijk_pad = Path(tijdelijk_bestand.name)
+            json.dump(metrics, tijdelijk_bestand, ensure_ascii=False, separators=(",", ":"))
+            tijdelijk_bestand.flush()
+            os.fsync(tijdelijk_bestand.fileno())
+        os.replace(tijdelijk_pad, doel_pad)
+    finally:
+        if tijdelijk_pad is not None:
+            tijdelijk_pad.unlink(missing_ok=True)
+
+
+def bedrijfskennis_metrics_payload(metrics):
+    totalen = metrics["totals"]
+    aantal_beoordelingen = totalen["positive"] + totalen["negative"]
+    totaal_vragen = totalen["answered"] + totalen["no_sources"] + totalen["model_unavailable"] + totalen["model_error"]
+    return {
+        "status": "success",
+        "privacy": "Alleen totalen en willekeurige feedback-ID's worden opgeslagen; geen vraag-, antwoord- of documenttekst.",
+        "total_questions": totaal_vragen,
+        "answered": totalen["answered"],
+        "no_sources": totalen["no_sources"],
+        "model_unavailable": totalen["model_unavailable"],
+        "model_error": totalen["model_error"],
+        "positive_feedback": totalen["positive"],
+        "negative_feedback": totalen["negative"],
+        "feedback_count": aantal_beoordelingen,
+        "positive_feedback_percent": round(totalen["positive"] * 100 / aantal_beoordelingen, 1) if aantal_beoordelingen else None,
+    }
+
+
+def registreer_bedrijfskennis_resultaat(status, storage_path=None):
+    if status not in {"answered", "no_sources", "model_unavailable", "model_error"}:
+        raise ValueError("Ongeldige bedrijfskennis-status.")
+    with BEDRIJFSDOCUMENT_METRICS_LOCK:
+        metrics = laad_bedrijfskennis_metrics(storage_path)
+        metrics["totals"][status] += 1
+        feedback_id = ""
+        if status == "answered":
+            feedback_id = uuid.uuid4().hex
+            metrics["feedback"][feedback_id] = "pending"
+            while len(metrics["feedback"]) > BEDRIJFSDOCUMENT_FEEDBACK_MAX_ITEMS:
+                oudste_id = next(iter(metrics["feedback"]))
+                metrics["feedback"].pop(oudste_id)
+        sla_bedrijfskennis_metrics_op(metrics, storage_path)
+        return feedback_id
+
+
+def registreer_bedrijfskennis_feedback(feedback_id, beoordeling, storage_path=None):
+    if not re.fullmatch(r"[a-f0-9]{32}", str(feedback_id or "")):
+        return "invalid"
+    if beoordeling not in {"positive", "negative"}:
+        return "invalid"
+
+    with BEDRIJFSDOCUMENT_METRICS_LOCK:
+        metrics = laad_bedrijfskennis_metrics(storage_path)
+        bestaande_beoordeling = metrics["feedback"].get(feedback_id)
+        if bestaande_beoordeling is None:
+            return "not_found"
+        if bestaande_beoordeling != "pending":
+            return "duplicate"
+
+        metrics["feedback"][feedback_id] = beoordeling
+        metrics["totals"][beoordeling] += 1
+        sla_bedrijfskennis_metrics_op(metrics, storage_path)
+        return "saved"
 
 
 def blok_recente_gesprekken():
@@ -16981,8 +17541,32 @@ def voer_commando_uit(tekst, spreek_hardop=True):
     bedrijfsdocument_vraag = bedrijfsdocument_vraag_uit_commando(tekst)
     if bedrijfsdocument_vraag:
         update_routering_context("answer", "company_knowledge", "knowledge", "searching")
-        bericht = vraag_bedrijfsdocumenten(bedrijfsdocument_vraag)
-        update_routering_context("answer", "company_knowledge", "knowledge", "answered")
+        resultaat = vraag_bedrijfsdocumenten(bedrijfsdocument_vraag)
+        feedback_id = ""
+        metrics_available = True
+        try:
+            feedback_id = registreer_bedrijfskennis_resultaat(resultaat["status"])
+        except (OSError, RuntimeError, ValueError):
+            app.logger.exception("Company-knowledge metrics could not be recorded")
+            metrics_available = False
+
+        bericht = resultaat["answer"]
+        if not metrics_available:
+            bericht += "\n\n" + tekst_voor_taal(
+                "Quality metrics are temporarily unavailable.",
+                "Kwaliteitsmetingen zijn tijdelijk niet beschikbaar.",
+            )
+        update_routering_context(
+            "answer",
+            "company_knowledge",
+            "knowledge",
+            resultaat["status"],
+            metrics={
+                "knowledge_status": resultaat["status"],
+                "feedback_id": feedback_id,
+                "metrics_available": metrics_available,
+            },
+        )
         return finaliseer_commando_antwoord(tekst, bericht, spreek_hardop)
 
     geheugen_bericht = behandel_geheugen_commando(tekst)
@@ -17953,6 +18537,15 @@ def start_quick_checker_scan_taak(doel_url, scan_mode, client_sleutel):
 # Web-UI entrypoint.
 @app.route('/')
 def index():
+    if ECHO_ENTERPRISE_MODE:
+        gebruiker = enterprise_current_user()
+        if gebruiker and gebruiker["role"] == "superadmin":
+            return redirect(url_for("enterprise_admin"))
+        return render_template(
+            "enterprise.html",
+            gebruiker=gebruiker,
+            beheerder=bool(gebruiker and gebruiker["role"] == "company_admin"),
+        )
     return render_template(
         'index.html',
         instellingen=instellingen,
@@ -17962,8 +18555,114 @@ def index():
     )
 
 
+@app.route('/admin')
+def enterprise_admin():
+    gebruiker = enterprise_current_user()
+    if not ECHO_ENTERPRISE_MODE or not gebruiker or gebruiker["role"] not in {"superadmin", "company_admin"}:
+        return "Administrator access required.", 403
+    return render_template("enterprise_admin.html", gebruiker=gebruiker)
+
+
+@app.route('/account/change-password', methods=['GET', 'POST'])
+def enterprise_password_change():
+    gebruiker = enterprise_current_user()
+    if not ECHO_ENTERPRISE_MODE or not gebruiker:
+        return redirect(url_for("demo_login"))
+    if not gebruiker["must_change_password"]:
+        return redirect(url_for("index"))
+    fout = ""
+    if request.method == "POST":
+        wachtwoord = request.form.get("password", "")
+        bevestiging = request.form.get("confirm_password", "")
+        if not 12 <= len(wachtwoord) <= 256:
+            fout = "Kies een wachtwoord van 12 tot 256 tekens."
+        elif wachtwoord != bevestiging:
+            fout = "De wachtwoorden komen niet overeen."
+        else:
+            try:
+                with enterprise_db_connect() as connection:
+                    current_credentials = connection.execute(
+                        "SELECT password_hash FROM users WHERE id = ? AND must_change_password = 1",
+                        (gebruiker["id"],),
+                    ).fetchone()
+                    if not current_credentials:
+                        return redirect(url_for("demo_login"))
+                    if check_password_hash(current_credentials["password_hash"], wachtwoord):
+                        fout = "Kies een ander wachtwoord dan het tijdelijke wachtwoord."
+                        return render_template("enterprise_change_password.html", gebruiker=gebruiker, fout=fout)
+                    changed = connection.execute(
+                        """
+                        UPDATE users
+                        SET password_hash = ?, must_change_password = 0,
+                            auth_version = auth_version + 1
+                        WHERE id = ? AND must_change_password = 1
+                        """,
+                        (generate_password_hash(wachtwoord), gebruiker["id"]),
+                    )
+                    if changed.rowcount != 1:
+                        return redirect(url_for("demo_login"))
+                    enterprise_write_audit_event(
+                        connection,
+                        gebruiker["company_id"],
+                        gebruiker["username"],
+                        "password_changed",
+                        gebruiker["username"],
+                    )
+                    updated_user = connection.execute(
+                        "SELECT auth_version FROM users WHERE id = ?",
+                        (gebruiker["id"],),
+                    ).fetchone()
+                session["echo_enterprise_auth_version"] = updated_user["auth_version"]
+                return redirect(url_for("enterprise_admin" if gebruiker["role"] in {"superadmin", "company_admin"} else "index"))
+            except (OSError, sqlite3.Error, ValueError):
+                app.logger.exception("Could not change temporary enterprise password")
+                fout = "Het wachtwoord kon niet worden gewijzigd. Probeer het opnieuw."
+    return render_template("enterprise_change_password.html", gebruiker=gebruiker, fout=fout)
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def demo_login():
+    if ECHO_ENTERPRISE_MODE:
+        fout = ""
+        status = 200
+        if request.method == "POST":
+            client_ip = request.remote_addr or "unknown"
+            if not registreer_enterprise_loginpoging(client_ip):
+                fout = "Te veel mislukte pogingen. Probeer het over vijf minuten opnieuw."
+                status = 429
+            else:
+                gebruikersnaam = request.form.get("username", "").strip()
+                wachtwoord = request.form.get("password", "")
+                if len(gebruikersnaam) > 80 or len(wachtwoord) > 256:
+                    fout = "Gebruikersnaam of wachtwoord klopt niet."
+                    status = 401
+                    return render_template("login.html", fout=fout, enterprise_mode=True), status
+                try:
+                    with enterprise_db_connect() as connection:
+                        user = connection.execute(
+                            """
+                            SELECT id, password_hash, role, enabled, must_change_password, auth_version
+                            FROM users WHERE username = ? COLLATE NOCASE
+                            """,
+                            (gebruikersnaam,),
+                        ).fetchone()
+                except (OSError, sqlite3.Error):
+                    app.logger.exception("Enterprise login database query failed")
+                    return "Account service is temporarily unavailable.", 503
+
+                if user and user["enabled"] and check_password_hash(user["password_hash"], wachtwoord):
+                    with ENTERPRISE_LOGIN_ATTEMPTS_LOCK:
+                        ENTERPRISE_LOGIN_ATTEMPTS.pop(client_ip, None)
+                    session.clear()
+                    session["echo_enterprise_user_id"] = user["id"]
+                    session["echo_enterprise_auth_version"] = user["auth_version"]
+                    if user["must_change_password"]:
+                        return redirect(url_for("enterprise_password_change"))
+                    return redirect(url_for("enterprise_admin" if user["role"] in {"superadmin", "company_admin"} else "index"))
+                fout = "Gebruikersnaam of wachtwoord klopt niet."
+                status = 401
+        return render_template("login.html", fout=fout, enterprise_mode=True), status
+
     if not ECHO_DEMO_MODE:
         return "", 404
 
@@ -17990,7 +18689,7 @@ def demo_login():
 
 @app.route('/logout', methods=['POST'])
 def demo_logout():
-    if not ECHO_DEMO_MODE:
+    if not ECHO_DEMO_MODE and not ECHO_ENTERPRISE_MODE:
         return "", 404
     session.clear()
     return redirect(url_for("demo_login"))
@@ -18319,6 +19018,533 @@ def get_settings():
 @app.route('/api/dashboard', methods=['GET'])
 def get_dashboard():
     return jsonify(maak_dashboard_payload())
+
+
+@app.route('/api/company-knowledge/metrics', methods=['GET'])
+def get_company_knowledge_metrics():
+    try:
+        with BEDRIJFSDOCUMENT_METRICS_LOCK:
+            metrics = laad_bedrijfskennis_metrics(enterprise_metrics_path())
+            payload = bedrijfskennis_metrics_payload(metrics)
+    except (OSError, RuntimeError):
+        app.logger.exception("Company-knowledge metrics could not be loaded")
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal(
+                "Quality metrics are temporarily unavailable.",
+                "Kwaliteitsmetingen zijn tijdelijk niet beschikbaar.",
+            ),
+        }), 503
+    return jsonify(payload)
+
+
+@app.route('/api/company-knowledge/feedback', methods=['POST'])
+def post_company_knowledge_feedback():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("Invalid JSON payload.", "Ongeldige JSON-payload."),
+        }), 400
+
+    feedback_id = data.get("feedback_id")
+    beoordeling = data.get("rating")
+    if beoordeling not in {"positive", "negative"}:
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("Rating must be positive or negative.", "Beoordeling moet positief of negatief zijn."),
+        }), 400
+
+    try:
+        resultaat = registreer_bedrijfskennis_feedback(
+            feedback_id,
+            beoordeling,
+            enterprise_metrics_path(),
+        )
+    except (OSError, RuntimeError):
+        app.logger.exception("Company-knowledge feedback could not be recorded")
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal(
+                "Feedback could not be saved. Please try again.",
+                "Feedback kon niet worden opgeslagen. Probeer het opnieuw.",
+            ),
+        }), 503
+
+    if resultaat == "invalid":
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("Invalid feedback ID or rating.", "Ongeldige feedback-ID of beoordeling."),
+        }), 400
+    if resultaat == "not_found":
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("This feedback request has expired.", "Deze feedbackmogelijkheid is verlopen."),
+        }), 404
+    if resultaat == "duplicate":
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("Feedback has already been submitted.", "Feedback is al verstuurd."),
+        }), 409
+    return jsonify({"status": "success"})
+
+
+@app.route('/api/company-knowledge/query', methods=['POST'])
+def post_company_knowledge_query():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"status": "error", "message": "Invalid JSON payload."}), 400
+    vraag = str(data.get("question", "") or "").strip()
+    if not vraag:
+        return jsonify({"status": "error", "message": "Enter a question for the company documents."}), 400
+    if len(vraag) > 1200:
+        return jsonify({"status": "error", "message": "Question is too long (max 1200 characters)."}), 413
+
+    gebruiker = enterprise_current_user()
+    if not gebruiker or not gebruiker.get("company_id"):
+        return jsonify({"status": "error", "message": "A company workspace is required."}), 403
+    try:
+        resultaat = vraag_bedrijfsdocumenten(
+            vraag,
+            document_root=enterprise_documents_path(gebruiker["company_id"]),
+        )
+    except (OSError, RuntimeError, ValueError):
+        app.logger.exception("Company document query failed")
+        return jsonify({"status": "error", "message": "Company documents could not be searched."}), 503
+
+    feedback_id = ""
+    metrics_available = True
+    try:
+        feedback_id = registreer_bedrijfskennis_resultaat(
+            resultaat["status"],
+            enterprise_metrics_path(),
+        )
+    except (OSError, RuntimeError, ValueError):
+        app.logger.exception("Company-knowledge metrics could not be recorded")
+        metrics_available = False
+
+    answer = resultaat["answer"]
+    if not metrics_available:
+        answer += "\n\n" + "Kwaliteitsmetingen zijn tijdelijk niet beschikbaar."
+    return jsonify({
+        "status": "success",
+        "answer": answer,
+        "knowledge_status": resultaat["status"],
+        "feedback_id": feedback_id,
+        "metrics_available": metrics_available,
+    })
+
+
+@app.route('/api/admin/audit-log', methods=['GET'])
+def enterprise_admin_audit_log():
+    gebruiker = enterprise_current_user()
+    if not gebruiker or gebruiker["role"] != "company_admin":
+        return jsonify({"status": "error", "message": "Company administrator access required."}), 403
+    try:
+        with enterprise_db_connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT actor_username, action, target, created_at
+                FROM enterprise_audit_log
+                WHERE company_id = ?
+                ORDER BY id DESC
+                LIMIT 100
+                """,
+                (gebruiker["company_id"],),
+            ).fetchall()
+    except (OSError, sqlite3.Error):
+        app.logger.exception("Could not retrieve enterprise audit log")
+        return jsonify({"status": "error", "message": "The activity log is unavailable."}), 503
+    return jsonify({
+        "status": "success",
+        "events": [dict(row) for row in rows],
+        "max_retained_events": ENTERPRISE_AUDIT_MAX_EVENTS,
+    })
+
+
+@app.route('/api/company-knowledge/documents', methods=['GET'])
+def enterprise_company_documents():
+    gebruiker = enterprise_current_user()
+    if not gebruiker or not gebruiker.get("company_id"):
+        return jsonify({"status": "error", "message": "A company workspace is required."}), 403
+    try:
+        documents = enterprise_document_records(gebruiker["company_id"])
+    except (OSError, ValueError):
+        app.logger.exception("Could not list company documents")
+        return jsonify({"status": "error", "message": "Company documents could not be listed."}), 503
+    return jsonify({
+        "status": "success",
+        "documents": documents,
+        "max_documents": MAX_BEDRIJFSDOCUMENTEN,
+        "max_file_bytes": MAX_BEDRIJFSDOCUMENT_GROOTTE,
+    })
+
+
+@app.route('/api/company-knowledge/documents', methods=['POST'])
+def enterprise_company_document_upload():
+    gebruiker = enterprise_current_user()
+    if not gebruiker or not gebruiker.get("company_id"):
+        return jsonify({"status": "error", "message": "A company workspace is required."}), 403
+    max_request_bytes = MAX_BEDRIJFSDOCUMENT_GROOTTE + 64 * 1024
+    if request.content_length is not None and request.content_length > max_request_bytes:
+        return jsonify({"status": "error", "message": "Document upload is too large (max 200 KB)."}), 413
+    uploads = request.files.getlist("document")
+    if len(uploads) != 1:
+        return jsonify({"status": "error", "message": "Upload exactly one document at a time."}), 400
+
+    upload = uploads[0]
+    safe_name = secure_filename(Path(upload.filename or "").name)
+    suffix = Path(safe_name).suffix.lower()
+    if not safe_name or suffix not in {".md", ".txt"}:
+        return jsonify({"status": "error", "message": "Only .md and .txt files are supported."}), 400
+    content = upload.stream.read(MAX_BEDRIJFSDOCUMENT_GROOTTE + 1)
+    if not content:
+        return jsonify({"status": "error", "message": "The document is empty."}), 400
+    if len(content) > MAX_BEDRIJFSDOCUMENT_GROOTTE:
+        return jsonify({"status": "error", "message": "Document upload is too large (max 200 KB)."}), 413
+    try:
+        decoded = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return jsonify({"status": "error", "message": "Documents must use UTF-8 text encoding."}), 400
+    if "\x00" in decoded:
+        return jsonify({"status": "error", "message": "Binary content is not accepted."}), 400
+
+    company_id = gebruiker["company_id"]
+    temporary_path = None
+    try:
+        with ENTERPRISE_DOCUMENT_UPLOAD_LOCK:
+            documents = enterprise_document_records(company_id)
+            if len(documents) >= MAX_BEDRIJFSDOCUMENTEN:
+                return jsonify({"status": "error", "message": "This company already has the maximum of 100 documents."}), 409
+            if any(document["name"].casefold() == safe_name.casefold() for document in documents):
+                return jsonify({"status": "error", "message": "A document with that filename already exists."}), 409
+            root = enterprise_documents_path(company_id).resolve()
+            root.mkdir(parents=True, exist_ok=True)
+            destination = root / safe_name
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=root,
+                prefix=".upload-",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(content)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            try:
+                os.link(temporary_path, destination)
+            except FileExistsError:
+                return jsonify({"status": "error", "message": "A document with that filename already exists."}), 409
+            temporary_path.unlink()
+            temporary_path = None
+            record = next(
+                item for item in enterprise_document_records(company_id)
+                if item["name"] == safe_name
+            )
+    except (OSError, ValueError, StopIteration):
+        app.logger.exception("Could not save company document")
+        return jsonify({"status": "error", "message": "The document could not be saved."}), 503
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+    try:
+        enterprise_record_audit_event(
+            company_id,
+            gebruiker["username"],
+            "document_uploaded",
+            safe_name,
+        )
+    except (OSError, sqlite3.Error, ValueError):
+        app.logger.exception("Uploaded company document could not be recorded in the audit log")
+        return jsonify({
+            "status": "error",
+            "message": "The document was uploaded, but its activity could not be recorded. Contact the platform administrator.",
+        }), 503
+    return jsonify({"status": "success", "document": record}), 201
+
+
+@app.route('/api/company-knowledge/documents/<path:document_name>', methods=['DELETE'])
+def enterprise_company_document_delete(document_name):
+    gebruiker = enterprise_current_user()
+    if not gebruiker or not gebruiker.get("company_id"):
+        return jsonify({"status": "error", "message": "A company workspace is required."}), 403
+    try:
+        _root, document_path = enterprise_safe_document_path(
+            gebruiker["company_id"],
+            document_name,
+        )
+        if not document_path.exists() or not document_path.is_file():
+            return jsonify({"status": "error", "message": "Document not found."}), 404
+        document_path.unlink()
+    except ValueError:
+        return jsonify({"status": "error", "message": "Invalid document path."}), 400
+    except OSError:
+        app.logger.exception("Could not delete company document")
+        return jsonify({"status": "error", "message": "The document could not be deleted."}), 503
+    try:
+        enterprise_record_audit_event(
+            gebruiker["company_id"],
+            gebruiker["username"],
+            "document_deleted",
+            document_name,
+        )
+    except (OSError, sqlite3.Error, ValueError):
+        app.logger.exception("Deleted company document could not be recorded in the audit log")
+        return jsonify({
+            "status": "error",
+            "message": "The document was deleted, but its activity could not be recorded. Contact the platform administrator.",
+        }), 503
+    return jsonify({"status": "success"})
+
+
+@app.route('/api/admin/companies', methods=['GET', 'POST'])
+def enterprise_admin_companies():
+    gebruiker = enterprise_current_user()
+    if not gebruiker or gebruiker["role"] != "superadmin":
+        return jsonify({"status": "error", "message": "Platform administrator access required."}), 403
+
+    if request.method == "GET":
+        try:
+            with enterprise_db_connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT companies.id, companies.name, companies.created_at,
+                           COUNT(users.id) AS user_count
+                    FROM companies LEFT JOIN users ON users.company_id = companies.id
+                    GROUP BY companies.id ORDER BY companies.name COLLATE NOCASE
+                    """
+                ).fetchall()
+        except sqlite3.Error:
+            app.logger.exception("Could not list enterprise companies")
+            return jsonify({"status": "error", "message": "Company list is unavailable."}), 503
+        companies = []
+        for row in rows:
+            company = dict(row)
+            company["documents_directory"] = str(enterprise_documents_path(company["id"]))
+            companies.append(company)
+        return jsonify({"status": "success", "companies": companies})
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"status": "error", "message": "Invalid JSON payload."}), 400
+    company_name = str(data.get("company_name", "") or "").strip()
+    admin_username = str(data.get("admin_username", "") or "").strip()
+    admin_password = str(data.get("admin_password", "") or "")
+    if not company_name or len(company_name) > 120:
+        return jsonify({"status": "error", "message": "Company name must be 1-120 characters."}), 400
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,80}", admin_username):
+        return jsonify({"status": "error", "message": "Username must be 3-80 letters, digits or ._@-."}), 400
+    if len(admin_password) < 12 or len(admin_password) > 256:
+        return jsonify({"status": "error", "message": "Password must be 12-256 characters."}), 400
+
+    company_id = uuid.uuid4().hex
+    user_id = uuid.uuid4().hex
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        with enterprise_db_connect() as connection:
+            connection.execute(
+                "INSERT INTO companies (id, name, created_at) VALUES (?, ?, ?)",
+                (company_id, company_name, now),
+            )
+            connection.execute(
+                """
+                INSERT INTO users (id, company_id, username, password_hash, role, enabled, created_at)
+                VALUES (?, ?, ?, ?, 'company_admin', 1, ?)
+                """,
+                (user_id, company_id, admin_username, generate_password_hash(admin_password), now),
+            )
+            enterprise_write_audit_event(
+                connection,
+                company_id,
+                gebruiker["username"],
+                "company_created",
+                f"{company_name} · {admin_username}",
+                now,
+            )
+    except sqlite3.IntegrityError:
+        return jsonify({"status": "error", "message": "That username is already in use."}), 409
+    except (OSError, sqlite3.Error):
+        app.logger.exception("Could not create enterprise company")
+        return jsonify({"status": "error", "message": "Company could not be created."}), 503
+    try:
+        enterprise_documents_path(company_id).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        app.logger.exception("Company was created but its document folder could not be created")
+        return jsonify({
+            "status": "error",
+            "message": "Company account was created, but its document folder could not be created.",
+            "company_id": company_id,
+        }), 503
+    return jsonify({
+        "status": "success",
+        "company": {"id": company_id, "name": company_name},
+        "admin": {"username": admin_username},
+        "documents_directory": str(enterprise_documents_path(company_id)),
+    }), 201
+
+
+@app.route('/api/admin/users', methods=['GET', 'POST'])
+def enterprise_admin_users():
+    gebruiker = enterprise_current_user()
+    if not gebruiker or gebruiker["role"] not in {"superadmin", "company_admin"}:
+        return jsonify({"status": "error", "message": "Company administrator access required."}), 403
+
+    if request.method == "GET":
+        if gebruiker["role"] == "superadmin":
+            company_id = str(request.args.get("company_id", "") or "").strip()
+            if not re.fullmatch(r"[a-f0-9]{32}", company_id):
+                return jsonify({"status": "error", "message": "Provide a valid company_id."}), 400
+        else:
+            company_id = gebruiker["company_id"]
+        try:
+            with enterprise_db_connect() as connection:
+                rows = connection.execute(
+                    "SELECT id, username, role, enabled, created_at FROM users WHERE company_id = ? ORDER BY username COLLATE NOCASE",
+                    (company_id,),
+                ).fetchall()
+        except sqlite3.Error:
+            app.logger.exception("Could not list enterprise users")
+            return jsonify({"status": "error", "message": "User list is unavailable."}), 503
+        return jsonify({"status": "success", "users": [dict(row) for row in rows]})
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"status": "error", "message": "Invalid JSON payload."}), 400
+    username = str(data.get("username", "") or "").strip()
+    password = str(data.get("password", "") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,80}", username):
+        return jsonify({"status": "error", "message": "Username must be 3-80 letters, digits or ._@-."}), 400
+    if len(password) < 12 or len(password) > 256:
+        return jsonify({"status": "error", "message": "Password must be 12-256 characters."}), 400
+
+    if gebruiker["role"] == "superadmin":
+        company_id = str(data.get("company_id", "") or "").strip()
+        role = str(data.get("role", "company_admin") or "").strip()
+        if role not in {"company_admin", "member"} or not re.fullmatch(r"[a-f0-9]{32}", company_id):
+            return jsonify({"status": "error", "message": "A valid company_id and role are required."}), 400
+    else:
+        company_id = gebruiker["company_id"]
+        role = "member"
+        if data.get("role") or data.get("company_id"):
+            return jsonify({"status": "error", "message": "Company administrators can only create members in their own company."}), 403
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        with enterprise_db_connect() as connection:
+            company = connection.execute("SELECT id FROM companies WHERE id = ?", (company_id,)).fetchone()
+            if not company:
+                return jsonify({"status": "error", "message": "Company not found."}), 404
+            connection.execute(
+                """
+                INSERT INTO users (id, company_id, username, password_hash, role, enabled, created_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?)
+                """,
+                (uuid.uuid4().hex, company_id, username, generate_password_hash(password), role, now),
+            )
+            enterprise_write_audit_event(
+                connection,
+                company_id,
+                gebruiker["username"],
+                "account_created",
+                username,
+                now,
+            )
+    except sqlite3.IntegrityError:
+        return jsonify({"status": "error", "message": "That username is already in use."}), 409
+    except (OSError, sqlite3.Error):
+        app.logger.exception("Could not create enterprise user")
+        return jsonify({"status": "error", "message": "User could not be created."}), 503
+    return jsonify({"status": "success", "user": {"username": username, "role": role}}), 201
+
+
+@app.route('/api/admin/users/<user_id>/status', methods=['PATCH'])
+def enterprise_admin_user_status(user_id):
+    gebruiker = enterprise_current_user()
+    if not gebruiker or gebruiker["role"] not in {"superadmin", "company_admin"}:
+        return jsonify({"status": "error", "message": "Company administrator access required."}), 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("enabled"), bool):
+        return jsonify({"status": "error", "message": "Provide enabled as true or false."}), 400
+
+    try:
+        with enterprise_db_connect() as connection:
+            target = connection.execute(
+                "SELECT id, company_id, username, role, enabled FROM users WHERE id = ?",
+                (str(user_id),),
+            ).fetchone()
+            if target is None:
+                return jsonify({"status": "error", "message": "User not found."}), 404
+            if target["id"] == gebruiker["id"] or target["role"] == "superadmin":
+                return jsonify({"status": "error", "message": "This account cannot change its own status or another platform administrator."}), 403
+            if gebruiker["role"] == "company_admin" and (
+                target["company_id"] != gebruiker["company_id"] or target["role"] != "member"
+            ):
+                return jsonify({"status": "error", "message": "You can only change member accounts in your own company."}), 403
+            if bool(target["enabled"]) != data["enabled"]:
+                connection.execute(
+                    "UPDATE users SET enabled = ? WHERE id = ?",
+                    (int(data["enabled"]), str(user_id)),
+                )
+                enterprise_write_audit_event(
+                    connection,
+                    target["company_id"],
+                    gebruiker["username"],
+                    "account_enabled" if data["enabled"] else "account_disabled",
+                    target["username"],
+                )
+    except (OSError, sqlite3.Error):
+        app.logger.exception("Could not update enterprise account status")
+        return jsonify({"status": "error", "message": "Account status could not be updated."}), 503
+    return jsonify({"status": "success", "enabled": data["enabled"]})
+
+
+@app.route('/api/admin/users/<user_id>/password-reset', methods=['POST'])
+def enterprise_admin_user_password_reset(user_id):
+    gebruiker = enterprise_current_user()
+    if not gebruiker or gebruiker["role"] not in {"superadmin", "company_admin"}:
+        return jsonify({"status": "error", "message": "Administrator access required."}), 403
+
+    temporary_password = secrets.token_urlsafe(24)
+    try:
+        with enterprise_db_connect() as connection:
+            target = connection.execute(
+                "SELECT id, company_id, username, role FROM users WHERE id = ?",
+                (str(user_id),),
+            ).fetchone()
+            if target is None:
+                return jsonify({"status": "error", "message": "User not found."}), 404
+            if target["id"] == gebruiker["id"] or target["role"] == "superadmin":
+                return jsonify({"status": "error", "message": "This account cannot reset its own password or a platform administrator password."}), 403
+            if gebruiker["role"] == "company_admin" and (
+                target["company_id"] != gebruiker["company_id"] or target["role"] != "member"
+            ):
+                return jsonify({"status": "error", "message": "You can only reset member passwords in your own company."}), 403
+            connection.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, must_change_password = 1,
+                    auth_version = auth_version + 1
+                WHERE id = ?
+                """,
+                (generate_password_hash(temporary_password), str(user_id)),
+            )
+            enterprise_write_audit_event(
+                connection,
+                target["company_id"],
+                gebruiker["username"],
+                "password_reset",
+                target["username"],
+            )
+    except (OSError, sqlite3.Error, ValueError):
+        app.logger.exception("Could not reset enterprise account password")
+        return jsonify({"status": "error", "message": "Password reset could not be completed."}), 503
+    return jsonify({
+        "status": "success",
+        "temporary_password": temporary_password,
+        "must_change_password": True,
+    })
 
 
 @app.route('/api/mobile-access', methods=['GET'])
@@ -19145,7 +20371,7 @@ def voer_opstart_app_scan_uit(force=True):
 
 if __name__ == '__main__':
     # Startup-orkestratie: poort kiezen, enkelvoudige instantie, monitors starten.
-    standaard_host = '127.0.0.1' if ECHO_DEMO_MODE else '0.0.0.0'
+    standaard_host = '127.0.0.1' if ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE else '0.0.0.0'
     runtime_host = normaliseer_runtime_host_waarde(os.environ.get('ECHO_HOST', standaard_host))
     voorkeurs_poort = begrens_int_waarde(os.environ.get('ECHO_PORT', '5000'), 5000, 1024, 65535)
     poort_span = begrens_int_waarde(os.environ.get('ECHO_PORT_SPAN', '50'), 50, 0, 2000)
@@ -19153,7 +20379,7 @@ if __name__ == '__main__':
     poort = bepaal_runtime_poort(voorkeurs_poort, max_poort, host=runtime_host)
     url = f'http://127.0.0.1:{poort}'
     auto_open = parseer_bool_waarde(os.environ.get('ECHO_AUTO_OPEN', 'true'), True)
-    auto_reload = parseer_bool_waarde(os.environ.get('ECHO_AUTO_RELOAD', 'false'), False) and not ECHO_DEMO_MODE
+    auto_reload = parseer_bool_waarde(os.environ.get('ECHO_AUTO_RELOAD', 'false'), False) and not ECHO_DEMO_MODE and not ECHO_ENTERPRISE_MODE
     open_on_reload = parseer_bool_waarde(os.environ.get('ECHO_OPEN_ON_RELOAD', 'false'), False)
     reopen_when_running = parseer_bool_waarde(os.environ.get('ECHO_REOPEN_WHEN_RUNNING', 'false'), False)
     window_mode = str(os.environ.get('ECHO_WINDOW_MODE', 'browser') or 'browser').strip().lower()
