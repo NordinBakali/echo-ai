@@ -43,6 +43,7 @@ import echo_system_care as systeemzorg
 import echo_local_analysis as lokale_analyse
 import echo_web_automation as webautomatisering
 import echo_osint as osint_controle
+import echo_meeting_recorder as vergaderopname
 from website_scanner import website_scanner
 
 try:
@@ -117,6 +118,13 @@ SYSTEEMZORG = systeemzorg.SystemCare(
     profile_provider=lambda: instellingen.get("instellingen_profiel", "normal"),
 )
 atexit.register(SYSTEEMZORG.stop)
+VERGADERING_TOKEN = secrets.token_urlsafe(32)
+VERGADERING = vergaderopname.MeetingRecorder(
+    model_loader=lambda: laad_whisper_model(),
+    fallback_loader=lambda: laad_whisper_cpu_model(),
+    notify=lambda en, nl: registreer_notificatie(tekst_voor_taal(en, nl), uitspreken=False),
+)
+atexit.register(VERGADERING.shutdown)
 WEBAUTOMATISERING_TOKEN = secrets.token_urlsafe(32)
 WEBAUTOMATISERING = webautomatisering.WebAutomation(
     webautomatisering.Store(webautomatisering.DATA_DIR / "state.sqlite3"),
@@ -205,6 +213,7 @@ def voeg_api_cors_headers_toe(response):
         and not pad.startswith("/api/aanwezigheid/")
         and not pad.startswith("/api/camera-assistent/")
         and not pad.startswith("/api/systeemzorg/")
+        and not pad.startswith("/api/vergadering/")
         and not pad.startswith("/api/webautomatisering/")
         and not ECHO_DEMO_MODE
         and not ECHO_ENTERPRISE_MODE
@@ -214,9 +223,10 @@ def voeg_api_cors_headers_toe(response):
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     if (
         ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE
-        or pad in {"/werkruimte", "/aanwezigheid", "/camera-assistent", "/systeemzorg", "/webautomatisering"}
+        or pad in {"/werkruimte", "/aanwezigheid", "/camera-assistent", "/systeemzorg", "/webautomatisering", "/vergadering"}
         or pad.startswith((
             "/api/werkruimte/", "/api/aanwezigheid/", "/api/camera-assistent/", "/api/systeemzorg/", "/api/webautomatisering/",
+            "/api/vergadering/",
         ))
     ):
         response.headers["Cache-Control"] = "no-store"
@@ -303,6 +313,20 @@ def beveilig_systeemzorg():
         return jsonify({"status": "error", "message": tekst_voor_taal(
             "System care requires a local page on localhost, outside demo/enterprise mode. Reload the page.",
             "Systeemzorg vereist een lokale pagina via localhost, buiten demo-/bedrijfsmodus. Vernieuw de pagina.",
+        )}), 403
+    if request.method == "POST" and not request.is_json:
+        return jsonify({"status": "error", "message": "A JSON request is required."}), 415
+    return None
+
+
+@app.before_request
+def beveilig_vergadering():
+    if request.path != "/vergadering" and not request.path.startswith("/api/vergadering/"):
+        return None
+    if not lokale_beveiligde_aanvraag("X-Echo-Meeting-Token" if request.method == "POST" else "", VERGADERING_TOKEN):
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "Meeting recording requires a local page on localhost, outside demo/enterprise mode. Reload the page.",
+            "Vergaderopname vereist een lokale pagina via localhost, buiten demo-/bedrijfsmodus. Vernieuw de pagina.",
         )}), 403
     if request.method == "POST" and not request.is_json:
         return jsonify({"status": "error", "message": "A JSON request is required."}), 415
@@ -7177,6 +7201,18 @@ def laad_whisper_model():
         WHISPER_MODEL_CACHE["cache_key"] = cache_key
         WHISPER_MODEL_CACHE["loaded_at"] = time.time()
         return model
+
+
+def laad_whisper_cpu_model():
+    """CPU fallback for long meeting transcripts when CUDA runtime libraries are missing."""
+    if not WHISPER_BESCHIKBAAR or WhisperModel is None:
+        raise RuntimeError("faster-whisper is not available")
+    model_naam = str(instellingen.get("whisper_model", DEFAULT_SETTINGS["whisper_model"]) or "small").strip() or "small"
+    with WHISPER_MODEL_LOCK:
+        if WHISPER_MODEL_CACHE.get("cpu_key") != model_naam:
+            WHISPER_MODEL_CACHE["cpu_model"] = WhisperModel(model_naam, device="cpu", compute_type="int8")
+            WHISPER_MODEL_CACHE["cpu_key"] = model_naam
+        return WHISPER_MODEL_CACHE["cpu_model"]
 
 
 def herken_spraak_via_whisper(audio):
@@ -18987,6 +19023,60 @@ def lokale_analyse_bestanden():
         return jsonify({"status": "success", "report": report})
     except lokale_analyse.AnalysisError as exc:
         return jsonify({"status": "error", "message": exc.localized(gebruik_nederlands())}), exc.status
+
+
+@app.route('/vergadering')
+def vergadering_pagina():
+    return render_template(
+        "meeting.html", ui=tekst_voor_taal, nederlands=gebruik_nederlands(),
+        build_id=APP_BUILD_ID, meeting_token=VERGADERING_TOKEN,
+    )
+
+
+@app.route('/api/vergadering/<actie>', methods=['GET', 'POST'])
+def vergadering_api(actie):
+    nl = gebruik_nederlands()
+    try:
+        if request.method == "GET":
+            if actie == "status":
+                return jsonify({"status": "success", "meeting": VERGADERING.snapshot()})
+            return jsonify({"status": "error", "message": "Unknown meeting endpoint."}), 404
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise vergaderopname.MeetingError("A JSON object is required.", "Een JSON-object is vereist.")
+        if actie == "start" and set(data) <= {"authorized", "microphone", "title"} and "authorized" in data:
+            VERGADERING.start(data["authorized"], data.get("microphone", True), data.get("title", ""))
+        elif actie == "stop" and not data:
+            VERGADERING.stop()
+        elif actie == "transcribe" and set(data) == {"id", "language", "separate"}:
+            VERGADERING.transcribe(data["id"], data["language"], data["separate"])
+        elif actie == "delete" and set(data) == {"id"}:
+            VERGADERING.delete(data["id"])
+        else:
+            raise vergaderopname.MeetingError("Invalid meeting action.", "Ongeldige vergaderactie.")
+        return jsonify({"status": "success", "meeting": VERGADERING.snapshot()})
+    except vergaderopname.MeetingError as exc:
+        return jsonify({"status": "error", "message": exc.localized(nl)}), exc.status
+    except OSError:
+        app.logger.exception("Meeting recorder unavailable")
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "Meeting recording is unavailable. See the local server log.",
+            "Vergaderopname is niet beschikbaar. Bekijk het lokale serverlog.",
+        )}), 503
+
+
+@app.route('/api/vergadering/transcript/<meeting_id>.<soort>')
+def vergadering_transcript(meeting_id, soort):
+    if soort not in {"txt", "srt"}:
+        return jsonify({"status": "error", "message": "Unknown format."}), 404
+    try:
+        pad = VERGADERING.transcript(meeting_id, soort)
+    except vergaderopname.MeetingError as exc:
+        return jsonify({"status": "error", "message": exc.localized(gebruik_nederlands())}), exc.status
+    response = app.response_class(pad.read_bytes(), mimetype="text/plain; charset=utf-8")
+    if request.args.get("download") == "1":
+        response.headers["Content-Disposition"] = f'attachment; filename="{meeting_id}.{soort}"'
+    return response
 
 
 @app.route('/webautomatisering')

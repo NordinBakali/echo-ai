@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="{{ 'nl' if nederlands else 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="echo-meeting-token" content="{{ meeting_token }}">
+    <title>{{ ui('Meeting recorder', 'Vergaderopname') }} - Echo</title>
+    <link rel="icon" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v={{ build_id }}">
+    <style>
+        input[type=checkbox] { width: auto; }
+        #meeting-error { color: #ffba97; }
+        .rec-indicator { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; }
+        .rec-dot { width: .8rem; height: .8rem; border-radius: 50%; background: #666; }
+        .rec-dot.live { background: #ff4d4d; animation: rec-pulse 1.2s infinite; }
+        @keyframes rec-pulse { 50% { opacity: .35; } }
+        .rec-timer { font-size: 2.2rem; font-variant-numeric: tabular-nums; margin: .4rem 0; }
+        .meeting-list { list-style: none; padding: 0; margin: 0; }
+        .meeting-list li { border-top: 1px solid rgba(255,255,255,.12); padding: .9rem 0; overflow-wrap: anywhere; }
+        .meeting-list .button-row { flex-wrap: wrap; }
+        progress { width: 100%; }
+        #meeting-preview { white-space: pre-wrap; max-height: 420px; overflow: auto; }
+    </style>
+    <script src="{{ url_for('static', filename='meeting.js') }}?v={{ build_id }}" defer></script>
+</head>
+<body data-language="{{ 'nl' if nederlands else 'en' }}">
+<div class="workspace-shell">
+    <header class="workspace-header">
+        <a class="brand" href="{{ url_for('index') }}">ECHO <small>{{ ui('MEETINGS', 'VERGADERINGEN') }}</small></a>
+        <a class="back-link" href="{{ url_for('index') }}">{{ ui('Back to Echo', 'Terug naar Echo') }}</a>
+    </header>
+    <main>
+        <section class="workspace-intro">
+            <h1>{{ ui('Record and transcribe meetings — fully local.', 'Vergaderingen opnemen en uitschrijven — volledig lokaal.') }}</h1>
+            <p>{{ ui(
+                'Echo records what comes out of your speakers (Teams, Zoom, Meet…) plus optionally your microphone, and transcribes it with Whisper on this PC. Audio and text never leave your computer.',
+                'Echo neemt op wat uit je speakers komt (Teams, Zoom, Meet…) plus optioneel je microfoon, en schrijft het uit met Whisper op deze pc. Audio en tekst verlaten je computer nooit.'
+            ) }}</p>
+        </section>
+        <p id="meeting-error" role="alert"></p>
+        <section class="workspace-panel" aria-labelledby="meeting-rec-title">
+            <form id="meeting-form" class="input-card">
+                <h2 id="meeting-rec-title">{{ ui('Recording', 'Opname') }}</h2>
+                <div class="rec-indicator"><span id="meeting-dot" class="rec-dot"></span><span id="meeting-state">{{ ui('Not recording', 'Geen opname') }}</span></div>
+                <div id="meeting-timer" class="rec-timer">00:00:00</div>
+                <p id="meeting-devices" class="field-help"></p>
+                <label for="meeting-title">{{ ui('Title (optional)', 'Titel (optioneel)') }}</label>
+                <input id="meeting-title" maxlength="120" placeholder="{{ ui('e.g. Weekly stand-up', 'bijv. Wekelijkse stand-up') }}">
+                <label><input id="meeting-mic" type="checkbox" checked> {{ ui('Also record my microphone', 'Ook mijn microfoon opnemen') }}</label>
+                <label><input id="meeting-consent" type="checkbox"> {{ ui('All participants know this meeting is being recorded and agree.', 'Alle deelnemers weten dat deze vergadering wordt opgenomen en gaan akkoord.') }}</label>
+                <div class="button-row">
+                    <button id="meeting-start" class="primary-button" disabled>{{ ui('Start recording', 'Opname starten') }}</button>
+                    <button id="meeting-stop" class="secondary-button" type="button" disabled>{{ ui('Stop & save', 'Stoppen & opslaan') }}</button>
+                </div>
+                <p class="field-help">{{ ui(
+                    'Tip: use headphones if you want separate speaker labels (“You” / “Others”); otherwise your mic also picks up the speakers. Recording stops automatically after 4 hours. Closing this page does not stop the recording.',
+                    'Tip: gebruik een koptelefoon als je aparte sprekerlabels wilt (“Jij” / “Anderen”); anders vangt je microfoon de speakers ook op. De opname stopt automatisch na 4 uur. Deze pagina sluiten stopt de opname niet.'
+                ) }}</p>
+            </form>
+            <section class="input-card">
+                <h2>{{ ui('Transcription settings', 'Transcriptie-instellingen') }}</h2>
+                <label for="meeting-language">{{ ui('Language', 'Taal') }}</label>
+                <select id="meeting-language">
+                    <option value="nl">Nederlands</option>
+                    <option value="en">English</option>
+                    <option value="auto">{{ ui('Detect automatically', 'Automatisch herkennen') }}</option>
+                </select>
+                <label><input id="meeting-separate" type="checkbox"> {{ ui('Separate speakers (You / Others) — needs headphones', 'Sprekers scheiden (Jij / Anderen) — vereist koptelefoon') }}</label>
+                <p class="field-help">{{ ui(
+                    'Uses the Whisper model, device and precision from Echo settings. With an NVIDIA GPU (device “cuda”), an hour of audio takes a few minutes.',
+                    'Gebruikt het Whisper-model, apparaat en de precisie uit de Echo-instellingen. Met een NVIDIA-GPU (apparaat “cuda”) duurt een uur audio een paar minuten.'
+                ) }}</p>
+            </section>
+        </section>
+        <section class="workspace-panel" aria-labelledby="meeting-list-title">
+            <h2 id="meeting-list-title">{{ ui('Saved meetings', 'Opgeslagen vergaderingen') }}</h2>
+            <ul id="meeting-list" class="meeting-list"></ul>
+            <pre id="meeting-preview" hidden></pre>
+        </section>
+    </main>
+</div>
+</body>
+</html>

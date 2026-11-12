@@ -587,6 +587,41 @@ zonder waarneming. **Stoppen** stopt de bewaking; een tabblad sluiten niet.
 Na een serverherstart staan bewaking en profielautomatiek altijd uit, ook als je
 voorkeuren bewaard zijn.
 
+## Vergaderopname & lokale transcriptie (Teams, Zoom, Meet)
+
+Open **Vergaderopname** in het dashboard, of ga naar
+`http://127.0.0.1:5000/vergadering`. Alles gebeurt op deze pc: audio en tekst
+worden nergens naartoe gestuurd.
+
+1. Vink aan dat alle deelnemers weten dat je opneemt (verplicht; opnemen zonder
+   dat anderen het weten kan in strijd zijn met privacyregels zoals de AVG).
+2. Kies of je microfoon ook mee moet (standaard aan) en geef eventueel een titel.
+3. Klik **Opname starten**. Echo neemt via WASAPI-*loopback* op wat uit je
+   speakers/koptelefoon komt (dus de andere deelnemers) en apart je microfoon.
+   Een rode stip en timer tonen dat de opname loopt.
+4. Klik na de vergadering **Stoppen & opslaan**. Een tabblad sluiten stopt de
+   opname niet; na 4 uur stopt hij automatisch.
+5. Kies de taal (Nederlands, Engels of automatisch) en klik **Uitschrijven**.
+   Whisper (`faster-whisper`) draait lokaal; met een NVIDIA-GPU gaat een uur in
+   enkele minuten. Ontbreken CUDA-bibliotheken (zoals `cublas64_12.dll`), dan
+   schakelt Echo automatisch over op de CPU (trager, wel correct).
+6. Bekijk het resultaat met **Tonen**, of download **.txt** (met tijdstempels)
+   of **.srt** (ondertitels). **Verwijderen** wist audio én tekst.
+
+Tips en grenzen:
+
+- **Sprekers scheiden (Jij / Anderen)** schrijft beide sporen apart uit. Gebruik
+  dit alleen met een koptelefoon; anders vangt je microfoon ook de speakers op
+  en krijg je dubbele zinnen.
+- Opnames staan in `%LOCALAPPDATA%\Echo\meetings` (buiten de projectmap, dus
+  nooit op GitHub), als 16 kHz mono WAV: ongeveer 115 MB per uur per spoor.
+  Er moet minimaal 1 GB vrij zijn om te starten.
+- Stiltes waarin Windows geen loopbackaudio levert worden opgevuld, zodat de
+  tijdstempels van beide sporen gelijk blijven.
+- Model, apparaat en precisie komen uit de Whisper-instellingen van Echo.
+- De pagina en API werken alleen via localhost, buiten demo-/bedrijfsmodus, en
+  wijzigingen vereisen het lokale paginatoken.
+
 ## Webautomatisering & Datalekcheck
 
 Open **Webautomatisering & Datalekcheck** in het dashboard, of

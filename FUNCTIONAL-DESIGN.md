@@ -230,6 +230,17 @@ setup.
 **Independent test:** verify an answer cites its source and that a user from one
 tenant cannot view another tenant's documents or administrative activity.
 
+### Journey I — Record and transcribe an online meeting (Priority: P2)
+
+The user confirms that all participants know about the recording, starts a
+recording (speaker output plus optional microphone), sees a live indicator and
+timer, stops it after the meeting, and transcribes it locally into a
+timestamped text and subtitle file, optionally labeled "You" / "Others".
+
+**Independent test:** verify recording cannot start without confirmation, both
+tracks share one timeline after silences, transcription works without network
+access, and deleting a meeting removes its audio and transcript.
+
 ## 6. Functional requirements
 
 ### Assistant and interaction
@@ -297,6 +308,16 @@ tenant cannot view another tenant's documents or administrative activity.
   targets and require confirmation. Protected processes and other users'
   sessions MUST remain out of scope, and Echo MUST provide an available
   recovery path for reversible system-setting changes.
+
+### Meeting recording and transcription
+
+- **REQ-025:** Meeting recording MUST require explicit confirmation that all
+  participants are informed, show a distinct recording indicator, stop on user
+  request or after a maximum duration, and store audio only on this PC outside
+  the project folder.
+- **REQ-026:** Meeting transcription MUST run locally, produce timestamped text
+  and subtitle output, report progress and errors, and continue on the CPU when
+  GPU libraries are unavailable.
 
 ### Web automation, scanning, and exposure checks
 
