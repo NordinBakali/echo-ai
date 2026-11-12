@@ -76,6 +76,36 @@
       "security_scan_daily_enabled": true,
       "website_audit_schedule_profile": "security",
       "stream_auto_focus_obs": false
+    },
+    "gaming": {
+      "agent_modus": true,
+      "geheugen_modus": true,
+      "prioriteit_modus": true,
+      "computerbesturing_toestaan": false,
+      "online_ai_modus": true,
+      "ai_agent_primair": true,
+      "spraak_ingang": false,
+      "spraak_uitgang": false,
+      "spraak_input_provider": "google",
+      "spraak_provider": "local",
+      "security_scan_daily_enabled": false,
+      "website_audit_schedule_profile": "standard",
+      "stream_auto_focus_obs": false
+    },
+    "heavy_work": {
+      "agent_modus": true,
+      "geheugen_modus": true,
+      "prioriteit_modus": true,
+      "computerbesturing_toestaan": false,
+      "online_ai_modus": true,
+      "ai_agent_primair": true,
+      "spraak_ingang": false,
+      "spraak_uitgang": false,
+      "spraak_input_provider": "google",
+      "spraak_provider": "local",
+      "security_scan_daily_enabled": false,
+      "website_audit_schedule_profile": "standard",
+      "stream_auto_focus_obs": false
     }
   },
   "security_scan_daily_enabled": false,
@@ -154,6 +184,18 @@
       {
         "command": "enable automation mode",
         "label": "Enable Automation"
+      }
+    ],
+    "gaming": [
+      {
+        "command": "system info",
+        "label": "System Status"
+      }
+    ],
+    "heavy_work": [
+      {
+        "command": "system info",
+        "label": "System Status"
       }
     ]
   },

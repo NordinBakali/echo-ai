@@ -1,10 +1,12 @@
 from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, g
+import atexit
 import ast
 import base64
 import copy
 import ctypes
 import datetime
 from difflib import SequenceMatcher
+from functools import wraps
 import hmac
 import html
 import importlib.util
@@ -32,6 +34,16 @@ import time
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
+
+import echo_workspace as werkruimte
+import echo_presence as aanwezigheid
+import echo_camera_assistant as camera_assistent
+import echo_resources as systeembronnen
+import echo_system_care as systeemzorg
+import echo_local_analysis as lokale_analyse
+import echo_web_automation as webautomatisering
+import echo_osint as osint_controle
+from website_scanner import website_scanner
 
 try:
     import speech_recognition as sr
@@ -87,6 +99,35 @@ app.config.update(
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 app.jinja_env.auto_reload = True
+app.register_blueprint(website_scanner, url_prefix="/website-scanner")
+AANWEZIGHEID_MONITOR = aanwezigheid.PresenceMonitor()
+AANWEZIGHEID_TOKEN = secrets.token_urlsafe(32)
+atexit.register(AANWEZIGHEID_MONITOR.stop)
+CAMERA_ASSISTENT = camera_assistent.CameraAssistantMonitor(
+    on_reminder=lambda: registreer_notificatie(tekst_voor_taal(
+        "Posture reminder: you have been leaning forward for a while. Relax your shoulders or take a short break.",
+        "Houdingsherinnering: je zit al even voorover. Ontspan je schouders of neem een korte pauze.",
+    ))
+)
+atexit.register(CAMERA_ASSISTENT.stop)
+SYSTEEMZORG_TOKEN = secrets.token_urlsafe(32)
+SYSTEEMZORG = systeemzorg.SystemCare(
+    systeemzorg.Store(systeemzorg.DATA_DIR / "state.sqlite3"),
+    notify=lambda profiel, soort, bericht, geluid: systeemzorg_notificatie(profiel, soort, bericht, geluid),
+    profile_provider=lambda: instellingen.get("instellingen_profiel", "normal"),
+)
+atexit.register(SYSTEEMZORG.stop)
+WEBAUTOMATISERING_TOKEN = secrets.token_urlsafe(32)
+WEBAUTOMATISERING = webautomatisering.WebAutomation(
+    webautomatisering.Store(webautomatisering.DATA_DIR / "state.sqlite3"),
+    notify=lambda soort, geluid: webautomatisering_notificatie(soort, geluid),
+)
+OSINT = osint_controle.Osint(
+    osint_controle.Store(osint_controle.DATA_DIR / "state.sqlite3"),
+    notify=lambda soort, geluid: webautomatisering_notificatie(soort, geluid),
+)
+atexit.register(WEBAUTOMATISERING.shutdown)
+atexit.register(OSINT.shutdown)
 
 
 def demo_configuratiefout():
@@ -158,16 +199,129 @@ def beveilig_demo_modus():
 @app.after_request
 def voeg_api_cors_headers_toe(response):
     pad = str(getattr(request, "path", "") or "")
-    if pad.startswith("/api/") and not ECHO_DEMO_MODE and not ECHO_ENTERPRISE_MODE:
+    if (
+        pad.startswith("/api/")
+        and not pad.startswith("/api/werkruimte/")
+        and not pad.startswith("/api/aanwezigheid/")
+        and not pad.startswith("/api/camera-assistent/")
+        and not pad.startswith("/api/systeemzorg/")
+        and not pad.startswith("/api/webautomatisering/")
+        and not ECHO_DEMO_MODE
+        and not ECHO_ENTERPRISE_MODE
+    ):
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    if ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE:
+    if (
+        ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE
+        or pad in {"/werkruimte", "/aanwezigheid", "/camera-assistent", "/systeemzorg", "/webautomatisering"}
+        or pad.startswith((
+            "/api/werkruimte/", "/api/aanwezigheid/", "/api/camera-assistent/", "/api/systeemzorg/", "/api/webautomatisering/",
+        ))
+    ):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
+    if pad == "/":
+        response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.before_request
+def beveilig_werkruimte_origin():
+    if not request.path.startswith("/api/werkruimte/") or request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    origin = request.headers.get("Origin", "").strip()
+    if origin and urlparse(origin).netloc.lower() != request.host.lower():
+        return jsonify({"status": "error", "message": "Cross-origin requests are not allowed."}), 403
+    return None
+
+
+@app.before_request
+def beveilig_aanwezigheid():
+    if request.path not in {"/aanwezigheid", "/camera-assistent"} and not request.path.startswith(("/api/aanwezigheid/", "/api/camera-assistent/")):
+        return None
+    if (
+        ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE
+        or request.remote_addr not in {"127.0.0.1", "::1"}
+        or urlparse(request.host_url).hostname not in {"localhost", "127.0.0.1", "::1"}
+    ):
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "Presence detection is only available on this Windows PC via localhost, outside demo or enterprise mode.",
+            "Aanwezigheidsdetectie werkt alleen op deze Windows-pc via localhost, buiten demo- of bedrijfsmodus.",
+        )}), 403
+    origin = request.headers.get("Origin", "")
+    if (
+        (origin and origin != request.host_url.rstrip("/"))
+        or request.headers.get("Sec-Fetch-Site") == "cross-site"
+    ):
+        return jsonify({"status": "error", "message": "Cross-origin requests are not allowed."}), 403
+    if request.method == "POST":
+        token = request.headers.get("X-Echo-Presence-Token", "")
+        if not hmac.compare_digest(token.encode("utf-8"), AANWEZIGHEID_TOKEN.encode("utf-8")):
+            if request.path.startswith("/api/camera-assistent/"):
+                message = (
+                    "Vernieuw deze pagina voordat je de camera-assistent wijzigt."
+                    if camera_assistent_nederlands()
+                    else "Reload this page before changing the camera assistant."
+                )
+            else:
+                message = tekst_voor_taal(
+                    "Reload the presence page before changing detection.",
+                    "Vernieuw de aanwezigheidspagina voordat je de detectie wijzigt.",
+                )
+            return jsonify({"status": "error", "message": message}), 403
+        if not request.is_json:
+            return jsonify({"status": "error", "message": "A JSON request is required."}), 415
+    return None
+
+
+def lokale_beveiligde_aanvraag(token_header="", token=""):
+    origin = request.headers.get("Origin", "")
+    lokaal = (
+        not ECHO_DEMO_MODE and not ECHO_ENTERPRISE_MODE
+        and request.remote_addr in {"127.0.0.1", "::1"}
+        and urlparse(request.host_url).hostname in {"localhost", "127.0.0.1", "::1"}
+        and (not origin or origin == request.host_url.rstrip("/"))
+        and request.headers.get("Sec-Fetch-Site") != "cross-site"
+    )
+    return lokaal and (not token_header or hmac.compare_digest(
+        request.headers.get(token_header, "").encode("utf-8"), token.encode("utf-8"),
+    ))
+
+
+def lokale_systeemzorg_aanvraag(met_token=False):
+    return lokale_beveiligde_aanvraag("X-Echo-System-Token" if met_token else "", SYSTEEMZORG_TOKEN)
+
+
+@app.before_request
+def beveilig_systeemzorg():
+    if request.path != "/systeemzorg" and not request.path.startswith("/api/systeemzorg/"):
+        return None
+    if not lokale_systeemzorg_aanvraag(met_token=request.method == "POST"):
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "System care requires a local page on localhost, outside demo/enterprise mode. Reload the page.",
+            "Systeemzorg vereist een lokale pagina via localhost, buiten demo-/bedrijfsmodus. Vernieuw de pagina.",
+        )}), 403
+    if request.method == "POST" and not request.is_json:
+        return jsonify({"status": "error", "message": "A JSON request is required."}), 415
+    return None
+
+
+@app.before_request
+def beveilig_webautomatisering():
+    if request.path != "/webautomatisering" and not request.path.startswith("/api/webautomatisering/"):
+        return None
+    api = request.path.startswith("/api/")
+    if not lokale_beveiligde_aanvraag("X-Echo-Web-Token" if api else "", WEBAUTOMATISERING_TOKEN):
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "Web automation requires a local page on localhost, outside demo/enterprise mode. Reload the page.",
+            "Webautomatisering vereist een lokale pagina via localhost, buiten demo-/bedrijfsmodus. Vernieuw de pagina.",
+        )}), 403
+    if request.method == "POST" and not request.is_json:
+        return jsonify({"status": "error", "message": "A JSON request is required."}), 415
+    return None
 
 
 SETTINGS_FILE = "instellingen.json"
@@ -244,6 +398,10 @@ def laad_env_variabelen(env_pad=ENV_FILE):
 
 laad_env_variabelen()
 
+WERKRUIMTE_DATA_DIR = Path(
+    os.environ.get("ECHO_WORKSPACE_DATA_DIR")
+    or (Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "Echo" / "workspace")
+)
 ECHO_DEMO_MODE = str(os.environ.get("ECHO_DEMO_MODE", "") or "").strip().lower() in {
     "1", "true", "yes", "on",
 }
@@ -633,6 +791,11 @@ def beveilig_enterprise_modus():
         "enterprise_admin_users",
         "enterprise_admin_user_status",
         "enterprise_admin_user_password_reset",
+        "werkruimte_pagina",
+        "werkruimte_transcribeer",
+        "werkruimte_verwerk",
+        "werkruimte_leeslijst",
+        "werkruimte_leeslijst_item",
     }
     if request.endpoint not in allowed:
         if request.path.startswith("/api/"):
@@ -648,6 +811,10 @@ def beveilig_enterprise_modus():
         "enterprise_company_documents",
         "enterprise_company_document_upload",
         "enterprise_company_document_delete",
+        "werkruimte_transcribeer",
+        "werkruimte_verwerk",
+        "werkruimte_leeslijst",
+        "werkruimte_leeslijst_item",
     }:
         if not user.get("company_id"):
             return jsonify({"status": "error", "message": "A company workspace is required."}), 403
@@ -690,7 +857,7 @@ INSTELLINGEN_PROFIEL_BOOL_SLEUTELS = {
 
 
 def standaard_instellingen_profielen():
-    return {
+    profielen = {
         "normal": {
             "agent_modus": True,
             "geheugen_modus": True,
@@ -739,6 +906,11 @@ def standaard_instellingen_profielen():
     }
 
 
+    for naam in ("gaming", "heavy_work"):
+        profielen[naam] = {**profielen["normal"], "spraak_uitgang": False, "stream_auto_focus_obs": False}
+    return profielen
+
+
 def standaard_instellingen_profiel_acties():
     return {
         "normal": [
@@ -759,6 +931,8 @@ def standaard_instellingen_profiel_acties():
             {"command": "website audit schedule status", "label": "Audit Schedule"},
             {"command": "enable automation mode", "label": "Enable Automation"},
         ],
+        "gaming": [{"command": "system info", "label": "System Status"}],
+        "heavy_work": [{"command": "system info", "label": "System Status"}],
     }
 
 
@@ -1016,7 +1190,7 @@ def normaliseer_whisper_compute_type(compute_type):
 
 def normaliseer_instellingen_profiel_naam(waarde):
     profiel = str(waarde or "").strip().lower()
-    if profiel not in {"normal", "streaming", "security"}:
+    if profiel not in systeembronnen.PROFILES:
         return "normal"
     return profiel
 
@@ -2360,7 +2534,7 @@ def volgende_planner_id():
     return volgende_id
 
 
-def registreer_notificatie(bericht):
+def registreer_notificatie(bericht, *, uitspreken=True):
     bericht = opschonen_korte_tekst(bericht, max_lengte=320)
     if not bericht:
         return
@@ -2373,7 +2547,64 @@ def registreer_notificatie(bericht):
     if len(notificaties) > MAX_NOTIFICATIES:
         del notificaties[:-MAX_NOTIFICATIES]
 
-    spreek_uit(bericht)
+    if uitspreken:
+        spreek_uit(bericht)
+
+
+def systeemzorg_notificatie(profiel, soort, bericht, geluid):
+    melding = tekst_voor_taal(
+        "System care: new local log signal. View details on this PC.",
+        "Systeemzorg: nieuw lokaal logsignaal. Bekijk de details op deze pc.",
+    )
+    if soort == "unknown_device":
+        melding = tekst_voor_taal(
+            "System care: unknown LAN device detected. Review devices on this PC.",
+            "Systeemzorg: onbekend LAN-apparaat gezien. Controleer de apparaten op deze pc.",
+        )
+    elif soort == "resource_pressure":
+        melding = tekst_voor_taal(
+            "System care: an approved background app was stopped after sustained high CPU or RAM usage.",
+            "Systeemzorg: een goedgekeurde achtergrondapp is gestopt na aanhoudend hoog CPU- of RAM-gebruik.",
+        )
+    registreer_notificatie(f"[{profiel}] {melding}", uitspreken=False)
+    if geluid:
+        if winsound is None:
+            raise systeemzorg.CareError("Windows notification sound is unavailable.")
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except RuntimeError as exc:
+            raise systeemzorg.CareError("Windows could not play the notification sound.") from exc
+
+
+def webautomatisering_notificatie(soort, geluid):
+    meldingen = {
+        "restock": ("Web automation: a watched product is back in stock. Check Echo on this PC.",
+                    "Webautomatisering: een gevolgd product is weer op voorraad. Bekijk Echo op deze pc."),
+        "action_done": ("Web automation: product placed in the cart. Finish the payment yourself in the shop window.",
+                        "Webautomatisering: product in de winkelwagen gezet. Rond de betaling zelf af in het winkelvenster."),
+        "action_failed": ("Web automation: an automatic shop action failed. Check Echo on this PC.",
+                          "Webautomatisering: een automatische winkelactie is mislukt. Bekijk Echo op deze pc."),
+        "order_confirmed": ("Web automation: the shop confirmed your authorized order.",
+                            "Webautomatisering: de winkel heeft je toegestane bestelling bevestigd."),
+        "reservation_confirmed": ("Web automation: the shop confirmed your authorized reservation.",
+                                  "Webautomatisering: de winkel heeft je toegestane reservering bevestigd."),
+        "transaction_uncertain": ("Web automation: transaction outcome unknown. Check the shop before authorizing another attempt.",
+                                  "Webautomatisering: transactie-uitkomst onbekend. Controleer de winkel voordat je opnieuw toestemming geeft."),
+        "blocked": ("Web automation: a shop shows a bot check; the watch is paused.",
+                    "Webautomatisering: een winkel toont een botcontrole; de watcher is gepauzeerd."),
+        "failing": ("Web automation: a watch keeps failing and has been paused.",
+                    "Webautomatisering: een watcher blijft mislukken en is gepauzeerd."),
+        "osint_alert": ("Breach check: new results for one of your identifiers. Check Echo on this PC.",
+                        "Datalekcheck: nieuwe resultaten voor een van je gegevens. Bekijk Echo op deze pc."),
+    }
+    engels, nederlands = meldingen.get(soort, ("Web automation: new event. Check Echo on this PC.",
+                                               "Webautomatisering: nieuwe gebeurtenis. Bekijk Echo op deze pc."))
+    registreer_notificatie(tekst_voor_taal(engels, nederlands), uitspreken=False)
+    if geluid and winsound is not None:
+        try:
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except RuntimeError:
+            app.logger.warning("Windows could not play the web-automation notification sound.")
 
 
 def formatteer_duur_compact(seconden):
@@ -6981,9 +7212,12 @@ def herken_spraak_via_whisper(audio):
                 pass
 
 
-def herken_spraak_via_google(recognizer, audio):
+def herken_spraak_via_google(recognizer, audio, taalcode=None):
     try:
-        return recognizer.recognize_google(audio, language=instellingen.get("spraak_taal", DEFAULT_SETTINGS["spraak_taal"]))
+        return recognizer.recognize_google(
+            audio,
+            language=taalcode or instellingen.get("spraak_taal", DEFAULT_SETTINGS["spraak_taal"]),
+        )
     except Exception:
         return ""
 
@@ -7021,11 +7255,11 @@ def herken_spraak():
         return None
 
 
-def herken_audio_pad_via_whisper(audio_pad):
+def herken_audio_pad_via_whisper(audio_pad, taalcode=None):
     model = laad_whisper_model()
     beam_size = begrens_int_waarde(instellingen.get("whisper_beam_size", 5), standaard=5, minimum=1, maximum=10)
     vad_filter = parseer_bool_waarde(instellingen.get("whisper_vad_filter", True), standaard=True)
-    taal = whisper_taalcode_voor_spraak()
+    taal = taalcode.split("-", 1)[0].lower() if taalcode else whisper_taalcode_voor_spraak()
 
     segmenten, _ = model.transcribe(
         str(audio_pad),
@@ -7042,7 +7276,7 @@ def herken_audio_pad_via_whisper(audio_pad):
     return transcriptie
 
 
-def herken_audio_pad_via_google(audio_pad):
+def herken_audio_pad_via_google(audio_pad, taalcode=None):
     if not SPRAAK_BESCHIKBAAR:
         return ""
 
@@ -7054,10 +7288,10 @@ def herken_audio_pad_via_google(audio_pad):
     recognizer = sr.Recognizer()
     with sr.AudioFile(str(audio_pad)) as source:
         audio_data = recognizer.record(source)
-    return herken_spraak_via_google(recognizer, audio_data)
+    return herken_spraak_via_google(recognizer, audio_data, taalcode=taalcode)
 
 
-def herken_audio_upload_tekst(audio_pad):
+def herken_audio_upload_tekst(audio_pad, taalcode=None):
     provider = normaliseer_spraak_input_provider(
         instellingen.get("spraak_input_provider", DEFAULT_SETTINGS["spraak_input_provider"])
     )
@@ -7071,7 +7305,7 @@ def herken_audio_upload_tekst(audio_pad):
                 fouten.append("Whisper unavailable")
                 continue
             try:
-                tekst = herken_audio_pad_via_whisper(audio_pad)
+                tekst = herken_audio_pad_via_whisper(audio_pad, taalcode=taalcode)
             except Exception as whisper_fout:
                 fouten.append(f"Whisper error: {whisper_fout}")
                 continue
@@ -7083,7 +7317,7 @@ def herken_audio_upload_tekst(audio_pad):
 
         if kandidaat == "google":
             try:
-                tekst = herken_audio_pad_via_google(audio_pad)
+                tekst = herken_audio_pad_via_google(audio_pad, taalcode=taalcode)
             except Exception as google_fout:
                 fouten.append(f"Google speech error: {google_fout}")
                 continue
@@ -13039,7 +13273,7 @@ def open_windows_doel(doel):
 
 def voer_bevestigde_systeemactie_uit(actie):
     if actie == "lock computer":
-        ctypes.windll.user32.LockWorkStation()
+        aanwezigheid.lock_windows()
     elif actie == "sleep computer":
         subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"])
     elif actie == "restart computer":
@@ -18552,7 +18786,252 @@ def index():
         spraak_beschikbaar=SPRAAK_BESCHIKBAAR,
         build_id=APP_BUILD_ID,
         demo_mode=ECHO_DEMO_MODE,
+        system_token=SYSTEEMZORG_TOKEN if lokale_systeemzorg_aanvraag() else "",
     )
+
+
+@app.route('/werkruimte')
+def werkruimte_pagina():
+    if ECHO_ENTERPRISE_MODE:
+        gebruiker = enterprise_current_user()
+        if not gebruiker or not gebruiker.get("company_id"):
+            return "A company workspace is required.", 403
+    return render_template(
+        "workspace.html",
+        ui=tekst_voor_taal,
+        nederlands=gebruik_nederlands(),
+        model_ingesteld=online_ai_beschikbaar(),
+        build_id=APP_BUILD_ID,
+    )
+
+
+@app.route('/aanwezigheid')
+def aanwezigheid_pagina():
+    return render_template(
+        "presence.html",
+        ui=tekst_voor_taal,
+        nederlands=gebruik_nederlands(),
+        build_id=APP_BUILD_ID,
+        presence_token=AANWEZIGHEID_TOKEN,
+    )
+
+
+def aanwezigheid_status_payload():
+    status = AANWEZIGHEID_MONITOR.snapshot()
+    status["error_message"] = (
+        aanwezigheid.PresenceError(status["error_code"]).localized(gebruik_nederlands())
+        if status["error_code"] else ""
+    )
+    return {"status": "success", "presence": status}
+
+
+@app.route('/api/aanwezigheid/status')
+def aanwezigheid_status():
+    return jsonify(aanwezigheid_status_payload())
+
+
+@app.route('/api/aanwezigheid/start', methods=['POST'])
+def aanwezigheid_start():
+    try:
+        configuratie = aanwezigheid.PresenceSettings.from_payload(request.get_json(silent=True))
+        AANWEZIGHEID_MONITOR.start(configuratie)
+    except aanwezigheid.PresenceError as exc:
+        return jsonify({"status": "error", "message": exc.localized(gebruik_nederlands())}), exc.status
+    return jsonify(aanwezigheid_status_payload())
+
+
+@app.route('/api/aanwezigheid/stop', methods=['POST'])
+def aanwezigheid_stop():
+    AANWEZIGHEID_MONITOR.stop()
+    return jsonify(aanwezigheid_status_payload())
+
+
+def camera_assistent_nederlands():
+    taal = request.args.get("lang") or request.headers.get("X-Echo-UI-Language")
+    if taal in ("nl", "en"):
+        return taal == "nl"
+    return gebruik_nederlands()
+
+
+@app.route('/camera-assistent')
+def camera_assistent_pagina():
+    nederlands = camera_assistent_nederlands()
+    return render_template(
+        "camera-assistant.html", ui=lambda engels, nl: nl if nederlands else engels, nederlands=nederlands,
+        build_id=APP_BUILD_ID, presence_token=AANWEZIGHEID_TOKEN,
+    )
+
+
+@app.route('/api/camera-assistent/status')
+def camera_assistent_status():
+    return jsonify({"status": "success", "camera": CAMERA_ASSISTENT.snapshot(camera_assistent_nederlands())})
+
+
+@app.route('/api/camera-assistent/microphones')
+def camera_assistent_microfoons():
+    try:
+        return jsonify({"status": "success", "microphones": camera_assistent.microphone_operation()})
+    except camera_assistent.CameraAssistantError as exc:
+        app.logger.warning("Cannot list camera-assistant microphones: %s", exc)
+        return jsonify({"status": "error", "message": exc.localized(camera_assistent_nederlands())}), exc.status
+
+
+@app.route('/api/camera-assistent/<actie>', methods=['POST'])
+def camera_assistent_actie(actie):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        message = "Een JSON-object is vereist." if camera_assistent_nederlands() else "A JSON object is required."
+        return jsonify({"status": "error", "message": message}), 400
+    try:
+        if actie == "start":
+            CAMERA_ASSISTENT.start(camera_assistent.Settings.parse(data))
+        elif actie == "stop" and not data:
+            CAMERA_ASSISTENT.stop()
+        elif actie == "train" and set(data) == {"target"}:
+            if not isinstance(data["target"], str):
+                raise camera_assistent.CameraAssistantError("settings", 400)
+            CAMERA_ASSISTENT.train(data["target"])
+        elif actie == "arm" and set(data) == {"enabled"}:
+            CAMERA_ASSISTENT.arm(data["enabled"])
+        elif actie == "unmute" and not data:
+            CAMERA_ASSISTENT.unmute()
+        else:
+            raise camera_assistent.CameraAssistantError("settings", 400)
+    except (camera_assistent.CameraAssistantError, aanwezigheid.PresenceError) as exc:
+        return jsonify({"status": "error", "message": exc.localized(camera_assistent_nederlands())}), exc.status
+    return jsonify({"status": "success", "camera": CAMERA_ASSISTENT.snapshot(camera_assistent_nederlands())})
+
+
+@app.route('/systeemzorg')
+def systeemzorg_pagina():
+    return render_template(
+        "system-care.html", ui=tekst_voor_taal, nederlands=gebruik_nederlands(),
+        build_id=APP_BUILD_ID, system_token=SYSTEEMZORG_TOKEN,
+    )
+
+
+@app.route('/api/systeemzorg/<actie>', methods=['GET', 'POST'])
+def systeemzorg_api(actie):
+    try:
+        if request.method == "GET":
+            if actie == "status":
+                return jsonify({"status": "success", "care": SYSTEEMZORG.snapshot()})
+            if actie == "adapters":
+                return jsonify({"status": "success", "adapters": systeemzorg.adapters()})
+            if actie == "resources":
+                return jsonify({"status": "success", "processes": systeembronnen.processes(),
+                                "power": systeembronnen.power_capabilities(), "memory": systeembronnen.memory_status()})
+            return jsonify({"status": "error", "message": "Unknown system-care endpoint."}), 404
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise systeemzorg.CareError("A JSON object is required.")
+        if actie == "start" and set(data) == {"config", "authorized"} and data["authorized"] is True:
+            SYSTEEMZORG.start(data["config"])
+        elif actie == "stop" and not data:
+            SYSTEEMZORG.stop()
+        elif actie == "trust" and set(data) == {"scope", "identity", "trusted"}:
+            if not isinstance(data["scope"], str) or not isinstance(data["identity"], str):
+                raise systeemzorg.CareError("Invalid device identity.")
+            SYSTEEMZORG.store.trust(data["scope"], data["identity"], data["trusted"])
+        elif actie == "policy" and set(data) == {"profile", "policy"}:
+            if not isinstance(data["profile"], str):
+                raise systeemzorg.CareError("Invalid profile.")
+            SYSTEEMZORG.save_policy(data["profile"], data["policy"])
+        elif actie == "preview" and set(data) == {"profile"} and isinstance(data["profile"], str):
+            return jsonify({"status": "success", "preview": SYSTEEMZORG.preview(data["profile"])})
+        elif actie == "execute" and set(data) == {"token"} and isinstance(data["token"], str):
+            SYSTEEMZORG.execute_preview(data["token"])
+        elif actie == "automatic" and set(data) == {"enabled"} and type(data["enabled"]) is bool:
+            SYSTEEMZORG.automatic = data["enabled"]
+        elif actie == "pressure-start" and set(data) == {"profile", "authorized", "speech"}:
+            SYSTEEMZORG.start_pressure(data["profile"], data["authorized"], data["speech"], gebruik_nederlands())
+        elif actie == "pressure-stop" and not data:
+            SYSTEEMZORG.stop_pressure()
+        elif actie == "restore" and not data:
+            SYSTEEMZORG.restore()
+        else:
+            raise systeemzorg.CareError("Invalid action or missing explicit permission.")
+        return jsonify({"status": "success", "care": SYSTEEMZORG.snapshot()})
+    except (systeemzorg.CareError, systeembronnen.ResourceError) as exc:
+        app.logger.warning("System-care request failed: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except (OSError, sqlite3.Error, ValueError, systeembronnen.psutil.Error) as exc:
+        app.logger.exception("System-care service unavailable")
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "System care is unavailable. See the local server log.", "Systeemzorg is niet beschikbaar. Bekijk het lokale serverlog.",
+        )}), 503
+
+
+@app.route('/api/systeemzorg/local-ai/models', methods=['GET'])
+def lokale_analyse_modellen():
+    try:
+        return jsonify({"status": "success", "models": lokale_analyse.installed_models()})
+    except lokale_analyse.AnalysisError as exc:
+        return jsonify({"status": "error", "message": exc.localized(gebruik_nederlands())}), exc.status
+
+
+@app.route('/api/systeemzorg/local-ai/analyze', methods=['POST'])
+def lokale_analyse_bestanden():
+    if request.content_length is None or request.content_length > 512 * 1024:
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "File selection is too large.", "De bestandsselectie is te groot.",
+        )}), 413
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {"files", "model", "authorized"}:
+        return jsonify({"status": "error", "message": tekst_voor_taal(
+            "A file selection, local model and explicit permission are required.",
+            "Een bestandsselectie, lokaal model en expliciete toestemming zijn vereist.",
+        )}), 400
+    try:
+        report = lokale_analyse.analyze(data["files"], data["model"], data["authorized"], gebruik_nederlands())
+        return jsonify({"status": "success", "report": report})
+    except lokale_analyse.AnalysisError as exc:
+        return jsonify({"status": "error", "message": exc.localized(gebruik_nederlands())}), exc.status
+
+
+@app.route('/webautomatisering')
+def webautomatisering_pagina():
+    return render_template(
+        "web-automation.html", ui=tekst_voor_taal, nederlands=gebruik_nederlands(),
+        build_id=APP_BUILD_ID, web_token=WEBAUTOMATISERING_TOKEN,
+    )
+
+
+def webautomatisering_onbeschikbaar(onderdeel):
+    app.logger.exception("%s unavailable", onderdeel)
+    return jsonify({"status": "error", "message": tekst_voor_taal(
+        "This feature is unavailable. See the local server log.", "Deze functie is niet beschikbaar. Bekijk het lokale serverlog.",
+    )}), 503
+
+
+@app.route('/api/webautomatisering/<actie>', methods=['GET', 'POST'])
+def webautomatisering_api(actie):
+    try:
+        if request.method == "GET":
+            if actie != "status":
+                return jsonify({"status": "error", "message": "Unknown web-automation endpoint."}), 404
+            return jsonify({"status": "success", "web": WEBAUTOMATISERING.snapshot(), "osint": OSINT.snapshot()})
+        resultaat = WEBAUTOMATISERING.handle(actie, request.get_json(silent=True))
+        return jsonify({"status": "success", **resultaat, "web": WEBAUTOMATISERING.snapshot()})
+    except webautomatisering.AutomationError as exc:
+        app.logger.warning("Web-automation request failed: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except (OSError, sqlite3.Error):
+        return webautomatisering_onbeschikbaar("Web automation")
+
+
+@app.route('/api/webautomatisering/osint/<actie>', methods=['POST'])
+def osint_api(actie):
+    try:
+        resultaat = OSINT.handle(actie, request.get_json(silent=True))
+        if actie == "password_range":
+            return jsonify({"status": "success", **resultaat})
+        return jsonify({"status": "success", **resultaat, "osint": OSINT.snapshot()})
+    except osint_controle.OsintError as exc:
+        app.logger.warning("OSINT request failed: %s", exc)
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except (OSError, sqlite3.Error):
+        return webautomatisering_onbeschikbaar("OSINT")
 
 
 @app.route('/admin')
@@ -18706,11 +19185,10 @@ def quick_checker_page():
 
 @app.route('/functional-checker')
 def functional_checker_page():
-    return render_template(
-        'functional-checker.html',
-        instellingen=instellingen,
-        build_id=APP_BUILD_ID,
-    )
+    target_url = request.args.get("url", "").strip()
+    if target_url:
+        return redirect(url_for("website_scanner.index", url=target_url))
+    return redirect(url_for("website_scanner.index"))
 
 
 # Lichtgewicht endpoint voor frontend hot-reload/runtime detectie.
@@ -18953,6 +19431,10 @@ def speech_command():
 
 @app.route('/api/spraak-upload', methods=['POST'])
 def speech_upload_command():
+    return verwerk_audio_upload()
+
+
+def verwerk_audio_upload(taalcode=None):
     audio_bestand = request.files.get('audio')
     if audio_bestand is None:
         return jsonify({
@@ -18987,7 +19469,10 @@ def speech_upload_command():
             temp_bestand.write(audio_bytes)
             tijdelijk_pad = Path(temp_bestand.name)
 
-        transcriptie, provider = herken_audio_upload_tekst(tijdelijk_pad)
+        if taalcode:
+            transcriptie, provider = herken_audio_upload_tekst(tijdelijk_pad, taalcode=taalcode)
+        else:
+            transcriptie, provider = herken_audio_upload_tekst(tijdelijk_pad)
         transcriptie = str(transcriptie or '').strip()
         if not transcriptie:
             return jsonify({
@@ -19008,6 +19493,205 @@ def speech_upload_command():
                 tijdelijk_pad.unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def werkruimte_fouten_afhandelen(functie):
+    @wraps(functie)
+    def afhandeling(*args, **kwargs):
+        try:
+            return functie(*args, **kwargs)
+        except werkruimte.WorkspaceError as exc:
+            return jsonify({"status": "error", "message": exc.localized(gebruik_nederlands())}), exc.status
+        except (sqlite3.Error, OSError):
+            app.logger.exception("Workspace storage or file operation failed")
+            return jsonify({
+                "status": "error",
+                "message": tekst_voor_taal(
+                    "The workspace could not access its data. Check storage permissions and try again.",
+                    "De werkruimte kon de gegevens niet openen. Controleer de opslagrechten en probeer opnieuw.",
+                ),
+            }), 500
+    return afhandeling
+
+
+def werkruimte_database_pad():
+    if ECHO_ENTERPRISE_MODE:
+        gebruiker = enterprise_current_user()
+        bedrijfs_id = str(gebruiker.get("company_id") or "") if gebruiker else ""
+        gebruikers_id = str(gebruiker.get("id") or "") if gebruiker else ""
+        if not re.fullmatch(r"[a-f0-9]{32}", bedrijfs_id) or not re.fullmatch(r"[a-f0-9]{32}", gebruikers_id):
+            raise werkruimte.WorkspaceError(
+                "A valid company account is required.",
+                "Een geldig bedrijfsaccount is vereist.",
+                403,
+            )
+        return ECHO_ENTERPRISE_DATA_DIR / "companies" / bedrijfs_id / "workspaces" / gebruikers_id / "echo_reading_list.sqlite3"
+    submap = "demo" if ECHO_DEMO_MODE else "personal"
+    return WERKRUIMTE_DATA_DIR / submap / "echo_reading_list.sqlite3"
+
+
+def werkruimte_model_vereist():
+    if not online_ai_beschikbaar():
+        raise werkruimte.WorkspaceError(
+            "Configure an AI model and API key or local model token in Echo before using this feature.",
+            "Stel eerst een AI-model en API-sleutel of lokaal modeltoken in voor Echo.",
+            503,
+        )
+
+
+def vraag_werkruimte_ai(berichten):
+    antwoord = vraag_online_ai_bericht(berichten, temperatuur=0.2, return_raw=True)
+    keuzes = antwoord.get("choices") if isinstance(antwoord, dict) else None
+    keuze = keuzes[0] if isinstance(keuzes, list) and keuzes and isinstance(keuzes[0], dict) else None
+    if not keuze:
+        raise werkruimte.WorkspaceError(
+            "The AI model returned an invalid response.",
+            "Het AI-model gaf een ongeldig antwoord.",
+            502,
+        )
+    eindreden = keuze.get("finish_reason")
+    if eindreden is not None and eindreden != "stop":
+        if eindreden == "length":
+            raise werkruimte.AIOutputTruncated()
+        raise werkruimte.WorkspaceError(
+            "The AI model could not complete its answer.",
+            "Het AI-model kon het antwoord niet voltooien.",
+            502,
+        )
+    bericht = keuze.get("message")
+    inhoud = bericht.get("content") if isinstance(bericht, dict) else None
+    if not isinstance(inhoud, str) or not inhoud.strip():
+        raise werkruimte.WorkspaceError(
+            "The AI model returned an empty answer.",
+            "Het AI-model gaf een leeg antwoord.",
+            502,
+        )
+    return inhoud.strip()
+
+
+@app.route('/api/werkruimte/transcribeer', methods=['POST'])
+def werkruimte_transcribeer():
+    if request.content_length is not None and request.content_length > MAX_AUDIO_UPLOAD_BYTES + 128 * 1024:
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("Audio upload is too large.", "De audio-upload is te groot."),
+        }), 413
+    taalcode = request.form.get("language", "")
+    if taalcode not in {"", "nl-NL", "en-US", "de-DE", "fr-FR", "es-ES", "it-IT", "pt-PT", "ar-SA"}:
+        return jsonify({
+            "status": "error",
+            "message": tekst_voor_taal("Choose a supported spoken language.", "Kies een ondersteunde gesproken taal."),
+        }), 400
+    return verwerk_audio_upload(taalcode=taalcode or None)
+
+
+@app.route('/api/werkruimte/verwerk', methods=['POST'])
+@werkruimte_fouten_afhandelen
+def werkruimte_verwerk():
+    if request.content_length is not None and request.content_length > werkruimte.MAX_UPLOAD_BYTES + 2 * 1024 * 1024:
+        raise werkruimte.WorkspaceError("The upload is too large.", "De upload is te groot.", 413)
+    if request.is_json:
+        gegevens = request.get_json(silent=True)
+        upload = None
+    else:
+        gegevens = request.form
+        upload = request.files.get("document")
+    if not isinstance(gegevens, dict) and not hasattr(gegevens, "get"):
+        raise werkruimte.WorkspaceError("Provide valid input.", "Geef geldige invoer op.")
+
+    actie = gegevens.get("action", "")
+    tekst = gegevens.get("text", "")
+    url = gegevens.get("url", "")
+    doel_taal = gegevens.get("target_language", "")
+    context = gegevens.get("context", "")
+    if not all(isinstance(waarde, str) for waarde in (actie, tekst, url, doel_taal, context)):
+        raise werkruimte.WorkspaceError("The input fields must contain text.", "De invoervelden moeten tekst bevatten.")
+    if actie not in {"note", "translate", "summary"}:
+        raise werkruimte.WorkspaceError("Choose a supported action.", "Kies een ondersteunde actie.")
+    heeft_bestand = upload is not None and bool(upload.filename)
+    if sum((bool(tekst.strip()), bool(url.strip()), heeft_bestand)) != 1:
+        raise werkruimte.WorkspaceError(
+            "Provide exactly one source: text, a document, or a URL.",
+            "Geef precies één bron op: tekst, een document of een URL.",
+        )
+    werkruimte_model_vereist()
+
+    if heeft_bestand:
+        inhoud = upload.stream.read(werkruimte.MAX_UPLOAD_BYTES + 1)
+        bron = werkruimte.extract_document(inhoud, upload.filename, dutch=gebruik_nederlands())
+    elif url.strip():
+        bron = werkruimte.fetch_article(url, dutch=gebruik_nederlands())
+    else:
+        bron = {"text": werkruimte.validate_text(tekst), "warnings": [], "title": ""}
+
+    if actie == "note":
+        resultaat = werkruimte.format_note(bron["text"], vraag_werkruimte_ai)
+    elif actie == "translate":
+        resultaat = werkruimte.translate_text(bron["text"], doel_taal, context, vraag_werkruimte_ai)
+    else:
+        resultaat = werkruimte.summarize_text(bron["text"], vraag_werkruimte_ai, dutch=gebruik_nederlands())
+    return jsonify({
+        "status": "success",
+        "result": resultaat,
+        "warnings": bron.get("warnings", []),
+        "source": {"title": bron.get("title", ""), "url": bron.get("url", "")},
+    })
+
+
+@app.route('/api/werkruimte/leeslijst', methods=['GET', 'POST'])
+@werkruimte_fouten_afhandelen
+def werkruimte_leeslijst():
+    database_pad = werkruimte_database_pad()
+    if request.method == "GET":
+        return jsonify({"status": "success", "items": werkruimte.list_reading_items(database_pad)})
+    if request.content_length is not None and request.content_length > 16 * 1024:
+        raise werkruimte.WorkspaceError("The request is too large.", "Het verzoek is te groot.", 413)
+    gegevens = request.get_json(silent=True)
+    if not isinstance(gegevens, dict):
+        raise werkruimte.WorkspaceError("Provide a valid article URL.", "Geef een geldige artikel-URL op.")
+    url = werkruimte.normalize_url(gegevens.get("url"))
+    if werkruimte.reading_url_exists(database_pad, url):
+        raise werkruimte.WorkspaceError(
+            "This article is already in your reading list.",
+            "Dit artikel staat al in je leeslijst.",
+            409,
+        )
+    werkruimte_model_vereist()
+    artikel = werkruimte.fetch_article(url, dutch=gebruik_nederlands())
+    uiteindelijke_url = werkruimte.normalize_url(artikel["url"])
+    if werkruimte.reading_url_exists(database_pad, uiteindelijke_url):
+        raise werkruimte.WorkspaceError(
+            "This article is already in your reading list.",
+            "Dit artikel staat al in je leeslijst.",
+            409,
+        )
+    details = werkruimte.reading_details(
+        artikel["text"], artikel["title"], vraag_werkruimte_ai, dutch=gebruik_nederlands()
+    )
+    item = werkruimte.save_reading_item(database_pad, uiteindelijke_url, details)
+    return jsonify({"status": "success", "item": item, "warnings": artikel.get("warnings", [])}), 201
+
+
+@app.route('/api/werkruimte/leeslijst/<item_id>', methods=['PATCH', 'DELETE'])
+@werkruimte_fouten_afhandelen
+def werkruimte_leeslijst_item(item_id):
+    if not re.fullmatch(r"[a-f0-9]{32}", item_id):
+        raise werkruimte.WorkspaceError("The article was not found.", "Het artikel is niet gevonden.", 404)
+    database_pad = werkruimte_database_pad()
+    if request.method == "DELETE":
+        werkruimte.delete_reading_item(database_pad, item_id)
+        return jsonify({"status": "success"})
+    if request.content_length is not None and request.content_length > 16 * 1024:
+        raise werkruimte.WorkspaceError("The request is too large.", "Het verzoek is te groot.", 413)
+    gegevens = request.get_json(silent=True)
+    if not isinstance(gegevens, dict) or type(gegevens.get("read")) is not bool:
+        raise werkruimte.WorkspaceError(
+            "Specify whether the article has been read.",
+            "Geef aan of het artikel is gelezen.",
+        )
+    item = werkruimte.update_reading_item(database_pad, item_id, gegevens["read"])
+    return jsonify({"status": "success", "item": item})
+
 
 # Ophalen van actuele instellingen voor de frontend.
 @app.route('/api/instellingen', methods=['GET'])
@@ -20158,9 +20842,21 @@ def update_settings():
     pas_demo_veiligheidsinstellingen_toe(instellingen)
     
     sla_instellingen_op(instellingen)
+    hardware_job = ""
+    hardware_error = ""
+    if toegepast_profiel and data.get("hardware_profile_apply") is True:
+        try:
+            hardware_job = SYSTEEMZORG.profile_changed(
+                toegepast_profiel, authorized=lokale_systeemzorg_aanvraag(met_token=True),
+            )
+        except (systeemzorg.CareError, systeembronnen.ResourceError, OSError, sqlite3.Error) as exc:
+            app.logger.exception("Profile saved, but hardware actions could not start")
+            hardware_error = str(exc)
     return jsonify({
         'status': 'success',
         'message': tekst_voor_taal('Settings saved', 'Instellingen opgeslagen'),
+        'hardware_job': hardware_job,
+        'hardware_error': hardware_error,
         'settings_profile': str(instellingen.get('instellingen_profiel', 'normal') or 'normal').strip().lower(),
         'profile_applied': bool(toegepast_profiel),
         'settings_profiles': sorted(list((instellingen.get('instellingen_profielen') or {}).keys())),

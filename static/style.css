@@ -484,6 +484,60 @@ body[data-threat='elevated'] .ring-lock {
     box-shadow: 0 0 16px rgba(0, 240, 255, 0.35);
 }
 
+.command-shortcuts {
+    display: grid;
+    gap: 7px;
+}
+
+.command-center .command-shortcut {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 35px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-color: rgba(71, 196, 199, 0.28);
+    border-radius: 9px;
+    background: rgba(3, 29, 37, 0.68);
+    text-align: left;
+    text-decoration: none;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.command-center .command-shortcut:hover,
+.command-center .command-shortcut:focus-visible {
+    border-color: rgba(108, 243, 209, 0.9);
+    background: rgba(12, 57, 57, 0.8);
+    box-shadow: 0 0 16px rgba(0, 240, 255, 0.16);
+}
+
+.command-shortcut-icon {
+    width: 35px;
+    height: 35px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(108, 243, 209, 0.25);
+    border-radius: 9px;
+    color: #a4ffea;
+    background: rgba(38, 112, 102, 0.25);
+    font-family: "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+    font-size: 1rem;
+}
+
+.command-shortcut strong, .command-shortcut small { display: block; overflow-wrap: anywhere; }
+.command-shortcut strong { font-size: 0.69rem; line-height: 1.35; }
+.command-shortcut small {
+    margin-top: 4px;
+    color: rgba(190, 225, 224, 0.8);
+    font-family: var(--font-data);
+    font-size: 0.62rem;
+    line-height: 1.35;
+}
+.command-shortcut-arrow { color: #9ceede; font-size: 0.9rem; }
+html[lang="nl"] .command-shortcut [lang="en"],
+html[lang="en"] .command-shortcut [lang="nl"] { display: none; }
+
 .panel-block.is-collapsible {
     position: relative;
     padding-right: 42px;

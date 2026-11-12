@@ -1,6 +1,6 @@
 (() => {
-    const viewerRole = document.body.dataset.userRole || "";
-
+    const body = document.body;
+    const viewerRole = body.dataset.userRole || "";
     async function api(path, options = {}) {
         const headers = { ...(options.headers || {}) };
         if (options.body && !(options.body instanceof FormData)) {
@@ -108,7 +108,9 @@
     }
 
     function showError(element, error) {
-        if (element) element.textContent = error.message || "Er is iets misgegaan.";
+        if (element) {
+            element.textContent = error.message || "Er is iets misgegaan.";
+        }
     }
 
     function buildUserListItem(user) {
@@ -301,7 +303,8 @@
         }
         companyForm.addEventListener("submit", async (event) => {
             event.preventDefault();
-            const values = Object.fromEntries(new FormData(companyForm).entries());
+            const form = new FormData(companyForm);
+            const values = Object.fromEntries(form.entries());
             status.textContent = "Bedrijfsomgeving wordt aangemaakt...";
             try {
                 const data = await api("/api/admin/companies", {

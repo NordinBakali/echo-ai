@@ -202,7 +202,7 @@ const appState = {
     actionFilterQuery: '',
     settingsProfile: 'normal',
     settingsProfileSelected: 'normal',
-    settingsProfiles: ['normal', 'streaming', 'security'],
+    settingsProfiles: ['normal', 'streaming', 'security', 'gaming', 'heavy_work'],
     settingsProfileConfigs: {},
     settingsProfileActionsByProfile: {},
     settingsProfileActionsEditorDirty: false,
@@ -456,7 +456,12 @@ const SETTINGS_PROFILE_BASE_CONFIGS = {
     },
 };
 
+SETTINGS_PROFILE_BASE_CONFIGS.gaming = { ...SETTINGS_PROFILE_BASE_CONFIGS.normal, spraak_uitgang: false, stream_auto_focus_obs: false };
+SETTINGS_PROFILE_BASE_CONFIGS.heavy_work = { ...SETTINGS_PROFILE_BASE_CONFIGS.gaming };
+
 const SETTINGS_PROFILE_ACTION_PRESETS = {
+    gaming: [{ command: 'system info', label: 'System Status' }],
+    heavy_work: [{ command: 'system info', label: 'System Status' }],
     normal: [
         { command: 'system info and show agenda and show tasks', labelKey: 'settings_profile_action_daily_briefing' },
         { command: 'show tasks', labelKey: 'settings_profile_action_task_radar' },
@@ -478,6 +483,8 @@ const SETTINGS_PROFILE_ACTION_PRESETS = {
 };
 
 const SETTINGS_PROFILE_LAUNCH_SEQUENCES = {
+    gaming: ['system info'],
+    heavy_work: ['system info'],
     normal: ['system info and show agenda and show tasks'],
     streaming: ['stream mode on', 'stream help'],
     security: ['website audit status', 'website audit schedule status'],
@@ -707,6 +714,9 @@ const UI_STRINGS = {
         settings_profile_summary_normal: 'Normaal gebruik: stabiele dagelijkse assistent met balans tussen AI, geheugen en veiligheid.',
         settings_profile_summary_streaming: 'Streaming: snelle live control, steminput aan en OBS focus voor soepele stream-acties.',
         settings_profile_summary_security: 'Security: defensieve modus met dagelijkse security-focus en strengere auditkeuzes.',
+        settings_profile_summary_gaming: 'Gaming: minder gesproken meldingen. Stel goedgekeurde hardwareacties apart in via Systeemzorg.',
+        settings_profile_summary_heavy_work: 'Zwaar werk: stille werkmodus. RAM- en energieacties vereisen toestemming in Systeemzorg.',
+        settings_profile_hardware_started: 'Goedgekeurde hardwareacties gestart. Bekijk het resultaat in Systeemzorg.',
         settings_profile_actions_title: 'Profielacties',
         settings_profile_on: 'AAN',
         settings_profile_off: 'UIT',
@@ -741,6 +751,8 @@ const UI_STRINGS = {
         settings_profile_option_normal: 'Normaal Gebruik',
         settings_profile_option_streaming: 'Streaming',
         settings_profile_option_security: 'Security',
+        settings_profile_option_gaming: 'Gaming',
+        settings_profile_option_heavy_work: 'Zwaar werk',
         website_audit_kicker: 'Website Audit',
         website_audit_idle: 'Audit stand-by. Voeg een URL toe en start een scan.',
         website_audit_running: 'Audit bezig: {stage} ({progress}%)',
@@ -1011,6 +1023,9 @@ const UI_STRINGS = {
         settings_profile_summary_normal: 'Normal use: balanced daily assistant profile for AI, memory, and safe control.',
         settings_profile_summary_streaming: 'Streaming: fast live controls, voice input enabled, and OBS-first flow.',
         settings_profile_summary_security: 'Security: defensive mode with daily security focus and stricter audit defaults.',
+        settings_profile_summary_gaming: 'Gaming: quieter voice output. Configure approved hardware actions separately in System care.',
+        settings_profile_summary_heavy_work: 'Heavy work: quiet work mode. RAM and power actions require permission in System care.',
+        settings_profile_hardware_started: 'Approved hardware actions started. Check the result in System care.',
         settings_profile_actions_title: 'Profile actions',
         settings_profile_on: 'ON',
         settings_profile_off: 'OFF',
@@ -1045,6 +1060,8 @@ const UI_STRINGS = {
         settings_profile_option_normal: 'Normal Use',
         settings_profile_option_streaming: 'Streaming',
         settings_profile_option_security: 'Security',
+        settings_profile_option_gaming: 'Gaming',
+        settings_profile_option_heavy_work: 'Heavy work',
         website_audit_kicker: 'Website Audit',
         website_audit_idle: 'Audit idle. Add a URL and start a scan.',
         website_audit_running: 'Audit running: {stage} ({progress}%)',
@@ -1644,14 +1661,14 @@ function normaliseerWebsiteAuditTijd(waarde) {
 
 function normaliseerSettingsProfielNaam(waarde) {
     const raw = String(waarde || '').trim().toLowerCase();
-    if (raw === 'streaming' || raw === 'security') {
+    if (['streaming', 'security', 'gaming', 'heavy_work'].includes(raw)) {
         return raw;
     }
     return 'normal';
 }
 
 function normaliseerSettingsProfielenLijst(waarde) {
-    const basis = ['normal', 'streaming', 'security'];
+    const basis = ['normal', 'streaming', 'security', 'gaming', 'heavy_work'];
     const bron = [];
 
     if (Array.isArray(waarde)) {
@@ -1735,6 +1752,8 @@ function normaliseerSettingsProfielConfigs(waarde) {
         normal: normaliseerSettingsProfielConfig('normal', SETTINGS_PROFILE_BASE_CONFIGS.normal),
         streaming: normaliseerSettingsProfielConfig('streaming', SETTINGS_PROFILE_BASE_CONFIGS.streaming),
         security: normaliseerSettingsProfielConfig('security', SETTINGS_PROFILE_BASE_CONFIGS.security),
+        gaming: normaliseerSettingsProfielConfig('gaming', SETTINGS_PROFILE_BASE_CONFIGS.gaming),
+        heavy_work: normaliseerSettingsProfielConfig('heavy_work', SETTINGS_PROFILE_BASE_CONFIGS.heavy_work),
     };
 
     if (!waarde || typeof waarde !== 'object') {
@@ -1825,6 +1844,8 @@ function normaliseerSettingsProfielActiesData(waarde) {
         normal: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.normal, SETTINGS_PROFILE_ACTION_PRESETS.normal),
         streaming: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.streaming, SETTINGS_PROFILE_ACTION_PRESETS.streaming),
         security: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.security, SETTINGS_PROFILE_ACTION_PRESETS.security),
+        gaming: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.gaming, SETTINGS_PROFILE_ACTION_PRESETS.gaming),
+        heavy_work: normaliseerSettingsProfielActiesLijst(SETTINGS_PROFILE_ACTION_PRESETS.heavy_work, SETTINGS_PROFILE_ACTION_PRESETS.heavy_work),
     };
 
     if (!waarde || typeof waarde !== 'object') {
@@ -2777,10 +2798,12 @@ async function applySettingsProfiel(event, options = {}) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'X-Echo-System-Token': silent ? '' : (document.querySelector('meta[name="echo-system-token"]')?.content || ''),
             },
             body: JSON.stringify({
                 instellingen_profiel: geselecteerdProfiel,
                 apply_profile: true,
+                hardware_profile_apply: !silent,
             }),
         }, 9000);
 
@@ -2834,6 +2857,11 @@ async function applySettingsProfiel(event, options = {}) {
         });
         if (!silent) {
             addMessage('ai', melding);
+            if (data.hardware_error) {
+                addMessage('error', String(data.hardware_error));
+            } else if (data.hardware_job === 'running') {
+                addMessage('ai', uiTekst('settings_profile_hardware_started'));
+            }
             setCommandStatus(melding);
             triggerHapticFeedback(45);
         }
@@ -3400,15 +3428,15 @@ function openWebsiteFunctionalVisualReportInTab() {
     return true;
 }
 
-function openWebsiteFunctionalCheckerPopup() {
+function openWebsiteScanner() {
     const doelUrl = websiteAuditUrlInput ? String(websiteAuditUrlInput.value || '').trim() : '';
     const popupUrl = doelUrl
-        ? `/functional-checker?view=popup&url=${encodeURIComponent(doelUrl)}`
-        : '/functional-checker?view=popup';
+        ? `/website-scanner/?url=${encodeURIComponent(doelUrl)}`
+        : '/website-scanner/';
 
     const popup = window.open(
         popupUrl,
-        'echoFunctionalChecker',
+        'echoWebsiteScanner',
         'popup=yes,width=1480,height=920,resizable=yes,scrollbars=yes'
     );
 
@@ -3418,8 +3446,8 @@ function openWebsiteFunctionalCheckerPopup() {
     }
 
     const melding = tekstVoorTaal(
-        'Could not open Functional Checker popup (popup blocked).',
-        'Kon Functional Checker popup niet openen (popup geblokkeerd).'
+        'Could not open Website Scanner (popup blocked).',
+        'Kon de Website Scanner niet openen (popup geblokkeerd).'
     );
     setCommandStatus(melding);
     triggerHapticFeedback([90, 35, 90]);
@@ -6947,7 +6975,7 @@ function updateLocalizedUiLabels() {
     }
 
     if (websiteAuditVisualCheckBtn) {
-        websiteAuditVisualCheckBtn.textContent = tekstVoorTaal('Functional Checker Popup', 'Functional Checker Popup');
+        websiteAuditVisualCheckBtn.textContent = tekstVoorTaal('Website Scanner', 'Website Scanner');
     }
 
     if (websiteFunctionalVisualStartBtn) {
@@ -7255,9 +7283,9 @@ function attachCompanyKnowledgeFeedback(messageRow, feedbackId) {
                 void refreshCompanyKnowledgeMetrics();
             } catch (error) {
                 button.disabled = false;
-                prompt.textContent = error.message || (isNederlandsActief()
+                prompt.textContent = isNederlandsActief()
                     ? 'Feedback kon niet worden opgeslagen. Probeer opnieuw.'
-                    : 'Feedback could not be saved. Please try again.');
+                    : 'Feedback could not be saved. Please try again.';
             }
         });
         feedback.appendChild(button);
@@ -8673,7 +8701,7 @@ function wireEvents() {
     if (websiteAuditVisualCheckBtn) {
         websiteAuditVisualCheckBtn.addEventListener('click', (event) => {
             event.preventDefault();
-            openWebsiteFunctionalCheckerPopup();
+            openWebsiteScanner();
         });
     }
 
@@ -8766,6 +8794,7 @@ function wireEvents() {
                 actionFilterInput.value = '';
                 applyActionFilter();
                 event.preventDefault();
+                event.stopPropagation();
                 return;
             }
 

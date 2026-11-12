@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="{{ 'nl' if nederlands else 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="echo-web-token" content="{{ web_token }}">
+    <title>{{ ui('Web automation', 'Webautomatisering') }} - Echo</title>
+    <link rel="icon" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v={{ build_id }}">
+    <style>
+        input[type=checkbox] { width: auto; }
+        .input-card { min-width: 0; } select { max-width: 100%; }
+        #web-transaction-fields { min-width: 0; margin-top: 1rem; }
+        .web-list { list-style: none; padding: 0; max-height: 640px; overflow: auto; }
+        .web-list > li { border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: .8rem 1rem; margin: .7rem 0; overflow-wrap: anywhere; }
+        .web-list pre, #web-password-result, #web-osint-job { white-space: pre-wrap; overflow-wrap: anywhere; margin: .4rem 0; font: inherit; }
+        .web-list details { margin-top: .5rem; }
+        .web-events { max-height: 300px; overflow: auto; padding-left: 1.3rem; }
+        .web-events li { margin: .4rem 0; overflow-wrap: anywhere; }
+        .element-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+        .button-row button { margin: .2rem .3rem .2rem 0; }
+        #web-error { color: #ffba97; }
+        .web-warning { color: #ffd89a; }
+    </style>
+    <script src="{{ url_for('static', filename='web-automation.js') }}?v={{ build_id }}" defer></script>
+</head>
+<body data-language="{{ 'nl' if nederlands else 'en' }}">
+<div class="workspace-shell">
+    <header class="workspace-header">
+        <a class="brand" href="{{ url_for('index') }}">ECHO <small>{{ ui('WEB AUTOMATION', 'WEBAUTOMATISERING') }}</small></a>
+        <a class="back-link" href="{{ url_for('index') }}">{{ ui('Back to Echo', 'Terug naar Echo') }}</a>
+    </header>
+    <main>
+        <section class="workspace-intro">
+            <h1>{{ ui('Stock watches, self-healing clicks and breach checks.', 'Voorraad-watchers, zelfherstellende klikken en datalekchecks.') }}</h1>
+            <p>{{ ui('Choose notifications, cart preparation, or a separately authorized one-time order/reservation. Final actions require an exact product, quantity, total budget and confirmation. Bot checks and CAPTCHAs are never bypassed; respect shop terms.', 'Kies meldingen, winkelwagenvoorbereiding of een apart toegestane eenmalige bestelling/reservering. Definitieve acties vereisen een exact product, aantal, totaalbudget en bevestiging. Botcontroles en CAPTCHA\'s worden niet omzeild; respecteer winkelvoorwaarden.') }}</p>
+        </section>
+        <p id="web-error" role="alert"></p>
+        <section class="workspace-panel">
+            <div class="workspace-grid">
+                <form id="web-form" class="input-card">
+                    <h2 id="web-form-title">{{ ui('1. New watch', '1. Nieuwe watcher') }}</h2>
+                    <input id="web-id" type="hidden" value="">
+                    <label for="web-name">{{ ui('Name', 'Naam') }}</label>
+                    <input id="web-name" maxlength="80" required>
+                    <label for="web-url">{{ ui('Product page (http/https)', 'Productpagina (http/https)') }}</label>
+                    <input id="web-url" type="url" maxlength="2048" required placeholder="https://">
+                    <label for="web-mode">{{ ui('When it is back in stock', 'Als het weer op voorraad is') }}</label>
+                    <select id="web-mode">
+                        <option value="notify">{{ ui('Notify me only', 'Alleen melden') }}</option>
+                        <option value="cart">{{ ui('Add to cart (not a reservation)', 'In winkelwagen leggen (geen reservering)') }}</option>
+                        <option value="checkout">{{ ui('Add to cart and open checkout - you pay yourself', 'In winkelwagen + kassa openen - jij betaalt zelf') }}</option>
+                        <option value="order">{{ ui('Place order automatically (separate permission)', 'Automatisch bestellen (aparte toestemming)') }}</option>
+                        <option value="reserve">{{ ui('Confirm reservation automatically (separate permission)', 'Automatisch reserveren (aparte toestemming)') }}</option>
+                    </select>
+                    <label for="web-interval">{{ ui('Check interval (seconds, 60-86400)', 'Controle-interval (seconden, 60-86400)') }}</label>
+                    <input id="web-interval" type="number" min="60" max="86400" value="300" required>
+                    <label for="web-max-price">{{ ui('Maximum price / final total budget (required for order/reservation)', 'Maximumprijs / definitief totaalbudget (verplicht bij bestellen/reserveren)') }}</label>
+                    <input id="web-max-price" type="number" min="0.01" step="0.01">
+                    <label for="web-in-text">{{ ui('Extra "in stock" phrases (comma separated, optional)', 'Eigen "op voorraad"-zinnen (kommagescheiden, optioneel)') }}</label>
+                    <input id="web-in-text" maxlength="900">
+                    <label for="web-out-text">{{ ui('Extra "sold out" phrases (comma separated, optional)', 'Eigen "uitverkocht"-zinnen (kommagescheiden, optioneel)') }}</label>
+                    <input id="web-out-text" maxlength="900">
+                    <p class="field-help">{{ ui('For every element give a CSS selector and/or its visible text. Echo remembers the element and repairs the selector itself when the site changes.', 'Geef per element een CSS-selector en/of de zichtbare tekst. Echo onthoudt het element en herstelt de selector zelf als de site verandert.') }}</p>
+                    <div class="element-grid">
+                        <input id="web-add-selector" maxlength="300" placeholder="{{ ui('Add-to-cart selector', 'Winkelwagen-knop selector') }}" aria-label="{{ ui('Add-to-cart selector', 'Winkelwagen-knop selector') }}">
+                        <input id="web-add-text" maxlength="120" placeholder="{{ ui('Button text, e.g. In winkelwagen', 'Knoptekst, bv. In winkelwagen') }}" aria-label="{{ ui('Add-to-cart text', 'Winkelwagen-knop tekst') }}">
+                        <input id="web-stock-selector" maxlength="300" placeholder="{{ ui('Stock label selector', 'Voorraadlabel selector') }}" aria-label="{{ ui('Stock label selector', 'Voorraadlabel selector') }}">
+                        <input id="web-stock-text" maxlength="120" placeholder="{{ ui('Stock label text', 'Voorraadlabel tekst') }}" aria-label="{{ ui('Stock label text', 'Voorraadlabel tekst') }}">
+                        <input id="web-price-selector" maxlength="300" placeholder="{{ ui('Price selector', 'Prijs selector') }}" aria-label="{{ ui('Price selector', 'Prijs selector') }}">
+                        <input id="web-price-text" maxlength="120" placeholder="{{ ui('Price text, e.g. 19,99', 'Prijstekst, bv. 19,99') }}" aria-label="{{ ui('Price text', 'Prijstekst') }}">
+                        <input id="web-checkout-selector" maxlength="300" placeholder="{{ ui('Checkout button selector', 'Afrekenknop selector') }}" aria-label="{{ ui('Checkout button selector', 'Afrekenknop selector') }}">
+                        <input id="web-checkout-text" maxlength="120" placeholder="{{ ui('Checkout text, e.g. Afrekenen', 'Afrekentekst, bv. Afrekenen') }}" aria-label="{{ ui('Checkout button text', 'Afrekenknop tekst') }}">
+                    </div>
+                    <label for="web-checkout-url">{{ ui('Or a checkout/cart URL (optional)', 'Of een kassa-/winkelwagen-URL (optioneel)') }}</label>
+                    <input id="web-checkout-url" type="url" maxlength="2048" placeholder="https://">
+                    <label><input id="web-authorized" type="checkbox"> {{ ui('I authorize the selected shop workflow. A final order/reservation also requires the separate permission below.', 'Ik geef toestemming voor de gekozen winkelworkflow. Definitief bestellen/reserveren vereist ook de aparte toestemming hieronder.') }}</label>
+                    <fieldset id="web-transaction-fields" hidden>
+                        <legend>{{ ui('Explicit one-time transaction', 'Expliciete eenmalige transactie') }}</legend>
+                        <p class="web-warning">{{ ui('This can create a binding order/payment or reservation without another prompt when stock returns. Prepare login, address and payment in the shop window yourself. Only one product, one unit and the authorized shop origin are allowed.', 'Dit kan bij nieuwe voorraad zonder nieuwe vraag een bindende bestelling/betaling of reservering plaatsen. Bereid inloggen, adres en betaalwijze zelf voor in het winkelvenster. Alleen een product, een exemplaar en de toegestane winkelorigine zijn toegestaan.') }}</p>
+                        <label for="web-currency">{{ ui('Currency shown in the final total', 'Valuta in het definitieve totaal') }}</label>
+                        <select id="web-currency"><option>EUR</option><option>GBP</option><option>USD</option></select>
+                        <label for="web-final-selector">{{ ui('Final order/reservation button: exact selector and text', 'Definitieve bestel-/reserveerknop: exacte selector en tekst') }}</label>
+                        <input id="web-final-selector" maxlength="300" placeholder="#confirm-order">
+                        <input id="web-final-text" maxlength="120" placeholder="{{ ui('Place order / Confirm reservation', 'Bestelling plaatsen / Reservering bevestigen') }}">
+                        <label for="web-item-selector">{{ ui('Selector matching ALL product names in the final summary, and exact product/variant', 'Selector voor ALLE productnamen in het definitieve overzicht, en exact product/variant') }}</label>
+                        <input id="web-item-selector" maxlength="300" placeholder=".order-item-name">
+                        <input id="web-item-text" maxlength="120" placeholder="{{ ui('Exact product + variant / SKU', 'Exact product + variant / SKU') }}">
+                        <label for="web-quantity-selector">{{ ui('Selector for ALL item quantities (must show exactly 1)', 'Selector voor ALLE aantallen (moet precies 1 tonen)') }}</label>
+                        <input id="web-quantity-selector" maxlength="300" placeholder=".order-quantity">
+                        <label for="web-total-selector">{{ ui('Final total selector, including tax/shipping/fees and currency', 'Selector definitief totaal, inclusief belasting/verzending/toeslagen en valuta') }}</label>
+                        <input id="web-total-selector" maxlength="300" placeholder="#grand-total">
+                        <label for="web-confirmation-selector">{{ ui('Success confirmation: exact selector and text, visible ONLY after success', 'Succesbevestiging: exacte selector en tekst, ALLEEN zichtbaar na succes') }}</label>
+                        <input id="web-confirmation-selector" maxlength="300" placeholder="#order-confirmation">
+                        <input id="web-confirmation-text" maxlength="120" placeholder="{{ ui('Order confirmed / Reservation confirmed', 'Bestelling bevestigd / Reservering bevestigd') }}">
+                        <p class="field-help">{{ ui('Final selectors never self-heal. An absent/ambiguous confirmation means UNKNOWN, not success; check the shop before rearming. EUR/GBP symbols or ISO currency codes are accepted; a bare $ is ambiguous. Stop cannot undo a submitted transaction.', 'Definitieve selectors herstellen nooit automatisch. Een ontbrekende/onduidelijke bevestiging betekent ONBEKEND, niet geslaagd; controleer de winkel voor opnieuw toestaan. EUR/GBP-symbolen of ISO-valutacodes zijn toegestaan; alleen $ is dubbelzinnig. Stoppen draait een verzonden transactie niet terug.') }}</p>
+                        <label><input id="web-transaction-authorized" type="checkbox"> {{ ui('I explicitly authorize ONE final order/payment or reservation of this exact item, quantity 1, within this total budget.', 'Ik geef expliciet toestemming voor EEN definitieve bestelling/betaling of reservering van dit exacte product, aantal 1, binnen dit totaalbudget.') }}</label>
+                    </fieldset>
+                    <div class="button-row">
+                        <button id="web-save" class="primary-button">{{ ui('Save watch', 'Watcher opslaan') }}</button>
+                        <button id="web-new" class="secondary-button" type="button">{{ ui('New / clear', 'Nieuw / leegmaken') }}</button>
+                    </div>
+                </form>
+                <section class="input-card">
+                    <h2>{{ ui('2. Monitor and shop window', '2. Bewaking en winkelvenster') }}</h2>
+                    <label><input id="web-consent" type="checkbox"> {{ ui('I may automatically check these pages and respect each shop\'s terms.', 'Ik mag deze pagina\'s automatisch controleren en respecteer de voorwaarden van elke winkel.') }}</label>
+                    <label><input id="web-sound" type="checkbox"> {{ ui('Local Windows sound', 'Lokaal Windows-geluid') }}</label>
+                    <label><input id="web-desktop" type="checkbox"> {{ ui('Desktop notifications while this page is open', 'Bureaubladmeldingen zolang deze pagina open is') }}</label>
+                    <div class="button-row">
+                        <button id="web-start" class="primary-button" type="button" disabled>{{ ui('Start monitor', 'Bewaking starten') }}</button>
+                        <button id="web-stop" class="secondary-button" type="button" disabled>{{ ui('Stop', 'Stoppen') }}</button>
+                    </div>
+                    <p id="web-status" role="status"></p>
+                    <p class="field-help">{{ ui('The monitor is off after every Echo restart. Each shop action pauses its watch. A submitted transaction remains blocked across restarts/edits until you check the shop and explicitly authorize another.', 'Na elke Echo-herstart staat de bewaking uit. Elke winkelactie pauzeert de watcher. Een verzonden transactie blijft ook na herstart/bewerken geblokkeerd totdat je de winkel controleert en opnieuw expliciet toestemming geeft.') }}</p>
+                    <h3>{{ ui('Shop window (log in once)', 'Winkelvenster (eenmalig inloggen)') }}</h3>
+                    <p class="field-help">{{ ui('Cart actions run in a separate Echo browser profile. Open the shop here once, log in and close the window; Echo keeps that session on this PC.', 'Winkelwagenacties draaien in een apart Echo-browserprofiel. Open de winkel hier eenmalig, log in en sluit het venster; Echo bewaart die sessie op deze pc.') }}</p>
+                    <label for="web-shop-url">{{ ui('Shop URL', 'Winkel-URL') }}</label>
+                    <input id="web-shop-url" type="url" maxlength="2048" placeholder="https://">
+                    <div class="button-row">
+                        <button id="web-shop-open" class="secondary-button" type="button">{{ ui('Open shop window', 'Winkelvenster openen') }}</button>
+                        <button id="web-shop-close" class="secondary-button" type="button">{{ ui('Close shop window', 'Winkelvenster sluiten') }}</button>
+                    </div>
+                    <p id="web-shop-status" role="status"></p>
+                </section>
+            </div>
+        </section>
+        <section class="workspace-panel">
+            <h2>{{ ui('Watches', 'Watchers') }}</h2>
+            <ul id="web-watches" class="web-list"></ul>
+            <h3>{{ ui('Activity', 'Activiteit') }}</h3>
+            <ul id="web-events" class="web-events"></ul>
+        </section>
+        <section class="workspace-panel">
+            <h2>{{ ui('3. Breach check (OSINT on your own data)', '3. Datalekcheck (OSINT op je eigen gegevens)') }}</h2>
+            <div class="workspace-grid">
+                <section class="input-card">
+                    <h3>{{ ui('Have I Been Pwned API key', 'Have I Been Pwned API-sleutel') }}</h3>
+                    <p class="field-help">{{ ui('E-mail searches and domain searches need a paid HIBP key. The key is stored encrypted for your Windows account (DPAPI) or read from HIBP_API_KEY.', 'Zoeken op e-mail en domein vereist een betaalde HIBP-sleutel. De sleutel wordt versleuteld voor je Windows-account opgeslagen (DPAPI) of gelezen uit HIBP_API_KEY.') }}</p>
+                    <p id="web-key-status" role="status"></p>
+                    <label for="web-key">{{ ui('API key (32 characters)', 'API-sleutel (32 tekens)') }}</label>
+                    <input id="web-key" type="password" autocomplete="off" maxlength="64">
+                    <div class="button-row">
+                        <button id="web-key-save" class="primary-button" type="button">{{ ui('Verify and save', 'Controleren en opslaan') }}</button>
+                        <button id="web-key-verify" class="secondary-button" type="button">{{ ui('Verify current key', 'Huidige sleutel controleren') }}</button>
+                        <button id="web-key-clear" class="secondary-button" type="button">{{ ui('Remove stored key', 'Opgeslagen sleutel wissen') }}</button>
+                    </div>
+                    <p class="field-help"><a id="web-key-link" href="https://haveibeenpwned.com/API/Key" target="_blank" rel="noopener noreferrer">{{ ui('Get a key', 'Sleutel aanvragen') }}</a> · <a id="web-dashboard-link" href="https://haveibeenpwned.com/Dashboard/Redirect/Domains" target="_blank" rel="noopener noreferrer">{{ ui('Verify your domain', 'Je domein verifiëren') }}</a></p>
+                    <h3>{{ ui('Password check (k-anonymity)', 'Wachtwoordcheck (k-anonimiteit)') }}</h3>
+                    <label for="web-password">{{ ui('Password', 'Wachtwoord') }}</label>
+                    <input id="web-password" type="password" autocomplete="off">
+                    <button id="web-password-check" class="secondary-button" type="button">{{ ui('Check password', 'Wachtwoord controleren') }}</button>
+                    <p class="field-help">{{ ui('Your browser hashes the password; only the first 5 characters of the SHA-1 hash are sent. The password never reaches Echo\'s server.', 'Je browser hasht het wachtwoord; alleen de eerste 5 tekens van de SHA-1-hash worden verstuurd. Het wachtwoord bereikt de Echo-server nooit.') }}</p>
+                    <p id="web-password-result" role="status"></p>
+                </section>
+                <form id="web-osint-form" class="input-card">
+                    <h3>{{ ui('Your identifiers', 'Jouw gegevens') }}</h3>
+                    <label for="web-osint-kind">{{ ui('Type', 'Soort') }}</label>
+                    <select id="web-osint-kind">
+                        <option value="email">{{ ui('E-mail address', 'E-mailadres') }}</option>
+                        <option value="username">{{ ui('Username', 'Gebruikersnaam') }}</option>
+                        <option value="domain">{{ ui('Domain', 'Domein') }}</option>
+                    </select>
+                    <label for="web-osint-value">{{ ui('Value', 'Waarde') }}</label>
+                    <input id="web-osint-value" maxlength="254" required>
+                    <label><input id="web-osint-owned" type="checkbox"> {{ ui('This is mine (my address, username or domain).', 'Dit is van mij (mijn adres, gebruikersnaam of domein).') }}</label>
+                    <div class="button-row">
+                        <button id="web-osint-add" class="primary-button">{{ ui('Add', 'Toevoegen') }}</button>
+                        <button id="web-osint-check-all" class="secondary-button" type="button">{{ ui('Check all', 'Alles controleren') }}</button>
+                    </div>
+                    <p id="web-osint-job" role="status"></p>
+                    <label><input id="web-osint-monitor" type="checkbox"> {{ ui('Re-check automatically when HIBP publishes a new breach', 'Automatisch opnieuw controleren als HIBP een nieuw lek publiceert') }}</label>
+                    <label for="web-osint-hours">{{ ui('Poll every (hours, 6-168)', 'Controleer elke (uren, 6-168)') }}</label>
+                    <input id="web-osint-hours" type="number" min="6" max="168" value="24">
+                    <label><input id="web-osint-sound" type="checkbox"> {{ ui('Local Windows sound', 'Lokaal Windows-geluid') }}</label>
+                    <button id="web-osint-monitor-save" class="secondary-button" type="button">{{ ui('Apply', 'Toepassen') }}</button>
+                    <p id="web-osint-monitor-status" role="status"></p>
+                    <p class="field-help web-warning">{{ ui('A username found on a site only means that name exists there - it is not necessarily your account and says nothing about a leak.', 'Een gevonden gebruikersnaam betekent alleen dat die naam daar bestaat - het is niet per se jouw account en zegt niets over een lek.') }}</p>
+                </form>
+            </div>
+            <ul id="web-identifiers" class="web-list"></ul>
+        </section>
+    </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Scanner</title>
+    <link rel="stylesheet" href="{{ url_for('website_scanner.stylesheet') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="badge">PYTHON WEBSITE SCANNER</div>
+            <h1>Website Scanner</h1>
+            <p>Controleer pagina's, links, afbeeldingen, CSS, interactieve elementen, formulieren en JavaScript.</p>
+        </header>
+
+        <section class="scanner-card">
+            <label for="url">Website URL</label>
+            <div class="input-row">
+                <input id="url" type="url" placeholder="https://voorbeeld.nl" autocomplete="off">
+                <button id="scanBtn" onclick="startScan()">SCAN WEBSITE</button>
+                <button id="stopBtn" class="stop-button" onclick="stopScan()" disabled>
+                    STOP SCAN
+                </button>
+            </div>
+            <label class="macro-option" for="visibleMacro">
+                <input id="visibleMacro" type="checkbox" checked>
+                <span>Toon macro in een apart browservenster: scroll en test veilige links, menu's, tabs, modals en knoppen</span>
+            </label>
+            <div id="status" class="status">Klaar om te scannen.</div>
+            <div class="hint">Lokale ontwikkelsite? Gebruik bijvoorbeeld http://localhost:3000 op de pc waar Echo draait. Als de site op een andere pc staat, vul dan het IP-adres van die pc in. Maximaal 250 interne pagina's per scan. Externe links worden gecontroleerd maar niet aangeklikt. Formulieren worden gecontroleerd, nooit verzonden. Koop-, verwijder- en uitlogacties worden overgeslagen.</div>
+            <div class="progress-wrap">
+                <div id="progress" class="progress"></div>
+            </div>
+        </section>
+
+        <section class="preview-card">
+            <div class="results-header">
+                <div>
+                    <h2>Live website-preview</h2>
+                    <p id="previewStatus" class="preview-note">Vul een URL in; de preview start vanzelf. Als de website geen weergave in een preview toestaat, open hem dan in een nieuw tabblad.</p>
+                </div>
+                <a id="openSite" class="button-link" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">
+                    OPEN IN NIEUW TABBLAD
+                </a>
+            </div>
+            <iframe id="preview" title="Live preview van de te testen website"
+                srcdoc="<p style='font-family:Arial,sans-serif;padding:20px;color:#667'>Vul een website URL in en start de scan om de preview te laden.</p>"></iframe>
+        </section>
+
+        <section id="summary" class="summary hidden">
+            <div class="stat"><span>Pagina's</span><strong id="pages">-</strong></div>
+            <div class="stat"><span>Limiet bereikt</span><strong id="pageLimitReached">-</strong></div>
+            <div class="stat"><span>Links</span><strong id="links">-</strong></div>
+            <div class="stat"><span>Afbeeldingen</span><strong id="images">-</strong></div>
+            <div class="stat"><span>CSS</span><strong id="css">-</strong></div>
+            <div class="stat"><span>Interacties bevestigd</span><strong id="buttons">-</strong></div>
+            <div class="stat"><span>Interacties zonder bevestigd effect</span><strong id="buttonsUnverified">-</strong></div>
+            <div class="stat"><span>Menu's, tabs en modals getest</span><strong id="interactiveControls">-</strong></div>
+            <div class="stat"><span>Formulieren (labelwaarschuwingen)</span><strong id="formsChecked">-</strong></div>
+            <div class="stat"><span>Links aangeklikt</span><strong id="linkClicks">-</strong></div>
+            <div class="stat"><span>Interacties getest</span><strong id="interactionsTested">-</strong></div>
+            <div class="stat"><span>Interacties geslaagd</span><strong id="interactionsPassed">-</strong></div>
+            <div class="stat"><span>Interacties mislukt</span><strong id="interactionsFailed">-</strong></div>
+            <div class="stat"><span>Interacties overgeslagen</span><strong id="interactionsSkipped">-</strong></div>
+            <div class="stat"><span>Interacties niet bevestigd</span><strong id="interactionsUnconfirmed">-</strong></div>
+            <div class="stat"><span>HTML-meldingen</span><strong id="html">-</strong></div>
+            <div class="stat"><span>Layout-meldingen</span><strong id="layout">-</strong></div>
+            <div class="stat score"><span>Score</span><strong id="score">-</strong></div>
+        </section>
+
+        <section id="evidenceSection" class="evidence-card hidden">
+            <h2>Bewijs van mislukte klikken</h2>
+            <p class="preview-note">Screenshots worden lokaal opgeslagen in de map scan_evidence.</p>
+            <div id="evidenceList" class="evidence-list"></div>
+        </section>
+
+        <section class="results-card">
+            <div class="results-header">
+                <h2>Scanresultaat</h2>
+                <button id="downloadBtn" class="secondary" onclick="downloadResult()" disabled>
+                    RESULTAAT OPSLAAN
+                </button>
+            </div>
+            <pre id="result">Voer hierboven een website in en klik op "SCAN WEBSITE".</pre>
+        </section>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let latestResult = "";
+        let reconnectTimer = null;
+        let previewTimer = null;
+        let previewUrl = "";
+        let activeScanId = "";
+        let stopRequested = false;
+
+        function setStatus(text) {
+            document.getElementById("status").textContent = text;
+        }
+
+        function finishScan() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            const button = document.getElementById("scanBtn");
+            button.disabled = false;
+            button.textContent = "SCAN WEBSITE";
+            document.getElementById("stopBtn").disabled = true;
+            activeScanId = "";
+            stopRequested = false;
+        }
+
+        function createScanId() {
+            if (window.crypto && typeof window.crypto.randomUUID === "function") {
+                return window.crypto.randomUUID();
+            }
+
+            if (!window.crypto || typeof window.crypto.getRandomValues !== "function") {
+                throw new Error("Deze browser ondersteunt geen veilige scan-ID's.");
+            }
+
+            const bytes = new Uint8Array(16);
+            window.crypto.getRandomValues(bytes);
+            bytes[6] = (bytes[6] & 0x0f) | 0x40;
+            bytes[8] = (bytes[8] & 0x3f) | 0x80;
+            const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0"));
+            return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+        }
+
+        function updatePreview(value) {
+            const rawUrl = value.trim();
+            const preview = document.getElementById("preview");
+            const openSite = document.getElementById("openSite");
+            const previewStatus = document.getElementById("previewStatus");
+
+            if (!rawUrl) {
+                previewUrl = "";
+                preview.removeAttribute("src");
+                preview.srcdoc =
+                    "<p style='font-family:Arial,sans-serif;padding:20px;color:#667'>Vul hierboven een website URL in om de preview te laden.</p>";
+                openSite.href = "#";
+                openSite.setAttribute("aria-disabled", "true");
+                previewStatus.textContent =
+                    "Vul een URL in; de preview start vanzelf. Als de website geen weergave in een preview toestaat, open hem dan in een nieuw tabblad.";
+                return;
+            }
+
+            const normalizedUrl = /^https?:\/\//i.test(rawUrl)
+                ? rawUrl
+                : "https://" + rawUrl;
+
+            try {
+                const parsed = new URL(normalizedUrl);
+                if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) {
+                    return;
+                }
+            } catch (error) {
+                return;
+            }
+
+            openSite.href = normalizedUrl;
+            openSite.setAttribute("aria-disabled", "false");
+            if (previewUrl === normalizedUrl) {
+                return;
+            }
+
+            previewUrl = normalizedUrl;
+            previewStatus.textContent = "Preview wordt geladen...";
+            preview.removeAttribute("srcdoc");
+            preview.src = normalizedUrl;
+        }
+
+        function startScan() {
+            const input = document.getElementById("url");
+            let url = input.value.trim();
+
+            if (!url) {
+                setStatus("Voer eerst een website URL in.");
+                input.focus();
+                return;
+            }
+
+            try {
+                activeScanId = createScanId();
+            } catch (error) {
+                setStatus("Kan geen veilige scan starten: " + error.message);
+                return;
+            }
+
+            if (!/^https?:\/\//i.test(url)) {
+                url = "https://" + url;
+                input.value = url;
+            }
+            updatePreview(url);
+
+            const button = document.getElementById("scanBtn");
+            button.disabled = true;
+            button.textContent = "BEZIG...";
+            document.getElementById("stopBtn").disabled = true;
+            document.getElementById("downloadBtn").disabled = true;
+            document.getElementById("summary").classList.add("hidden");
+            document.getElementById("evidenceSection").classList.add("hidden");
+            document.getElementById("evidenceList").replaceChildren();
+            document.getElementById("result").textContent = "";
+            document.getElementById("progress").style.width = "5%";
+
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            const encoded = encodeURIComponent(url);
+            const visibleMacro = document.getElementById("visibleMacro").checked;
+            stopRequested = false;
+            eventSource = new EventSource(
+                `/website-scanner/scan?url=${encoded}&visible=${visibleMacro ? "1" : "0"}&scan_id=${activeScanId}`
+            );
+
+            eventSource.onopen = function() {
+                if (!stopRequested) {
+                    document.getElementById("stopBtn").disabled = false;
+                }
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            };
+
+            eventSource.onmessage = function(event) {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (error) {
+                    setStatus("Ongeldig antwoord van de scanner.");
+                    document.getElementById("result").textContent =
+                        "De scanner stuurde een onleesbaar antwoord. Probeer de scan opnieuw.";
+                    finishScan();
+                    return;
+                }
+
+                if (data.type === "status") {
+                    setStatus(data.message);
+                    if (data.progress !== undefined) {
+                        document.getElementById("progress").style.width =
+                            data.progress + "%";
+                    }
+                }
+
+                if (data.type === "result") {
+                    latestResult = data.text;
+                    document.getElementById("result").textContent = data.text;
+                    if (data.website_url) {
+                        updatePreview(data.website_url);
+                    }
+
+                    const s = data.summary;
+                    document.getElementById("pages").textContent = s.pages;
+                    document.getElementById("pageLimitReached").textContent =
+                        s.page_limit_reached ? "Ja (250 pagina's)" : "Nee";
+                    document.getElementById("links").textContent = s.links;
+                    document.getElementById("images").textContent = s.images;
+                    document.getElementById("css").textContent = s.css;
+                    document.getElementById("buttons").textContent = s.buttons;
+                    document.getElementById("buttonsUnverified").textContent =
+                        s.buttons_unverified;
+                    document.getElementById("interactiveControls").textContent =
+                        s.interactive_controls;
+                    document.getElementById("formsChecked").textContent =
+                        `${s.forms_checked} (${s.form_warnings} waarschuwingen)`;
+                    document.getElementById("linkClicks").textContent = s.link_clicks;
+                    document.getElementById("interactionsTested").textContent =
+                        `${s.interactions_tested}/${s.interactions_total}`;
+                    document.getElementById("interactionsPassed").textContent =
+                        s.interactions_passed;
+                    document.getElementById("interactionsFailed").textContent =
+                        s.interactions_failed;
+                    document.getElementById("interactionsSkipped").textContent =
+                        s.interactions_skipped;
+                    document.getElementById("interactionsUnconfirmed").textContent =
+                        s.interactions_unconfirmed;
+                    document.getElementById("html").textContent = s.html;
+                    document.getElementById("layout").textContent = s.layout;
+                    document.getElementById("score").textContent = s.score + "/100";
+
+                    renderEvidence(data.evidence || []);
+                    document.getElementById("summary").classList.remove("hidden");
+                    document.getElementById("downloadBtn").disabled = false;
+                    document.getElementById("progress").style.width = "100%";
+                    setStatus("Scan afgerond.");
+
+                    finishScan();
+                }
+
+                if (data.type === "error") {
+                    setStatus("Scan mislukt.");
+                    document.getElementById("result").textContent =
+                        "FOUT: " + data.message;
+                    finishScan();
+                }
+
+                if (data.type === "cancelled") {
+                    setStatus("Scan gestopt.");
+                    document.getElementById("result").textContent =
+                        "De scan is op jouw verzoek gestopt.";
+                    finishScan();
+                }
+            };
+
+            eventSource.onerror = function() {
+                if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+                    setStatus("Verbinding met de scanner verbroken.");
+                    finishScan();
+                    return;
+                }
+
+                setStatus("Verbinding tijdelijk onderbroken; opnieuw verbinden...");
+                if (!reconnectTimer) {
+                    reconnectTimer = setTimeout(function() {
+                        setStatus("Verbinding met de scanner verbroken.");
+                        finishScan();
+                    }, 30000);
+                }
+            };
+        }
+
+        function renderEvidence(items) {
+            const section = document.getElementById("evidenceSection");
+            const list = document.getElementById("evidenceList");
+            list.replaceChildren();
+            if (!items.length) {
+                section.classList.add("hidden");
+                return;
+            }
+
+            for (const item of items) {
+                const card = document.createElement("article");
+                card.className = "evidence-item";
+                const title = document.createElement("h3");
+                title.textContent = `${item.type === "link" ? "Link" : "Knop"}: ${item.element}`;
+                const location = document.createElement("p");
+                location.textContent = item.target
+                    ? `${item.page_url} → ${item.target}`
+                    : item.page_url;
+                const error = document.createElement("p");
+                error.className = "evidence-error";
+                error.textContent = `Fout: ${item.error}`;
+                card.append(title, location, error);
+
+                if (item.screenshot_url) {
+                    const link = document.createElement("a");
+                    link.href = item.screenshot_url;
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+                    link.textContent = "Screenshot openen";
+                    const image = document.createElement("img");
+                    image.src = item.screenshot_url;
+                    image.alt = `Screenshot van ${item.type}: ${item.element}`;
+                    link.append(image);
+                    card.append(link);
+                } else if (item.screenshot_error) {
+                    const warning = document.createElement("p");
+                    warning.textContent = `Screenshot opslaan mislukt: ${item.screenshot_error}`;
+                    card.append(warning);
+                }
+                list.append(card);
+            }
+
+            section.classList.remove("hidden");
+        }
+
+        async function stopScan() {
+            if (!activeScanId || stopRequested) {
+                return;
+            }
+
+            const scanId = activeScanId;
+            stopRequested = true;
+            const stopButton = document.getElementById("stopBtn");
+            stopButton.disabled = true;
+            setStatus("Scan stoppen...");
+
+            try {
+                const response = await fetch(
+                    `/website-scanner/scan/${encodeURIComponent(activeScanId)}/stop`,
+                    { method: "POST" }
+                );
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.error || `HTTP ${response.status}`);
+                }
+                if (activeScanId === scanId) {
+                    setStatus("Stop aangevraagd; lopende netwerkactie wordt afgerond...");
+                }
+            } catch (error) {
+                stopRequested = false;
+                stopButton.disabled = false;
+                setStatus("Stoppen mislukt: " + error.message);
+            }
+        }
+
+        function downloadResult() {
+            if (!latestResult) return;
+
+            const blob = new Blob([latestResult], {type: "text/plain;charset=utf-8"});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "website_scan_result.txt";
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        const urlInput = document.getElementById("url");
+        const initialUrl = new URLSearchParams(window.location.search).get("url");
+        if (initialUrl) {
+            urlInput.value = initialUrl;
+            updatePreview(initialUrl);
+        }
+        urlInput.addEventListener("input", function() {
+            if (previewTimer) {
+                clearTimeout(previewTimer);
+            }
+            previewTimer = setTimeout(function() {
+                updatePreview(urlInput.value);
+            }, 700);
+        });
+        urlInput.addEventListener("change", function() {
+            if (previewTimer) {
+                clearTimeout(previewTimer);
+                previewTimer = null;
+            }
+            updatePreview(urlInput.value);
+        });
+        document.getElementById("preview").addEventListener("load", function() {
+            if (previewUrl) {
+                document.getElementById("previewStatus").textContent =
+                    "Preview geopend. Als het venster leeg blijft, blokkeert deze website mogelijk weergave in een preview; open hem dan in een nieuw tabblad.";
+            }
+        });
+
+        urlInput.addEventListener("keydown", function(event) {
+            if (event.key === "Enter") {
+                if (previewTimer) {
+                    clearTimeout(previewTimer);
+                    previewTimer = null;
+                }
+                updatePreview(urlInput.value);
+                startScan();
+            }
+        });
+    </script>
+</body>
+</html>

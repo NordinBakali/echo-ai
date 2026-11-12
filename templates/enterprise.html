@@ -17,6 +17,7 @@
                 <p class="panel-note">Aangemeld als {{ gebruiker.username }}</p>
             </div>
             <nav class="enterprise-nav">
+                <a class="panel-action" href="{{ url_for('werkruimte_pagina') }}" target="_blank" rel="noopener noreferrer">Echo Workspace / Werkruimte</a>
                 {% if beheerder %}<a class="panel-action" href="{{ url_for('enterprise_admin') }}">Gebruikers beheren</a>{% endif %}
                 <form action="{{ url_for('demo_logout') }}" method="post"><button class="panel-action" type="submit">Uitloggen</button></form>
             </nav>

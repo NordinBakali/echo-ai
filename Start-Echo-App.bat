@@ -29,12 +29,35 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 
+"%PYTHON_EXE%" -m pip show opencv-python-headless >nul 2>nul
+if not errorlevel 1 (
+    echo [Echo] Replacing the old OpenCV package for posture and hand detection...
+    "%PYTHON_EXE%" -m pip uninstall -y opencv-python-headless opencv-contrib-python
+    if errorlevel 1 (
+        echo [Echo] Could not replace OpenCV. Close Echo and try again.
+        pause
+        exit /b 1
+    )
+)
+
 echo [Echo] Installing dependencies...
 "%PYTHON_EXE%" -m pip install -r requirements.txt
 if errorlevel 1 (
     echo [Echo] Dependency installation failed.
     pause
     exit /b 1
+)
+
+echo [Echo] Checking website scanner browser...
+"%PYTHON_EXE%" -c "from playwright.sync_api import sync_playwright; import os; p=sync_playwright().start(); ok=os.path.exists(p.chromium.executable_path); p.stop(); raise SystemExit(0 if ok else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo [Echo] Installing website scanner browser...
+    "%PYTHON_EXE%" -m playwright install chromium
+    if errorlevel 1 (
+        echo [Echo] Website scanner browser installation failed.
+        pause
+        exit /b 1
+    )
 )
 
 if not defined ECHO_PORT set "ECHO_PORT=5000"

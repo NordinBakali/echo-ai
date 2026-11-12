@@ -7,6 +7,7 @@ release/Echo-App.__backup/
 echo_geheugen.json
 echo_planning.json
 echo_knowledge_metrics.json
+echo_reading_list.sqlite3*
 enterprise-data/
 __pycache__/
 *.pyc

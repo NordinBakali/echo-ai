@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#00060a">
+    <meta name="echo-system-token" content="{{ system_token }}">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>{{ instellingen.naam }}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}">
@@ -71,6 +72,37 @@
                     <label class="overview-filter-label" id="actionFilterLabel" for="actionFilterInput">Filter Actions</label>
                     <input id="actionFilterInput" class="overview-filter-input" type="text" placeholder="Filter: stream, camera, security">
                     <p class="panel-note" id="actionFilterHint">Type to quickly find actions and routines.</p>
+                    <div class="command-shortcuts">
+                        {% if not demo_mode %}
+                        <a class="panel-action command-shortcut" href="{{ url_for('camera_assistent_pagina') }}" target="_blank" rel="noopener noreferrer">
+                            <span class="command-shortcut-icon" aria-hidden="true">✋</span>
+                            <span><strong><span lang="nl">Houding &amp; Gebaren</span> <span lang="en">Posture &amp; Gestures</span></strong><small><span lang="nl">Camera · Spotify · muziek</span> <span lang="en">Camera · Spotify · music</span></small></span>
+                            <span class="command-shortcut-arrow" aria-hidden="true">↗</span>
+                        </a>
+                        {% endif %}
+                        <a class="panel-action command-shortcut" href="{{ url_for('werkruimte_pagina') }}" target="_blank" rel="noopener noreferrer">
+                            <span class="command-shortcut-icon" aria-hidden="true">✎</span>
+                            <span><strong><span lang="nl">Werkruimte</span> <span lang="en">Workspace</span></strong><small><span lang="nl">Notities · vertalen</span> <span lang="en">Notes · translate</span></small></span>
+                            <span class="command-shortcut-arrow" aria-hidden="true">↗</span>
+                        </a>
+                        {% if not demo_mode %}
+                        <a class="panel-action command-shortcut" href="{{ url_for('aanwezigheid_pagina') }}" target="_blank" rel="noopener noreferrer">
+                            <span class="command-shortcut-icon" aria-hidden="true">◎</span>
+                            <span><strong><span lang="nl">Aanwezigheid &amp; Beveiliging</span> <span lang="en">Presence &amp; Security</span></strong><small><span lang="nl">Camera · schermvergrendeling</span> <span lang="en">Camera · screen lock</span></small></span>
+                            <span class="command-shortcut-arrow" aria-hidden="true">↗</span>
+                        </a>
+                        <a class="panel-action command-shortcut" href="{{ url_for('systeemzorg_pagina') }}" target="_blank" rel="noopener noreferrer">
+                            <span class="command-shortcut-icon" aria-hidden="true">▦</span>
+                            <span><strong><span lang="nl">Systeemzorg</span> <span lang="en">System care</span></strong><small><span lang="nl">Netwerk · logboeken</span> <span lang="en">Network · logs</span></small></span>
+                            <span class="command-shortcut-arrow" aria-hidden="true">↗</span>
+                        </a>
+                        <a class="panel-action command-shortcut" href="{{ url_for('webautomatisering_pagina') }}" target="_blank" rel="noopener noreferrer">
+                            <span class="command-shortcut-icon" aria-hidden="true">⌁</span>
+                            <span><strong><span lang="nl">Webautomatisering &amp; Datalekcheck</span> <span lang="en">Web automation &amp; Breach check</span></strong><small><span lang="nl">Webtaken · datalekken</span> <span lang="en">Web tasks · breaches</span></small></span>
+                            <span class="command-shortcut-arrow" aria-hidden="true">↗</span>
+                        </a>
+                        {% endif %}
+                    </div>
                 </div>
 
                 <div class="panel-block">
@@ -172,6 +204,8 @@
                             <option value="normal" selected>Normaal Gebruik</option>
                             <option value="streaming">Streaming</option>
                             <option value="security">Security</option>
+                            <option value="gaming">Gaming</option>
+                            <option value="heavy_work">Zwaar werk</option>
                         </select>
                         <div class="settings-profile-form-actions">
                             <button id="settingsProfileApplyBtn" type="submit" class="panel-action">Profiel Toepassen</button>
@@ -214,7 +248,7 @@
 
                 <div class="panel-block website-audit-panel quick-checker-only" id="websiteAuditPanel">
                     <p class="panel-kicker" id="websiteAuditKicker">Website Audit</p>
-                    <p class="panel-note" id="websiteAuditState">Open Quick Checker popup of Functional Checker popup binnen Echo.</p>
+                    <p class="panel-note" id="websiteAuditState">Open Quick Checker of Website Scanner in een apart venster.</p>
                     <div class="website-audit-progress" aria-hidden="true">
                         <div class="website-audit-progress__fill" id="websiteAuditProgressBar"></div>
                     </div>
@@ -249,65 +283,7 @@
                         >
                             Quick Checker Popup
                         </button>
-                        <button id="websiteAuditVisualCheckBtn" type="button" class="panel-action">Functional Checker Popup</button>
-                    </div>
-                    <div class="website-functional-visual-popup" id="websiteFunctionalVisualWrap" aria-hidden="true">
-                        <div class="website-functional-visual-popup__backdrop" id="websiteFunctionalVisualBackdrop"></div>
-                        <section class="website-functional-visual-popup__panel" role="dialog" aria-modal="true" aria-labelledby="websiteFunctionalVisualTitle">
-                            <header class="website-functional-visual-popup__header">
-                                <div>
-                                    <p class="panel-kicker">Functional Visual Popup</p>
-                                    <h3 class="website-functional-visual-popup__title" id="websiteFunctionalVisualTitle">Live Website Functional Check</h3>
-                                    <p class="panel-note website-functional-visual-popup__target" id="websiteFunctionalVisualPopupTarget">Doel: wacht op URL-invoer</p>
-                                </div>
-                                <div class="website-functional-visual-popup__actions">
-                                    <button id="websiteFunctionalVisualStartBtn" type="button" class="panel-action">Start Visual Check</button>
-                                    <button id="websiteFunctionalVisualOpenReportBtn" type="button" class="panel-action" disabled>Open Rapport in Tab</button>
-                                    <button id="websiteFunctionalVisualCloseBtn" type="button" class="panel-action">Sluit Popup</button>
-                                </div>
-                            </header>
-
-                            <p class="panel-note website-functional-visual__state" id="websiteFunctionalVisualState">Live visual stand-by. Start Visuele Check om het rapport hier te zien.</p>
-                            <div class="website-functional-visual__progress" aria-hidden="true">
-                                <div class="website-functional-visual__progress-fill" id="websiteFunctionalVisualProgressFill"></div>
-                            </div>
-
-                            <div class="website-functional-visual-popup__content">
-                                <article class="website-functional-visual-popup__column">
-                                    <p class="panel-kicker">Live Stages</p>
-                                    <ol class="website-functional-visual__stage-list" id="websiteFunctionalVisualStages">
-                                        <li data-stage="queued"><span>Wachtrij</span><small>Wacht op start.</small></li>
-                                        <li data-stage="module_load"><span>Module</span><small>Checker-module laden.</small></li>
-                                        <li data-stage="homepage"><span>Homepage</span><small>Doel-homepage openen.</small></li>
-                                        <li data-stage="parse_dom"><span>DOM Parse</span><small>DOM-elementen scannen.</small></li>
-                                        <li data-stage="links"><span>Links</span><small>Alle links testen.</small></li>
-                                        <li data-stage="buttons"><span>Knoppen</span><small>Alle knoppen testen.</small></li>
-                                        <li data-stage="search_bars"><span>Zoekbalk</span><small>Zoekflow testen.</small></li>
-                                        <li data-stage="summary"><span>Samenvatting</span><small>Resultaten samenvatten.</small></li>
-                                        <li data-stage="report_build"><span>Rapport</span><small>Visueel rapport opbouwen.</small></li>
-                                        <li data-stage="completed"><span>Klaar</span><small>Scan en rapport gereed.</small></li>
-                                    </ol>
-
-                                    <div class="website-functional-visual__counters" id="websiteFunctionalVisualCounters" aria-live="polite"></div>
-
-                                    <p class="panel-kicker">Live Test Log</p>
-                                    <div class="website-functional-visual__live-log" id="websiteFunctionalVisualLiveLog" aria-live="polite"></div>
-                                </article>
-
-                                <article class="website-functional-visual-popup__column website-functional-visual-popup__column--frame">
-                                    <p class="panel-kicker">Visual Report</p>
-                                    <div class="website-functional-visual__frame-shell">
-                                        <iframe
-                                            id="websiteFunctionalVisualFrame"
-                                            class="website-functional-visual__frame"
-                                            title="Website functional visual report"
-                                            loading="lazy"
-                                            referrerpolicy="no-referrer"
-                                        ></iframe>
-                                    </div>
-                                </article>
-                            </div>
-                        </section>
+                        <button id="websiteAuditVisualCheckBtn" type="button" class="panel-action">Website Scanner</button>
                     </div>
                     <p class="panel-note website-audit-score" id="websiteAuditScore">Score: --</p>
                     <p class="panel-note website-audit-meta" id="websiteAuditMeta">Pass: 0 | Warn: 0 | Fail: 0</p>

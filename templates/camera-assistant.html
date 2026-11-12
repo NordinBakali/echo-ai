@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="{{ 'nl' if nederlands else 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="echo-presence-token" content="{{ presence_token }}">
+    <title>{{ ui('Posture & Gestures', 'Houding & Gebaren') }} - Echo</title>
+    <link rel="icon" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v={{ build_id }}">
+    <script src="{{ url_for('static', filename='camera-assistant.js') }}?v={{ build_id }}" defer></script>
+</head>
+<body class="coach-page" data-language="{{ 'nl' if nederlands else 'en' }}">
+<div class="workspace-shell">
+    <header class="workspace-header">
+        <a class="brand" href="{{ url_for('index') }}">ECHO <small>{{ ui('CAMERA ASSISTANT', 'CAMERA-ASSISTENT') }}</small></a>
+        <nav class="coach-header-actions" aria-label="{{ ui('Page navigation and language', 'Paginanavigatie en taal') }}">
+            <div class="coach-language" aria-label="{{ ui('Page language', 'Taal van deze pagina') }}">
+                <a href="{{ url_for('camera_assistent_pagina', lang='nl') }}" lang="nl" hreflang="nl" aria-label="Nederlands"{% if nederlands %} aria-current="page"{% endif %}>NL</a>
+                <a href="{{ url_for('camera_assistent_pagina', lang='en') }}" lang="en" hreflang="en" aria-label="English"{% if not nederlands %} aria-current="page"{% endif %}>EN</a>
+            </div>
+            <a class="back-link" href="{{ url_for('index') }}">{{ ui('Back to Echo', 'Terug naar Echo') }}</a>
+        </nav>
+    </header>
+    <main>
+        <section class="coach-intro">
+            <p class="eyebrow">{{ ui('YOUR LOCAL CAMERA ASSISTANT', 'JOUW LOKALE CAMERA-ASSISTENT') }}</p>
+            <h1>{{ ui('A little more movement. A lot more control.', 'Meer gemak, met één handgebaar.') }}</h1>
+            <p>{{ ui(
+                'Control music and Windows with your hands, and get a gentle reminder to sit comfortably.',
+                'Bedien muziek en Windows met je handen en ontvang een vriendelijke herinnering voor je zithouding.'
+            ) }}</p>
+        </section>
+
+        <section class="coach-overview" aria-label="{{ ui('Camera assistant status', 'Status van de camera-assistent') }}">
+            <div class="coach-state">
+                <span>{{ ui('CAMERA', 'CAMERA') }}</span>
+                <strong id="coach-state-camera" data-state="unknown" role="status" aria-live="polite">{{ ui('Checking...', 'Controleren...') }}</strong>
+            </div>
+            <div class="coach-state">
+                <span>{{ ui('HAND SCAN', 'HANDSCAN') }}</span>
+                <strong id="coach-state-scan" data-state="unknown" role="status" aria-live="polite">{{ ui('Checking...', 'Controleren...') }}</strong>
+            </div>
+            <div class="coach-state">
+                <span>{{ ui('GESTURE ACTIONS', 'GEBAARACTIES') }}</span>
+                <strong id="coach-state-actions" data-state="unknown" role="status" aria-live="polite">{{ ui('Checking...', 'Controleren...') }}</strong>
+            </div>
+        </section>
+
+        <div class="coach-dashboard">
+            <form id="coach-form" class="input-card coach-start-card">
+                <div class="coach-card-heading">
+                    <span class="coach-step" aria-hidden="true">01</span>
+                    <div>
+                        <p class="eyebrow">{{ ui('YOU ARE IN CONTROL', 'JIJ HEBT DE CONTROLE') }}</p>
+                        <h2>{{ ui('Start the camera', 'Start de camera') }}</h2>
+                    </div>
+                </div>
+                <p class="coach-card-description">{{ ui(
+                    'Start in practice mode. A separate hand scan turns gesture actions on.',
+                    'Je begint in oefenstand. Pas met een aparte handscan zet je gebaaracties aan.'
+                ) }}</p>
+                <label for="coach-swipe">{{ ui('Swiping controls', 'Vegen bedient') }}</label>
+                <select id="coach-swipe" aria-describedby="coach-media-help">
+                    <option value="media">{{ ui('Music / Spotify', 'Muziek / Spotify') }}</option>
+                    <option value="desktop">{{ ui('Windows desktops', 'Windows-bureaubladen') }}</option>
+                </select>
+                <p id="coach-media-help" class="field-help">{{ ui(
+                    'Music gestures control the active Windows media player. Open Spotify and start playing first; no Spotify login is linked to Echo.',
+                    'Muziekgebaren bedienen de actieve Windows-mediaspeler. Open Spotify en start eerst muziek; je koppelt geen Spotify-account aan Echo.'
+                ) }}</p>
+                <p class="coach-privacy-note">{{ ui(
+                    'Your camera images stay on this PC. On first use, Echo may download Google MediaPipe models (about 14 MB).',
+                    'Je camerabeelden blijven op deze pc. Bij het eerste gebruik kan Echo Google MediaPipe-modellen downloaden (circa 14 MB).'
+                ) }}</p>
+                <label class="coach-consent" for="coach-consent">
+                    <input id="coach-consent" type="checkbox" required>
+                    <span>{{ ui('I allow local camera analysis.', 'Ik geef toestemming voor lokale camera-analyse.') }}</span>
+                </label>
+                <div class="button-row coach-start-actions">
+                    <button id="coach-start" type="submit" class="primary-button" disabled>{{ ui('Start camera assistant', 'Camera-assistent starten') }}</button>
+                    <button id="coach-stop" type="button" class="secondary-button" disabled>{{ ui('Stop camera', 'Camera stoppen') }}</button>
+                </div>
+                <p class="coach-safety-note">{{ ui(
+                    'Closing this page does not stop the camera. Use Stop camera. Gesture actions turn off on the lock screen and must be re-enabled manually.',
+                    'Deze pagina sluiten stopt de camera niet. Kies Camera stoppen. Op het vergrendelscherm gaan gebaaracties uit; activeer ze daarna zelf opnieuw.'
+                ) }}</p>
+                <details id="coach-settings" class="coach-settings">
+                    <summary>{{ ui('Camera, microphone & more settings', 'Camera, microfoon en meer instellingen') }}</summary>
+                    <div class="coach-settings-content">
+                        <p class="field-help">{{ ui('Stop the assistant before changing settings.', 'Stop de assistent voordat je instellingen wijzigt.') }}</p>
+                        <label for="coach-camera">{{ ui('Camera number', 'Cameranummer') }}</label>
+                        <input id="coach-camera" type="number" value="0" min="0" max="10" required>
+                        <p class="field-help">{{ ui(
+                            'Use the same number as presence detection to share its camera. Other camera apps may need to be closed.',
+                            'Gebruik hetzelfde nummer als aanwezigheidsdetectie om de camera te delen. Andere camera-apps moet je mogelijk sluiten.'
+                        ) }}</p>
+                        <label class="coach-check"><input id="coach-posture" type="checkbox" checked> <span>{{ ui('Posture reminders', 'Houdingsherinneringen') }}</span></label>
+                        <label for="coach-delay">{{ ui('Remind after leaning forward (seconds)', 'Herinneren na vooroverzitten (seconden)') }}</label>
+                        <input id="coach-delay" type="number" value="30" min="10" max="300" required>
+                        <label class="coach-check"><input id="coach-sound" type="checkbox"> <span>{{ ui('Also play a Windows notification sound', 'Ook een Windows-meldingsgeluid afspelen') }}</span></label>
+                        <label class="coach-check"><input id="coach-gestures" type="checkbox" checked> <span>{{ ui('Recognize hand gestures', 'Handgebaren herkennen') }}</span></label>
+                        <label class="coach-check"><input id="coach-extra" type="checkbox" checked> <span>{{ ui('Extra gestures: pointing, V sign, thumbs and two hands', 'Extra gebaren: wijzen, V-teken, duimen en twee handen') }}</span></label>
+                        <label for="coach-microphone">{{ ui('Microphone to mute with a fist', 'Microfoon die je vuist moet muten') }}</label>
+                        <select id="coach-microphone" aria-describedby="coach-device-status coach-microphone-help">
+                            <option value="communications">{{ ui('Windows default communications microphone', 'Windows-standaardmicrofoon voor communicatie') }}</option>
+                        </select>
+                        <button id="coach-refresh-microphones" type="button" class="secondary-button coach-refresh">{{ ui('Refresh microphone list', 'Microfoonlijst verversen') }}</button>
+                        <p id="coach-microphone-help" class="field-help">{{ ui(
+                            'Choose the same microphone as in your call app. This mutes the Windows device, not necessarily the app mute icon. The wake-up listener also stops hearing you if it uses this microphone. Use Unmute microphone to restore it.',
+                            'Kies dezelfde microfoon als in je bel-app. Dit dempt het Windows-apparaat; het mute-icoon in de bel-app verandert mogelijk niet. Ook de wake-up-luisteraar hoort je niet meer als die deze microfoon gebruikt. Herstel dit met Microfoon weer aan.'
+                        ) }}</p>
+                    </div>
+                </details>
+                <p id="coach-device-status" class="field-help" role="status" aria-live="polite"></p>
+            </form>
+
+            <section class="output-card coach-live-card" aria-labelledby="coach-live-title">
+                <div class="coach-card-heading coach-live-heading">
+                    <span class="coach-step" aria-hidden="true">02</span>
+                    <div>
+                        <p class="eyebrow">{{ ui('LIVE GUIDANCE', 'LIVE BEGELEIDING') }}</p>
+                        <h2 id="coach-live-title">{{ ui('Scan & practice', 'Scannen en oefenen') }}</h2>
+                    </div>
+                    <span class="coach-local-badge">{{ ui('LOCAL', 'LOKAAL') }}</span>
+                </div>
+                <p id="coach-status" class="status" role="status" aria-live="polite">{{ ui('Loading...', 'Laden...') }}</p>
+                <p id="coach-guide" class="coach-guide" role="status" aria-live="polite">{{ ui(
+                    'Start the camera assistant to see your hands and the next step.',
+                    'Start de camera-assistent om je handen en de volgende stap te zien.'
+                ) }}</p>
+                <p id="coach-training" class="status" role="status" aria-live="polite"></p>
+                <progress id="coach-progress" class="coach-progress" max="100" value="0" hidden aria-label="{{ ui('Calibration progress', 'Voortgang aanleren') }}"></progress>
+                <p class="field-help">{{ ui(
+                    'Show one open hand for about one second. The scan enables actions, including microphone mute.',
+                    'Toon ongeveer één seconde één open hand. De scan activeert acties, waaronder microfoon dempen.'
+                ) }}</p>
+                <div class="button-row coach-scan-actions">
+                    <button type="button" class="primary-button" data-train="activate" disabled>{{ ui('Scan hand and enable gestures', 'Hand scannen en gebaren activeren') }}</button>
+                    <button id="coach-disarm" type="button" class="secondary-button" disabled>{{ ui('Practice only', 'Alleen oefenen') }}</button>
+                    <button type="button" class="secondary-button" data-train="posture" disabled>{{ ui('Set upright posture', 'Rechte zithouding instellen') }}</button>
+                    <button id="coach-unmute" type="button" class="secondary-button" disabled>{{ ui('Unmute microphone', 'Microfoon weer aan') }}</button>
+                </div>
+                <div class="coach-preview-frame">
+                    <canvas id="coach-preview" width="640" height="480" aria-label="{{ ui('Mirrored landmark sketch; not a camera recording', 'Gespiegelde schets van herkenningspunten; geen cameraopname') }}"></canvas>
+                    <div id="coach-preview-placeholder" class="coach-preview-placeholder" aria-hidden="true">
+                        <span class="coach-preview-icon">✋</span>
+                        <strong id="coach-preview-message">{{ ui('Your hand sketch appears here', 'Hier verschijnt je handschets') }}</strong>
+                        <span>{{ ui('No camera image or recording', 'Geen camerabeeld of opname') }}</span>
+                    </div>
+                    <span class="coach-preview-caption" aria-hidden="true">{{ ui('LANDMARK SKETCH', 'SCHETS VAN HERKENNINGSPUNTEN') }}</span>
+                </div>
+                <p class="field-help">{{ ui(
+                    'The lines show what Echo can see. Keep your entire hand within the sketch, facing the camera, with good lighting. No camera image is shown or saved.',
+                    'De lijnen laten zien wat Echo ziet. Houd je hele hand binnen de schets, met je handpalm naar de camera en met goed licht. Er wordt geen camerabeeld getoond of opgeslagen.'
+                ) }}</p>
+                <p id="coach-performance" class="field-help"></p>
+                <p class="field-help">{{ ui(
+                    'No fist scan is needed. Stop the scan with Cancel hand scan or disable actions with Practice only. For posture reminders, separately hold your upright posture for two seconds. Recognition is approximate, not a medical assessment.',
+                    'Een vuist scannen is niet nodig. Stop de scan met Handscan stoppen of schakel acties uit met Alleen oefenen. Houd voor houdingsherinneringen apart je rechte zithouding twee seconden vast. Herkenning is een schatting, geen medische beoordeling.'
+                ) }}</p>
+                <p id="coach-recognition" class="field-help"></p>
+                <div class="coach-action-controls">
+                    <h3>{{ ui('Gesture actions', 'Gebaaracties') }}</h3>
+                    <p id="coach-action" class="status" role="status" aria-live="polite"></p>
+                    <div class="button-row">
+                        <button id="coach-arm" type="button" class="secondary-button" disabled>{{ ui('Re-enable gesture actions', 'Gebaaracties opnieuw activeren') }}</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <section class="coach-reference" aria-labelledby="coach-gestures-title">
+            <div class="coach-reference-heading">
+                <div>
+                    <p class="eyebrow">{{ ui('QUICK REFERENCE', 'SNEL OVERZICHT') }}</p>
+                    <h2 id="coach-gestures-title">{{ ui('Gestures you can use', 'Deze gebaren kun je gebruiken') }}</h2>
+                </div>
+                <p>{{ ui(
+                    'After the scan, use either hand. Lower it or change the gesture between one-time actions; there is a two-second cooldown.',
+                    'Na de scan mag je beide handen gebruiken. Laat je hand zakken of verander het gebaar tussen eenmalige acties; er is twee seconden wachttijd.'
+                ) }}</p>
+            </div>
+            <div class="coach-gesture-grid">
+                <div class="coach-gesture"><span aria-hidden="true">🖐️</span><strong>{{ ui('Swipe left / right', 'Veeg links / rechts') }}</strong><small>{{ ui('Previous / next track or desktop', 'Vorig / volgend nummer of bureaublad') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">✊</span><strong>{{ ui('Fist · 0.8 s', 'Vuist · 0,8 s') }}</strong><small>{{ ui('Mute selected microphone', 'Gekozen microfoon dempen') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">☝️</span><strong>{{ ui('Point · hold still 0.8 s', 'Wijsvinger · 0,8 s stil') }}</strong><small>{{ ui('Only index finger up: play / pause music, once per gesture', 'Alleen wijsvinger omhoog: muziek afspelen / pauzeren, eenmaal per gebaar') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">🤏</span><strong>{{ ui('Pinch · volume', 'Knijpen · volume') }}</strong><small>{{ ui('Thumb and index finger close for 0.4 s, then widen = louder, narrow = quieter. Other three fingers extended.', 'Duim en wijsvinger 0,4 s bijna samen, dan wijder = harder, dichterbij = zachter. Andere drie vingers gestrekt.') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">✌️</span><strong>{{ ui('V sign · 0.8 s', 'V-teken · 0,8 s') }}</strong><small>{{ ui('Index and middle finger: show / restore desktop', 'Wijs- en middelvinger: bureaublad tonen / herstellen') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">👍 / 👎</span><strong>{{ ui('Thumb up / down', 'Duim omhoog / omlaag') }}</strong><small>{{ ui('From a fist: raise / lower volume while held', 'Vanuit een vuist: volume harder / zachter zolang je vasthoudt') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">✊ ✊</span><strong>{{ ui('Two fists · 1 s', 'Twee vuisten · 1 s') }}</strong><small>{{ ui('Speaker sound on / off', 'Speakergeluid aan / uit') }}</small></div>
+                <div class="coach-gesture"><span aria-hidden="true">🖐️ 🖐️</span><strong>{{ ui('Two open hands', 'Twee open handen') }}</strong><small>{{ ui('Move apart / together to zoom', 'Uit elkaar / naar elkaar om te zoomen') }}</small></div>
+            </div>
+            <p class="field-help">{{ ui(
+                'For a swipe, move your open hand across at least a quarter of the sketch in about one second. Right is next, left is previous. Pointing, pinching, the V sign, thumbs and two-hand gestures require Extra gestures in settings. Pinching adjusts volume in small steps, at most once per 0.3 seconds; holding the same gap does nothing. Use one pinching hand at a time; extend all fingers to release. An open hand does not pause music. Practice before using gestures in a call.',
+                'Veeg met je open hand in ongeveer een seconde over minstens een kwart van de schets. Rechts is volgend, links is vorig. Wijzen, knijpen, het V-teken, duimen en tweehandige gebaren vereisen Extra gebaren in de instellingen. Knijpen regelt volume in kleine stappen, hoogstens eenmaal per 0,3 seconden; dezelfde afstand vasthouden doet niets. Knijp met één hand tegelijk; strek alle vingers om los te laten. Een open hand pauzeert muziek niet. Oefen voordat je gebaren tijdens een call gebruikt.'
+            ) }}</p>
+        </section>
+
+        <section class="coach-info">
+            <details class="coach-privacy">
+                <summary>{{ ui('Privacy & local processing', 'Privacy en lokale verwerking') }}</summary>
+                <p>{{ ui(
+                    'Camera frames stay on this PC. Only a live landmark sketch is displayed. The first start downloads Google MediaPipe models (about 14 MB); no images are uploaded. Calibration examples stay in memory until detection restarts.',
+                    'Camerabeelden blijven op deze pc. Je ziet alleen een live schets van herkenningspunten. De eerste start downloadt Google MediaPipe-modellen (circa 14 MB); er worden geen beelden verstuurd. Kalibratievoorbeelden blijven in het geheugen tot de detectie opnieuw start.'
+                ) }}</p>
+            </details>
+            <div class="coach-reminders">
+                <button id="coach-notifications" type="button" class="secondary-button">{{ ui('Allow desktop reminders', 'Bureaubladmeldingen toestaan') }}</button>
+                <p id="coach-notification-status" class="field-help" role="status"></p>
+                <p class="field-help">{{ ui(
+                    'Desktop reminders require browser permission and this page to stay open. Echo also keeps reminders in its dashboard. Keep your camera fixed after calibration; recalibrate if it moves.',
+                    'Bureaubladmeldingen vereisen browsertoestemming en een geopende pagina. Echo bewaart herinneringen ook in het dashboard. Houd de camera na kalibratie op dezelfde plek; kalibreer opnieuw na verplaatsen.'
+                ) }}</p>
+            </div>
+        </section>
+    </main>
+    <footer><a href="{{ url_for('aanwezigheid_pagina') }}">{{ ui('Presence detection & screen locking', 'Aanwezigheidsdetectie & schermvergrendeling') }}</a></footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="{{ 'nl' if nederlands else 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="echo-system-token" content="{{ system_token }}">
+    <title>{{ ui('System care', 'Systeemzorg') }} - Echo</title>
+    <link rel="icon" href="{{ url_for('static', filename='echo-circle-logo.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v={{ build_id }}">
+    <style>
+        input[type=checkbox] { width: auto; }
+        .care-list { max-height: 340px; overflow: auto; padding-left: 1.3rem; }
+        .care-list li { margin: .7rem 0; overflow-wrap: anywhere; }
+        #care-preview, #care-job { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .input-card { min-width: 0; } select { max-width: 100%; }
+        #care-error, #care-coverage { color: #ffba97; }
+    </style>
+    <script src="{{ url_for('static', filename='system-care.js') }}?v={{ build_id }}" defer></script>
+    <script src="{{ url_for('static', filename='local-analysis.js') }}?v={{ build_id }}" defer></script>
+</head>
+<body data-language="{{ 'nl' if nederlands else 'en' }}">
+<div class="workspace-shell">
+    <header class="workspace-header">
+        <a class="brand" href="{{ url_for('index') }}">ECHO <small>{{ ui('SYSTEM CARE', 'SYSTEEMZORG') }}</small></a>
+        <a class="back-link" href="{{ url_for('index') }}">{{ ui('Back to Echo', 'Terug naar Echo') }}</a>
+    </header>
+    <main>
+        <section class="workspace-intro">
+            <h1>{{ ui('Your network, logs and hardware.', 'Je netwerk, logboeken en hardware.') }}</h1>
+            <p>{{ ui('Local analysis, no log uploads. Everything starts disabled after restarting Echo.', 'Lokale analyse, geen loguploads. Na een herstart van Echo staat alles eerst uit.') }}</p>
+        </section>
+        <p id="care-error" role="alert"></p>
+        <section class="workspace-panel" aria-labelledby="local-ai-title">
+            <h2 id="local-ai-title">{{ ui('Local AI file & log analysis', 'Lokale AI-bestands- en loganalyse') }}</h2>
+            <p>{{ ui(
+                'Choose files yourself. Echo sends their content only to Ollama on this PC, not to the normal chat or a cloud fallback. Only installed local text models are accepted. Read-only: nothing is changed or executed.',
+                'Kies zelf bestanden. Echo stuurt hun inhoud alleen naar Ollama op deze pc, niet naar de gewone chat of een cloudfallback. Alleen geïnstalleerde lokale tekstmodellen zijn toegestaan. Alleen lezen: er wordt niets aangepast of uitgevoerd.'
+            ) }}</p>
+            <form id="local-ai-form" class="input-card">
+                <label for="local-ai-model">{{ ui('Installed Ollama model', 'Geïnstalleerd Ollama-model') }}</label>
+                <select id="local-ai-model" required><option value="">{{ ui('Load local models first', 'Haal eerst lokale modellen op') }}</option></select>
+                <button id="local-ai-refresh" class="secondary-button" type="button">{{ ui('Load local models', 'Lokale modellen ophalen') }}</button>
+                <label for="local-ai-files">{{ ui('Text or log files (1–5)', 'Tekst- of logbestanden (1–5)') }}</label>
+                <input id="local-ai-files" type="file" multiple required accept=".txt,.log,.md,.py,.js,.ts,.json,.yaml,.yml,.csv,.ini,.conf,.xml,.ps1,.html,.css">
+                <p class="field-help">{{ ui(
+                    'Maximum 64 KiB and 12,000 characters combined. UTF-8 only; choose a small relevant excerpt. No automatic folder scan or Event Viewer access. Do not select passwords, keys or other secrets. Use a trusted local Ollama installation, disable its cloud features and keep its port private. The report stays on this page and is not saved by Echo.',
+                    'Samen maximaal 64 KiB en 12.000 tekens. Alleen UTF-8; kies een klein relevant fragment. Geen automatische mapscan of Event Viewer-toegang. Selecteer geen wachtwoorden, sleutels of andere geheimen. Gebruik een vertrouwde lokale Ollama-installatie, schakel de cloudfuncties daarvan uit en houd de poort privé. Het rapport blijft op deze pagina en wordt niet door Echo opgeslagen.'
+                ) }}</p>
+                <label><input id="local-ai-consent" type="checkbox" required> {{ ui(
+                    'I may analyze these files and authorize sending them to local Ollama.',
+                    'Ik mag deze bestanden analyseren en geef toestemming om ze naar lokale Ollama te sturen.'
+                ) }}</label>
+                <div class="button-row">
+                    <button id="local-ai-submit" class="primary-button" disabled>{{ ui('Analyze locally', 'Lokaal analyseren') }}</button>
+                    <button id="local-ai-clear" class="secondary-button" type="button">{{ ui('Clear selection & report', 'Selectie en rapport wissen') }}</button>
+                </div>
+                <p id="local-ai-status" role="status" aria-live="polite"></p>
+                <p id="local-ai-error" role="alert"></p>
+            </form>
+            <section id="local-ai-report" hidden aria-label="{{ ui('Local analysis report', 'Lokaal analyserapport') }}">
+                <p id="local-ai-summary" style="white-space: pre-wrap; overflow-wrap: anywhere"></p>
+                <ul id="local-ai-findings" class="care-list"></ul>
+                <p class="field-help">{{ ui(
+                    'AI findings are suggestions, not proof of compromise or a complete security audit. Source quotes and line numbers are checked against the selected files; the interpretation can still be wrong. No findings does not prove a file is safe. Review all advice yourself.',
+                    'AI-bevindingen zijn suggesties, geen bewijs van een aanval of volledige beveiligingsaudit. Broncitaten en regelnummers worden met de gekozen bestanden vergeleken; de uitleg kan nog onjuist zijn. Geen bevindingen bewijst niet dat een bestand veilig is. Controleer elk advies zelf.'
+                ) }}</p>
+            </section>
+        </section>
+        <section class="workspace-panel">
+            <div class="workspace-grid">
+                <form id="care-monitor" class="input-card">
+                    <h2>{{ ui('1. Monitoring', '1. Bewaking') }}</h2>
+                    <label><input id="care-network" type="checkbox"> {{ ui('Discover LAN devices', 'LAN-apparaten ontdekken') }}</label>
+                    <label for="care-adapter">{{ ui('Private network adapter', 'Prive-netwerkadapter') }}</label>
+                    <select id="care-adapter"><option value="">{{ ui('Choose an adapter', 'Kies een adapter') }}</option></select>
+                    <label for="care-network-interval">{{ ui('Network interval (seconds)', 'Netwerkinterval (seconden)') }}</label>
+                    <input id="care-network-interval" type="number" min="60" max="3600" value="300" required>
+                    <label><input id="care-logs" type="checkbox"> {{ ui('Analyse local system logs', 'Lokale systeemlogboeken analyseren') }}</label>
+                    <label for="care-log-interval">{{ ui('Log interval (seconds)', 'Loginterval (seconden)') }}</label>
+                    <input id="care-log-interval" type="number" min="15" max="600" value="60" required>
+                    <label for="care-alert-profile">{{ ui('Alert profile (does not switch your active profile)', 'Meldingsprofiel (wisselt je actieve profiel niet)') }}</label>
+                    <select id="care-alert-profile"></select>
+                    <label><input id="care-sound" type="checkbox"> {{ ui('Local Windows sound', 'Lokaal Windows-geluid') }}</label>
+                    <label><input id="care-desktop" type="checkbox"> {{ ui('Desktop notifications while this page is open', 'Bureaubladmeldingen zolang deze pagina open is') }}</label>
+                    <label><input id="care-consent" type="checkbox" required> {{ ui('I authorize reading these logs and scanning my own selected LAN.', 'Ik geef toestemming om deze logs te lezen en mijn eigen gekozen LAN te scannen.') }}</label>
+                    <div class="button-row">
+                        <button id="care-start" class="primary-button" disabled>{{ ui('Start monitoring', 'Bewaking starten') }}</button>
+                        <button id="care-stop" class="secondary-button" type="button" disabled>{{ ui('Stop', 'Stoppen') }}</button>
+                    </div>
+                    <p class="field-help">{{ ui('Closing this page does not stop monitoring. Use Stop. Only private IPv4 subnets /24 to /30 are supported. No port scans.', 'Deze pagina sluiten stopt bewaking niet. Gebruik Stoppen. Alleen private IPv4-subnetten /24 t/m /30 worden ondersteund. Geen poortscans.') }}</p>
+                    <p id="care-status" role="status"></p>
+                    <p id="care-coverage" role="status"></p>
+                </form>
+                <section class="input-card">
+                    <h2>{{ ui('Devices and alerts', 'Apparaten en meldingen') }}</h2>
+                    <p class="field-help">{{ ui('Trust only devices you recognize. MAC identity is not authentication. Firewalls, sleeping devices and Wi-Fi isolation can hide devices; consult your router for the authoritative inventory.', 'Vertrouw alleen apparaten die je herkent. MAC-identiteit is geen authenticatie. Firewalls, slaapstand en wifi-isolatie kunnen apparaten verbergen; bekijk je router voor de volledige inventaris.') }}</p>
+                    <ul id="care-devices" class="care-list"></ul>
+                    <p class="field-help">{{ ui('Log findings are signals, not proof of compromise. Security logs may require permissions. First Windows poll covers 15 minutes; Linux reads recent syslog data. Missing coverage is shown explicitly.', 'Logmeldingen zijn signalen, geen bewijs van een aanval. Security-logs kunnen extra rechten vereisen. De eerste Windows-poging leest 15 minuten terug; Linux leest recente syslogdata. Ontbrekende dekking wordt zichtbaar gemeld.') }}</p>
+                    <ul id="care-alerts" class="care-list"></ul>
+                </section>
+            </div>
+        </section>
+        <section class="workspace-panel">
+            <div class="workspace-grid">
+                <form id="care-policy" class="input-card">
+                    <h2>{{ ui('2. Profile hardware actions', '2. Hardwareacties per profiel') }}</h2>
+                    <label for="care-profile">{{ ui('Profile', 'Profiel') }}</label>
+                    <select id="care-profile"></select>
+                    <label for="care-apps">{{ ui('Approved applications to terminate (Ctrl + click for multiple)', 'Goedgekeurde apps om te stoppen (Ctrl + klik voor meerdere)') }}</label>
+                    <select id="care-apps" multiple size="8"></select>
+                    <p class="field-help">{{ ui('All eligible instances of each selected executable may be terminated. Save your work first: Windows termination is not a graceful close. System/security processes, browsers, Echo, its children and other users/sessions are protected.', 'Alle geschikte instanties van elk gekozen programmabestand kunnen worden gestopt. Sla eerst je werk op: Windows-beeindiging is geen nette afsluiting. Systeem-/beveiligingsprocessen, browsers, Echo, zijn kinderen en andere gebruikers/sessies zijn beschermd.') }}</p>
+                    <button id="care-refresh-apps" type="button" class="secondary-button">{{ ui('Refresh apps and saved choices', 'Apps en opgeslagen keuzes verversen') }}</button>
+                    <label for="care-power">{{ ui('Existing Windows power plan', 'Bestaand Windows-energieplan') }}</label>
+                    <select id="care-power"><option value="">{{ ui('Leave unchanged', 'Niet wijzigen') }}</option></select>
+                    <label><input id="care-cooling" type="checkbox"> {{ ui('Prefer active cooling on AC power', 'Actieve koeling op netstroom verkiezen') }}</label>
+                    <p class="field-help">{{ ui('This is a Windows cooling policy, NOT direct fan RPM control. Firmware decides fan speed; an already active policy may change nothing. Use manufacturer software such as MSI Center if your model supports fan controls.', 'Dit is Windows-koelbeleid, GEEN directe ventilator-RPM-regeling. Firmware bepaalt de snelheid; als actief beleid al aanstaat verandert mogelijk niets. Gebruik fabrikantsoftware zoals MSI Center als jouw model ventilatorregeling ondersteunt.') }}</p>
+                    <p id="care-capabilities" class="field-help"></p>
+                    <div class="button-row">
+                        <button id="care-save" class="secondary-button">{{ ui('Save policy', 'Beleid opslaan') }}</button>
+                        <button id="care-preview-button" type="button" class="primary-button">{{ ui('Save and preview', 'Opslaan en voorbeeld') }}</button>
+                    </div>
+                </form>
+                <section class="input-card">
+                    <h2>{{ ui('3. Confirm or restore', '3. Bevestigen of herstellen') }}</h2>
+                    <p>{{ ui('A preview is valid for 30 seconds. Only those exact process identities can be stopped. RAM is reclaimed by closing approved apps; no cache-cleaning tricks.', 'Een voorbeeld is 30 seconden geldig. Alleen die exacte procesidentiteiten mogen worden gestopt. RAM komt vrij door goedgekeurde apps te stoppen; geen cache-trucjes.') }}</p>
+                    <pre id="care-preview"></pre>
+                    <button id="care-execute" class="primary-button" disabled>{{ ui('Confirm execution', 'Uitvoering bevestigen') }}</button>
+                    <p id="care-job" role="status"></p>
+                    <div class="button-row">
+                        <button id="care-auto-on" type="button" class="secondary-button">{{ ui('Enable for manual profile changes', 'Activeren bij handmatige profielwissels') }}</button>
+                        <button id="care-auto-off" type="button" class="secondary-button">{{ ui('Disable profile automation', 'Profielautomatiek uit') }}</button>
+                        <button id="care-restore" type="button" class="secondary-button" disabled>{{ ui('Restore power settings', 'Energie-instellingen herstellen') }}</button>
+                    </div>
+                    <p id="care-auto-status" role="status"></p>
+                    <p class="field-help">{{ ui('Automation is session-only and requires this explicit permission. Only manual Apply on the local Echo dashboard can trigger it; remote settings or automatic intent routing cannot. Restore recovers saved power settings, not terminated apps or unsaved work. Selecting Normal does not undo termination.', 'Automatiek geldt alleen deze Echo-sessie en vereist deze toestemming. Alleen handmatig Toepassen op het lokale Echo-dashboard kan dit activeren; externe instellingen of automatische intentherkenning niet. Herstellen zet opgeslagen energie-instellingen terug, niet gestopte apps of onopgeslagen werk. Normaal kiezen maakt stoppen niet ongedaan.') }}</p>
+                </section>
+            </div>
+        </section>
+        <section class="workspace-panel" aria-labelledby="care-pressure-title">
+            <h2 id="care-pressure-title">{{ ui('4. Automatic CPU/RAM protection', '4. Automatische CPU/RAM-bescherming') }}</h2>
+            <p>{{ ui(
+                'When CPU or RAM stays above 80% for 10 seconds, Echo may stop one heavy, previously approved background process. Your foreground app and its process family are rechecked directly before each attempt. No blind clicks or AI-selected processes.',
+                'Als CPU of RAM 10 seconden boven 80% blijft, mag Echo één zwaar, vooraf goedgekeurd achtergrondproces stoppen. De actieve app en zijn procesfamilie worden direct voor elke poging opnieuw gecontroleerd. Geen blinde klikken of door AI uitgekozen processen.'
+            ) }}</p>
+            <form id="care-pressure-form" class="input-card">
+                <label for="care-pressure-profile">{{ ui('Approved hardware profile (must also be active in Echo)', 'Goedgekeurd hardwareprofiel (moet ook actief zijn in Echo)') }}</label>
+                <select id="care-pressure-profile"></select>
+                <p id="care-pressure-active" class="field-help"></p>
+                <label><input id="care-pressure-speech" type="checkbox" checked> {{ ui('Speak a local Windows notification after an app was actually stopped', 'Spreek lokaal via Windows een melding na een werkelijk gestopte app') }}</label>
+                <label><input id="care-pressure-consent" type="checkbox" required> {{ ui(
+                    'I authorize automatic termination of the saved approved apps for this session. I have saved my work; unsaved data may be lost.',
+                    'Ik geef voor deze sessie toestemming om de opgeslagen goedgekeurde apps automatisch te stoppen. Mijn werk is opgeslagen; onopgeslagen gegevens kunnen verloren gaan.'
+                ) }}</label>
+                <div class="button-row">
+                    <button id="care-pressure-start" class="primary-button" disabled>{{ ui('Enable CPU/RAM protection', 'CPU/RAM-bescherming inschakelen') }}</button>
+                    <button id="care-pressure-stop" type="button" class="secondary-button" disabled>{{ ui('Disable CPU/RAM protection', 'CPU/RAM-bescherming uitschakelen') }}</button>
+                </div>
+                <p id="care-pressure-status" role="status" aria-live="polite"></p>
+                <p id="care-pressure-error" role="alert"></p>
+                <p class="field-help">{{ ui(
+                    'Save approved apps under Hardware actions first, then apply that profile in the Echo dashboard. Checks run every 5 seconds; the first check warms up measurements. At most one process per minute is attempted, only once per process identity. Candidates must use at least 5% of total CPU (when CPU is high) or 128 MiB RAM (when RAM is high). Only process termination is automatic here, not power/cooling changes. Missing foreground identity, errors or profile changes disable protection. Restarting Echo always leaves it off. Closing this page does not stop it. Stopped apps and unsaved work are not restored. Local speech never falls back to cloud speech.',
+                    'Sla eerst goedgekeurde apps op bij Hardwareacties en pas dat profiel daarna toe in het Echo-dashboard. Elke 5 seconden meten; de eerste meting is een nulmeting. Hoogstens één proces per minuut proberen, slechts eenmaal per procesidentiteit. Kandidaten moeten minimaal 5% van de totale CPU gebruiken (bij hoge CPU) of 128 MiB RAM (bij hoog RAM). Alleen processen stoppen is hier automatisch, niet energie-/koelbeleid wijzigen. Ontbrekende actieve-appidentiteit, fouten of een profielwissel schakelen bescherming uit. Na een Echo-herstart staat dit altijd uit. Deze pagina sluiten stopt dit niet. Gestopte apps en onopgeslagen werk worden niet hersteld. Lokale spraak valt nooit terug op cloudspraak.'
+                ) }}</p>
+            </form>
+        </section>
+    </main>
+</div>
+</body>
+</html>

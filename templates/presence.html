@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="{{ 'nl' if nederlands else 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#06131c">
+    <meta name="echo-presence-token" content="{{ presence_token }}">
+    <title>{{ ui('Presence & Security', 'Aanwezigheid & Beveiliging') }} - Echo</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v={{ build_id }}">
+    <script src="{{ url_for('static', filename='presence.js') }}?v={{ build_id }}" defer></script>
+</head>
+<body data-language="{{ 'nl' if nederlands else 'en' }}">
+    <div class="workspace-shell">
+        <header class="workspace-header">
+            <a class="brand" href="{{ url_for('index') }}">
+                <img src="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}" alt="">
+                <span>ECHO <small>{{ ui('PRESENCE', 'AANWEZIGHEID') }}</small></span>
+            </a>
+            <a class="back-link" href="{{ url_for('index') }}">{{ ui('Back to Echo', 'Terug naar Echo') }} &rarr;</a>
+        </header>
+        <main>
+            <section class="workspace-intro">
+                <p class="eyebrow">{{ ui('LOCAL WEBCAM DETECTION', 'LOKALE WEBCAMDETECTIE') }}</p>
+                <h1>{{ ui('Away? Lock your screen.', 'Even weg? Scherm op slot.') }}</h1>
+                <p><a href="{{ url_for('camera_assistent_pagina') }}">{{ ui('Also try posture reminders and hand gestures', 'Ook houdingsherinneringen en handgebaren gebruiken') }}</a></p>
+                <p>{{ ui(
+                    'Echo requests a Windows lock when no face is visible for the selected delay, and can beep when a face returns.',
+                    'Echo vraagt Windows te vergrendelen als er gedurende de ingestelde wachttijd geen gezicht zichtbaar is, en kan een seintje geven bij terugkomst.'
+                ) }}</p>
+            </section>
+            <div class="privacy-notice">
+                <strong>{{ ui('Private by design', 'Lokaal en zonder opnames') }}</strong>
+                <span>{{ ui(
+                    'Frames stay in memory on this PC. No recordings, face profiles or cloud uploads. This detects any face, not your identity, and can be fooled by a photo.',
+                    'Beelden blijven alleen in het geheugen van deze pc. Geen opnames, gezichtsprofielen of clouduploads. Dit detecteert ieder gezicht, niet jouw identiteit, en kan door een foto worden misleid.'
+                ) }}</span>
+            </div>
+            <section class="workspace-panel" aria-labelledby="presence-heading">
+                <div class="panel-heading">
+                    <div>
+                        <h2 id="presence-heading">{{ ui('Presence & Security', 'Aanwezigheid & Beveiliging') }}</h2>
+                        <p>{{ ui(
+                            'Off by default. After each Echo restart, enable it here again. No AI account is needed.',
+                            'Standaard uit. Schakel dit na iedere herstart van Echo opnieuw hier in. Geen AI-account nodig.'
+                        ) }}</p>
+                    </div>
+                </div>
+                <div class="workspace-grid">
+                    <form id="presence-form" class="input-card">
+                        <label for="presence-delay">{{ ui('Lock after absence (seconds)', 'Vergrendelen na afwezigheid (seconden)') }}</label>
+                        <input id="presence-delay" type="number" min="10" max="600" step="1" value="30" required>
+                        <label for="presence-camera">{{ ui('Camera number', 'Cameranummer') }}</label>
+                        <input id="presence-camera" type="number" min="0" max="10" step="1" value="0" required>
+                        <p class="field-help">{{ ui(
+                            '0 is usually the default webcam. Try 1 or 2 for another connected camera. Close Camera Lab and other camera apps first.',
+                            '0 is meestal de standaardwebcam. Probeer 1 of 2 voor een andere aangesloten camera. Sluit eerst Camera Lab en andere camera-apps.'
+                        ) }}</p>
+                        <label for="presence-notify">{{ ui('On return', 'Bij terugkomst') }}</label>
+                        <select id="presence-notify">
+                            <option value="true">{{ ui('Play a short sound on this PC', 'Kort geluidssignaal op deze pc') }}</option>
+                            <option value="false">{{ ui('No sound', 'Geen geluid') }}</option>
+                        </select>
+                        <label for="presence-consent">
+                            <input id="presence-consent" type="checkbox" required style="width: auto">
+                            {{ ui(
+                                'Allow Echo to use this PC webcam and automatically lock Windows.',
+                                'Echo mag de webcam van deze pc gebruiken en Windows automatisch vergrendelen.'
+                            ) }}
+                        </label>
+                        <div class="button-row">
+                            <button id="presence-start" class="primary-button" type="submit" disabled>{{ ui('Enable detection', 'Detectie inschakelen') }}</button>
+                            <button id="presence-stop" class="secondary-button" type="button" disabled>{{ ui('Stop detection', 'Detectie stoppen') }}</button>
+                        </div>
+                        <p class="field-help">{{ ui(
+                            'Stop detection before changing settings. Closing this page does NOT stop detection: it runs in the Echo server until you stop it or exit the server.',
+                            'Stop de detectie voordat je instellingen wijzigt. Deze pagina sluiten stopt de detectie NIET: ze draait in de Echo-server tot je haar stopt of de server afsluit.'
+                        ) }}</p>
+                    </form>
+                    <div class="output-card">
+                        <h3>{{ ui('Live status', 'Live status') }}</h3>
+                        <p id="presence-status" class="status" role="status" aria-live="polite">{{ ui('Loading status...', 'Status laden...') }}</p>
+                        <p id="presence-returns" class="field-help"></p>
+                        <h3>{{ ui('How to use it', 'Zo gebruik je het') }}</h3>
+                        <ol>
+                            <li>{{ ui('Choose a delay, allow webcam use and enable detection.', 'Kies een wachttijd, geef webcamtoestemming en schakel detectie in.') }}</li>
+                            <li>{{ ui('Look at the camera for two seconds. Wait for the status to say detection is armed.', 'Kijk twee seconden naar de camera. Wacht tot de status zegt dat de bewaking actief is.') }}</li>
+                            <li>{{ ui('Walk away. After the delay with no face visible, Echo requests a Windows lock.', 'Loop weg. Na de wachttijd zonder zichtbaar gezicht vraagt Echo Windows te vergrendelen.') }}</li>
+                            <li>{{ ui('Return and look at the camera. After two seconds, the optional sound plays once. Unlock yourself.', 'Kom terug en kijk naar de camera. Na twee seconden klinkt het optionele seintje eenmaal. Ontgrendel zelf.') }}</li>
+                        </ol>
+                        <h3>{{ ui('Secure unlocking', 'Veilig ontgrendelen') }}</h3>
+                        <p class="field-help">{{ ui(
+                            'Echo never unlocks Windows. Configure Settings > Accounts > Sign-in options > Facial recognition (Windows Hello), using a compatible IR camera, or use your PIN/password.',
+                            'Echo ontgrendelt Windows nooit. Stel Instellingen > Accounts > Aanmeldingsopties > Gezichtsherkenning (Windows Hello) in met een geschikte IR-camera, of gebruik je pincode/wachtwoord.'
+                        ) }}</p>
+                        <p class="field-help">{{ ui(
+                            'Keep your normal Windows lock timeout enabled. Poor light, looking away or another face can affect detection. Camera errors stop detection with an error; they do not trigger a lock. A return sound requires the camera to remain available while locked and the PC to stay awake. Windows Hello may need the same camera; stop Echo detection or use another camera if they conflict.',
+                            'Laat de gewone Windows-vergrendeltimer aan. Slecht licht, wegkijken of een ander gezicht kunnen de detectie beinvloeden. Bij camerafouten stopt detectie met een foutmelding; er wordt dan niet vergrendeld. Het seintje vereist een beschikbare camera terwijl Windows vergrendeld is en een wakkere pc. Windows Hello kan dezelfde camera nodig hebben; stop Echo-detectie of kies een andere camera bij conflicten.'
+                        ) }}</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

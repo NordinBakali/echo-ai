@@ -159,12 +159,7 @@ def test_company_knowledge_command_answers_with_document_citations(client, monke
     assert "ongebruikte producten binnen 30 dagen" in prompt
 
 
-def test_company_knowledge_example_document_can_answer_demo_question(monkeypatch, tmp_path):
-    (tmp_path / "voorbeeld-bedrijf.md").write_text(
-        "# Retourbeleid\nOngebruikte producten mogen binnen 30 kalenderdagen retour.\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(server, "BEDRIJFSDOCUMENTEN_PAD", tmp_path)
+def test_company_knowledge_example_document_can_answer_demo_question(monkeypatch):
     monkeypatch.setattr(server, "online_ai_beschikbaar", lambda: True)
     monkeypatch.setattr(
         server,
@@ -193,6 +188,7 @@ def test_company_knowledge_metrics_and_feedback_are_aggregated_without_text(clie
         json={"commando": "vraag bedrijfsdocumenten: wat is het retourbeleid?"},
     )
     feedback_id = answer_response.get_json()["route"]["metrics"]["feedback_id"]
+    assert server.re.fullmatch(r"[a-f0-9]{32}", feedback_id), repr(feedback_id)
     feedback_response = client.post(
         "/api/company-knowledge/feedback",
         json={"feedback_id": feedback_id, "rating": "positive"},
@@ -204,7 +200,7 @@ def test_company_knowledge_metrics_and_feedback_are_aggregated_without_text(clie
     metrics_response = client.get("/api/company-knowledge/metrics")
 
     assert answer_response.status_code == 200
-    assert feedback_response.status_code == 200
+    assert feedback_response.status_code == 200, feedback_response.get_json()
     assert duplicate_response.status_code == 409
     assert metrics_response.status_code == 200
     assert metrics_response.get_json()["answered"] == 1
@@ -765,6 +761,8 @@ def test_enterprise_admin_password_reset_is_limited_to_managed_accounts(client, 
 def test_enterprise_database_migrates_existing_accounts_and_audit_log(monkeypatch, tmp_path):
     configureer_enterprise_modus(monkeypatch, tmp_path)
     database = server.ECHO_ENTERPRISE_DATABASE
+    company_id = "a" * 32
+    old_audit_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with sqlite3.connect(database) as connection:
         connection.executescript(
             """

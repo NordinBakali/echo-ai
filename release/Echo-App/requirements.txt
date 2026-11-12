@@ -5,3 +5,11 @@ pyttsx3
 PyAutoGUI
 faster-whisper
 fpdf2
+pypdf>=5.0,<7.0
+requests>=2.31,<3.0
+beautifulsoup4>=4.12,<5.0
+playwright>=1.40,<2.0
+opencv-contrib-python>=4.10,<5.0
+mediapipe==0.10.35
+pycaw==20260927; sys_platform == "win32"
+psutil>=5.9,<8.0

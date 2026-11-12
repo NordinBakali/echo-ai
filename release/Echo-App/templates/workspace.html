@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="{{ 'nl' if nederlands else 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#06131c">
+    <title>{{ ui('Echo Workspace', 'Echo Werkruimte') }}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}?v={{ build_id }}">
+    <script src="{{ url_for('static', filename='workspace.js') }}?v={{ build_id }}" defer></script>
+</head>
+<body data-language="{{ 'nl' if nederlands else 'en' }}">
+    <div class="workspace-shell" data-api="/api/werkruimte">
+        <header class="workspace-header">
+            <a class="brand" href="{{ url_for('index') }}">
+                <img src="{{ url_for('static', filename='echo-circle-logo.svg') }}?v={{ build_id }}" alt="">
+                <span>ECHO <small>{{ ui('WORKSPACE', 'WERKRUIMTE') }}</small></span>
+            </a>
+            <a class="back-link" href="{{ url_for('index') }}">{{ ui('Back to Echo', 'Terug naar Echo') }} &rarr;</a>
+        </header>
+
+        <main>
+            <section class="workspace-intro">
+                <p class="eyebrow">{{ ui('YOUR PERSONAL ASSISTANT', 'JOUW PERSOONLIJKE ASSISTENT') }}</p>
+                <h1>{{ ui('Make more of your words.', 'Maak meer van je woorden.') }}</h1>
+                <p>{{ ui(
+                    'Turn speech into notes, keep articles for later, translate with context and find the essence of long texts.',
+                    'Maak notities van spraak, bewaar artikelen voor later, vertaal met context en haal de kern uit lange teksten.'
+                ) }}</p>
+            </section>
+
+            <div class="privacy-notice">
+                <strong>{{ ui('Good to know', 'Goed om te weten') }}</strong>
+                <span>{{ ui(
+                    'Text is sent to your configured AI model. Speech recognition can also use an external provider. Only submit material you are allowed to share.',
+                    'Tekst gaat naar je ingestelde AI-model. Spraakherkenning kan ook een externe dienst gebruiken. Deel alleen materiaal dat je mag versturen.'
+                ) }}</span>
+            </div>
+            {% if not model_ingesteld %}
+            <div class="model-warning" role="status">
+                {{ ui(
+                    'The AI model is not enabled or configured. Enable it and set an OpenAI-compatible model and API key, or configure a local Ollama model, then restart Echo.',
+                    'Het AI-model is niet ingeschakeld of ingesteld. Schakel het in en stel een OpenAI-compatibel model en API-sleutel in, of configureer een lokaal Ollama-model, en herstart Echo.'
+                ) }}
+            </div>
+            {% endif %}
+
+            <div class="workspace-tabs" role="tablist" aria-label="{{ ui('Workspace features', 'Functies van de werkruimte') }}">
+                <button id="tab-voice" type="button" role="tab" aria-selected="true" aria-controls="panel-voice" data-tab="voice">
+                    <span class="tab-number">01</span><span>{{ ui('Voice notes', 'Spraaknotities') }}</span>
+                </button>
+                <button id="tab-reading" type="button" role="tab" aria-selected="false" aria-controls="panel-reading" data-tab="reading" tabindex="-1">
+                    <span class="tab-number">02</span><span>{{ ui('Read later', 'Later lezen') }}</span>
+                </button>
+                <button id="tab-translate" type="button" role="tab" aria-selected="false" aria-controls="panel-translate" data-tab="translate" tabindex="-1">
+                    <span class="tab-number">03</span><span>{{ ui('Translate', 'Vertalen') }}</span>
+                </button>
+                <button id="tab-summary" type="button" role="tab" aria-selected="false" aria-controls="panel-summary" data-tab="summary" tabindex="-1">
+                    <span class="tab-number">04</span><span>{{ ui('Summarize', 'Samenvatten') }}</span>
+                </button>
+            </div>
+
+            <section class="workspace-panel" id="panel-voice" role="tabpanel" aria-labelledby="tab-voice">
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">01 / {{ ui('VOICE NOTES', 'SPRAAKNOTITIES') }}</p>
+                        <h2>{{ ui('From speech to a clear note', 'Van spraak naar een heldere notitie') }}</h2>
+                        <p>{{ ui(
+                            'Record or upload a voice message. Echo transcribes it and creates an editable, formatted note.',
+                            'Neem een spraakbericht op of upload er één. Echo schrijft het uit en maakt er een bewerkbare notitie van.'
+                        ) }}</p>
+                    </div>
+                </div>
+                <div class="workspace-grid">
+                    <form id="voice-form" class="input-card">
+                        <label for="voice-file">{{ ui('Voice message', 'Spraakbericht') }}</label>
+                        <input id="voice-file" type="file" accept="audio/*,.ogg,.opus,.m4a,.mp3,.wav,.webm">
+                        <p class="field-help">{{ ui('Up to 12 MB. Whisper supports the most audio formats.', 'Maximaal 12 MB. Whisper ondersteunt de meeste audioformaten.') }}</p>
+                        <label for="voice-language">{{ ui('Spoken language', 'Gesproken taal') }}</label>
+                        <select id="voice-language">
+                            <option value="">{{ ui('Use Echo voice settings', 'Gebruik de spraakinstelling van Echo') }}</option>
+                            <option value="nl-NL">{{ ui('Dutch', 'Nederlands') }}</option>
+                            <option value="en-US">{{ ui('English', 'Engels') }}</option>
+                            <option value="de-DE">{{ ui('German', 'Duits') }}</option>
+                            <option value="fr-FR">{{ ui('French', 'Frans') }}</option>
+                            <option value="es-ES">{{ ui('Spanish', 'Spaans') }}</option>
+                            <option value="it-IT">{{ ui('Italian', 'Italiaans') }}</option>
+                            <option value="pt-PT">{{ ui('Portuguese', 'Portugees') }}</option>
+                            <option value="ar-SA">{{ ui('Arabic', 'Arabisch') }}</option>
+                        </select>
+                        <div class="button-row">
+                            <button id="record-start" class="secondary-button" type="button">{{ ui('Start recording', 'Opname starten') }}</button>
+                            <button id="record-stop" class="secondary-button" type="button" disabled>{{ ui('Stop recording', 'Opname stoppen') }}</button>
+                        </div>
+                        <audio id="voice-preview" controls hidden></audio>
+                        <label for="voice-transcript">{{ ui('Transcript', 'Transcriptie') }}</label>
+                        <textarea id="voice-transcript" rows="8" placeholder="{{ ui('The transcript appears here. You can edit it before making the note.', 'De transcriptie verschijnt hier. Je kunt deze aanpassen voordat je de notitie maakt.') }}"></textarea>
+                        <button class="primary-button" type="submit">{{ ui('Turn into a note', 'Maak er een notitie van') }}</button>
+                        <p class="status" id="voice-status" role="status" aria-live="polite"></p>
+                    </form>
+                    <div class="output-card">
+                        <div class="output-heading">
+                            <div>
+                                <p class="eyebrow">{{ ui('RESULT', 'RESULTAAT') }}</p>
+                                <h3>{{ ui('Your note', 'Jouw notitie') }}</h3>
+                            </div>
+                            <span class="format-tag">MARKDOWN</span>
+                        </div>
+                        <label class="sr-only" for="voice-result">{{ ui('Editable note', 'Bewerkbare notitie') }}</label>
+                        <textarea id="voice-result" class="result" rows="16" placeholder="{{ ui('Your formatted note will appear here.', 'Je opgemaakte notitie verschijnt hier.') }}"></textarea>
+                        <div id="note-preview" class="note-preview" hidden>
+                            <p class="eyebrow">{{ ui('FORMATTED PREVIEW', 'OPGEMAAKT VOORBEELD') }}</p>
+                            <div id="note-preview-content"></div>
+                        </div>
+                        <div class="button-row">
+                            <button class="secondary-button" type="button" data-copy="voice-result" disabled>{{ ui('Copy', 'Kopiëren') }}</button>
+                            <button class="secondary-button" type="button" data-download="voice-result" data-filename="echo-notitie.md" disabled>{{ ui('Download note', 'Download notitie') }}</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="workspace-panel" id="panel-reading" role="tabpanel" aria-labelledby="tab-reading" hidden>
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">02 / {{ ui('READ LATER', 'LATER LEZEN') }}</p>
+                        <h2>{{ ui('A smarter reading list', 'Een slimmere leeslijst') }}</h2>
+                        <p>{{ ui(
+                            'Add a public article URL. Echo saves a short summary and topic labels for you.',
+                            'Voeg een openbare artikel-URL toe. Echo bewaart een korte samenvatting en handige onderwerpen.'
+                        ) }}</p>
+                    </div>
+                </div>
+                <form id="reading-form" class="reading-add">
+                    <label class="sr-only" for="reading-url">{{ ui('Article URL', 'Artikel-URL') }}</label>
+                    <input id="reading-url" type="url" maxlength="2048" placeholder="https://..." required>
+                    <button class="primary-button" type="submit">{{ ui('Add article', 'Artikel toevoegen') }}</button>
+                </form>
+                <p class="field-help">{{ ui(
+                    'Public HTTP(S) pages only. Login walls, JavaScript-only pages and scanned PDFs may not be readable.',
+                    'Alleen openbare HTTP(S)-pagina’s. Inlogmuren, JavaScript-pagina’s en gescande PDF’s zijn mogelijk niet leesbaar.'
+                ) }}</p>
+                <p class="status" id="reading-status" role="status" aria-live="polite"></p>
+                <div class="reading-toolbar">
+                    <label class="sr-only" for="reading-search">{{ ui('Search the reading list', 'Zoek in de leeslijst') }}</label>
+                    <input id="reading-search" type="search" placeholder="{{ ui('Search titles, summaries or labels', 'Zoek op titel, samenvatting of label') }}">
+                    <label class="sr-only" for="reading-filter">{{ ui('Filter articles', 'Artikelen filteren') }}</label>
+                    <select id="reading-filter">
+                        <option value="all">{{ ui('All articles', 'Alle artikelen') }}</option>
+                        <option value="unread">{{ ui('Unread', 'Ongelezen') }}</option>
+                        <option value="read">{{ ui('Read', 'Gelezen') }}</option>
+                    </select>
+                </div>
+                <div id="reading-list" class="reading-list" aria-live="polite"></div>
+            </section>
+
+            <section class="workspace-panel" id="panel-translate" role="tabpanel" aria-labelledby="tab-translate" hidden>
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">03 / {{ ui('TRANSLATE', 'VERTALEN') }}</p>
+                        <h2>{{ ui('Translate without losing context', 'Vertalen met behoud van context') }}</h2>
+                        <p>{{ ui(
+                            'Paste an email or upload a document. Add context for the right tone and terminology.',
+                            'Plak een e-mail of upload een document. Geef extra context voor de juiste toon en woordkeuze.'
+                        ) }}</p>
+                    </div>
+                </div>
+                <div class="workspace-grid">
+                    <form id="translate-form" class="input-card">
+                        <label for="translate-text">{{ ui('Text or email', 'Tekst of e-mail') }}</label>
+                        <textarea id="translate-text" rows="8" placeholder="{{ ui('Paste text here…', 'Plak hier je tekst…') }}"></textarea>
+                        <label for="translate-file">{{ ui('Or choose a document', 'Of kies een document') }}</label>
+                        <input id="translate-file" type="file" accept=".pdf,.docx,.eml,.txt,.md">
+                        <p class="field-help">{{ ui('PDF, DOCX, EML, TXT or Markdown; up to 20 MB.', 'PDF, DOCX, EML, TXT of Markdown; maximaal 20 MB.') }}</p>
+                        <label for="translate-language">{{ ui('Translate to', 'Vertalen naar') }}</label>
+                        <select id="translate-language">
+                            <option value="nl">{{ ui('Dutch', 'Nederlands') }}</option>
+                            <option value="en" {{ 'selected' if nederlands else '' }}>{{ ui('English', 'Engels') }}</option>
+                            <option value="de">{{ ui('German', 'Duits') }}</option>
+                            <option value="fr">{{ ui('French', 'Frans') }}</option>
+                            <option value="es">{{ ui('Spanish', 'Spaans') }}</option>
+                            <option value="it">{{ ui('Italian', 'Italiaans') }}</option>
+                            <option value="pt">{{ ui('Portuguese', 'Portugees') }}</option>
+                            <option value="ar">{{ ui('Arabic', 'Arabisch') }}</option>
+                        </select>
+                        <label for="translate-context">{{ ui('Extra context (optional)', 'Extra context (optioneel)') }}</label>
+                        <textarea id="translate-context" rows="3" maxlength="2000" placeholder="{{ ui('For example: a formal email to a client.', 'Bijvoorbeeld: een formele e-mail aan een klant.') }}"></textarea>
+                        <button class="primary-button" type="submit">{{ ui('Translate', 'Vertalen') }}</button>
+                        <p class="status" id="translate-status" role="status" aria-live="polite"></p>
+                    </form>
+                    <div class="output-card">
+                        <div class="output-heading">
+                            <div><p class="eyebrow">{{ ui('RESULT', 'RESULTAAT') }}</p><h3>{{ ui('Translation', 'Vertaling') }}</h3></div>
+                            <span class="format-tag">TEXT</span>
+                        </div>
+                        <label class="sr-only" for="translate-result">{{ ui('Editable translation', 'Bewerkbare vertaling') }}</label>
+                        <textarea id="translate-result" class="result" rows="18" placeholder="{{ ui('Your translation will appear here.', 'Je vertaling verschijnt hier.') }}"></textarea>
+                        <div class="button-row">
+                            <button class="secondary-button" type="button" data-copy="translate-result" disabled>{{ ui('Copy', 'Kopiëren') }}</button>
+                            <button class="secondary-button" type="button" data-download="translate-result" data-filename="echo-vertaling.txt" disabled>{{ ui('Download', 'Downloaden') }}</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="workspace-panel" id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" hidden>
+                <div class="panel-heading">
+                    <div>
+                        <p class="eyebrow">04 / {{ ui('SUMMARIZE', 'SAMENVATTEN') }}</p>
+                        <h2>{{ ui('Straight to the essential points', 'Direct naar de belangrijkste punten') }}</h2>
+                        <p>{{ ui(
+                            'Summarize a long report, PDF or public web article. Longer sources are processed in full in parts.',
+                            'Vat een lang rapport, een PDF of openbaar webartikel samen. Lange bronnen worden volledig in delen verwerkt.'
+                        ) }}</p>
+                    </div>
+                </div>
+                <div class="workspace-grid">
+                    <form id="summary-form" class="input-card">
+                        <label for="summary-text">{{ ui('Text', 'Tekst') }}</label>
+                        <textarea id="summary-text" rows="8" placeholder="{{ ui('Paste your text here…', 'Plak hier je tekst…') }}"></textarea>
+                        <label for="summary-file">{{ ui('Or choose a document', 'Of kies een document') }}</label>
+                        <input id="summary-file" type="file" accept=".pdf,.docx,.eml,.txt,.md">
+                        <label for="summary-url">{{ ui('Or enter a public article URL', 'Of vul een openbare artikel-URL in') }}</label>
+                        <input id="summary-url" type="url" maxlength="2048" placeholder="https://...">
+                        <p class="field-help">{{ ui(
+                            'Choose one source. Scanned PDFs need OCR; large documents can take several minutes.',
+                            'Kies één bron. Gescande PDF’s hebben OCR nodig; grote documenten kunnen enkele minuten duren.'
+                        ) }}</p>
+                        <button class="primary-button" type="submit">{{ ui('Summarize', 'Samenvatten') }}</button>
+                        <p class="status" id="summary-status" role="status" aria-live="polite"></p>
+                    </form>
+                    <div class="output-card">
+                        <div class="output-heading">
+                            <div><p class="eyebrow">{{ ui('RESULT', 'RESULTAAT') }}</p><h3>{{ ui('The essentials', 'De kern') }}</h3></div>
+                            <span class="format-tag">{{ ui('SUMMARY', 'SAMENVATTING') }}</span>
+                        </div>
+                        <label class="sr-only" for="summary-result">{{ ui('Editable summary', 'Bewerkbare samenvatting') }}</label>
+                        <textarea id="summary-result" class="result" rows="18" placeholder="{{ ui('The main points will appear here.', 'De belangrijkste punten verschijnen hier.') }}"></textarea>
+                        <div class="button-row">
+                            <button class="secondary-button" type="button" data-copy="summary-result" disabled>{{ ui('Copy', 'Kopiëren') }}</button>
+                            <button class="secondary-button" type="button" data-download="summary-result" data-filename="echo-samenvatting.md" disabled>{{ ui('Download', 'Downloaden') }}</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <footer>{{ ui('Echo Workspace · Review AI results before using them.', 'Echo Werkruimte · Controleer AI-resultaten voordat je ze gebruikt.') }}</footer>
+    </div>
+</body>
+</html>
