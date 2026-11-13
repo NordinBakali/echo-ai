@@ -104,8 +104,9 @@ def srt_stamp(seconds):
 
 class MeetingRecorder:
     def __init__(self, data_dir=DATA_DIR, model_loader=None, audio=None, clock=time.monotonic, notify=None,
-                 fallback_loader=None):
+                 fallback_loader=None, summarizer=None):
         self.data_dir = Path(data_dir)
+        self.summarizer = summarizer
         self.model_loader = model_loader
         self.fallback_loader = fallback_loader
         self.audio = audio if audio is not None else pyaudio
@@ -147,12 +148,16 @@ class MeetingRecorder:
             if job:
                 meta.update(status=job["status"], progress=job["progress"])
             meta["has_transcript"] = (path / "transcript.txt").is_file()
+            meta["has_summary"] = (path / "summary.md").is_file()
             items.append(meta)
         return items
 
     def transcript(self, meeting_id, kind="txt"):
-        path = self._dir(meeting_id) / ("transcript.srt" if kind == "srt" else "transcript.txt")
+        name = {"srt": "transcript.srt", "md": "summary.md"}.get(kind, "transcript.txt")
+        path = self._dir(meeting_id) / name
         if not path.is_file():
+            if kind == "md":
+                raise MeetingError("No summary yet.", "Nog geen samenvatting.", 404)
             raise MeetingError("No transcript yet.", "Nog geen transcriptie.", 404)
         return path
 
@@ -161,8 +166,9 @@ class MeetingRecorder:
         with self.lock:
             if self.recording and self.recording["id"] == meeting_id:
                 raise MeetingError("Stop the recording first.", "Stop eerst de opname.", 409)
-            if self.jobs.get(meeting_id, {}).get("status") == "transcribing":
-                raise MeetingError("Wait until transcription finishes.", "Wacht tot de transcriptie klaar is.", 409)
+            if meeting_id in self.jobs:
+                raise MeetingError("Wait until transcription or summary finishes.",
+                                   "Wacht tot de transcriptie of samenvatting klaar is.", 409)
             self.jobs.pop(meeting_id, None)
         shutil.rmtree(path)
 
@@ -303,7 +309,7 @@ class MeetingRecorder:
             pass
 
     # ----- transcription -----
-    def transcribe(self, meeting_id, language="auto", separate=False, background=True):
+    def transcribe(self, meeting_id, language="auto", separate=False, background=True, summary_model=None):
         folder = self._dir(meeting_id)
         if language not in LANGUAGES or type(separate) is not bool:
             raise MeetingError("Invalid transcription options.", "Ongeldige transcriptie-opties.")
@@ -312,13 +318,63 @@ class MeetingRecorder:
         with self.lock:
             if self.recording and self.recording["id"] == meeting_id:
                 raise MeetingError("Stop the recording first.", "Stop eerst de opname.", 409)
+            if meeting_id in self.jobs:
+                raise MeetingError("This meeting is already being processed.", "Deze vergadering wordt al verwerkt.", 409)
             if any(job["status"] == "transcribing" for job in self.jobs.values()):
                 raise MeetingError("Another transcription is running.", "Er loopt al een transcriptie.", 409)
             self.jobs[meeting_id] = {"status": "transcribing", "progress": 0}
+        args = (folder, language, separate, summary_model)
         if background:
-            threading.Thread(target=self._transcribe, args=(folder, language, separate), daemon=True).start()
+            threading.Thread(target=self._transcribe, args=args, daemon=True).start()
         else:
-            self._transcribe(folder, language, separate)
+            self._transcribe(*args)
+
+    def summarize(self, meeting_id, model, background=True):
+        folder = self._dir(meeting_id)
+        if not isinstance(model, str) or not model.strip():
+            raise MeetingError("Choose a local Ollama model.", "Kies een lokaal Ollama-model.")
+        if self.summarizer is None:
+            raise MeetingError("Summaries are not available.", "Samenvatten is niet beschikbaar.", 503)
+        if not (folder / "transcript.txt").is_file():
+            raise MeetingError("Transcribe the meeting first.", "Schrijf de vergadering eerst uit.", 409)
+        with self.lock:
+            if meeting_id in self.jobs:
+                raise MeetingError("This meeting is already being processed.", "Deze vergadering wordt al verwerkt.", 409)
+            if any(job["status"] == "summarizing" for job in self.jobs.values()):
+                raise MeetingError("Another summary is running.", "Er loopt al een samenvatting.", 409)
+            self.jobs[meeting_id] = {"status": "summarizing", "progress": 0}
+        if background:
+            threading.Thread(target=self._summarize_job, args=(folder, model.strip()), daemon=True).start()
+        else:
+            self._summarize_job(folder, model.strip())
+
+    def _summarize_job(self, folder, model):
+        try:
+            self._summarize(folder, model, self.jobs[folder.name])
+        finally:
+            with self.lock:
+                self.jobs.pop(folder.name, None)
+
+    def _summarize(self, folder, model, job):
+        meta = self._meta(folder)
+        job.update(status="summarizing", progress=0)
+        try:
+            dutch = meta.get("language") != "en"
+            transcript = (folder / "transcript.txt").read_text(encoding="utf-8")
+            report = self.summarizer(
+                transcript, model, dutch, progress=lambda fraction: job.update(progress=min(99, int(fraction * 100))),
+            )
+            from echo_meeting_summary import markdown
+            (folder / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            (folder / "summary.md").write_text(markdown(report, meta["title"], meta["started_at"], dutch), encoding="utf-8")
+            meta.update(summary_model=report["model"], summary_error=None, action_items=len(report["action_items"]))
+            self.notify("Meeting summary and action items are ready.", "Samenvatting en actiepunten van de vergadering zijn klaar.")
+        except Exception as exc:
+            localized = getattr(exc, "localized", None)
+            message = localized(False) if callable(localized) else str(exc)
+            meta.update(summary_error=message[:300])
+        finally:
+            self._save_meta(folder, meta)
 
     def _run_model(self, model, sources, language, total, job):
         done, segments, detected = 0.0, [], None
@@ -335,10 +391,11 @@ class MeetingRecorder:
             done += len(audio) / RATE
         return segments, detected
 
-    def _transcribe(self, folder, language, separate):
+    def _transcribe(self, folder, language, separate, summary_model=None):
         meeting_id = folder.name
         meta = self._meta(folder)
         job = self.jobs[meeting_id]
+        transcribed = False
         try:
             tracks = {kind: read_track(folder / f"{kind}.wav") for kind in meta["tracks"] if (folder / f"{kind}.wav").is_file()}
             if not tracks:
@@ -378,10 +435,15 @@ class MeetingRecorder:
             meta.update(status="transcribed", progress=100, language=detected or language, error=None,
                         segments=len(segments), separate=separate and len(tracks) > 1)
             self.notify("Meeting transcript is ready.", "Vergadertranscriptie is klaar.")
+            transcribed = True
         except Exception as exc:
             message = exc.localized(False) if isinstance(exc, MeetingError) else str(exc)
             meta.update(status="error", error=message[:300])
         finally:
             self._save_meta(folder, meta)
-            with self.lock:
-                self.jobs.pop(meeting_id, None)
+            try:
+                if transcribed and summary_model and self.summarizer is not None:
+                    self._summarize(folder, summary_model, job)
+            finally:
+                with self.lock:
+                    self.jobs.pop(meeting_id, None)

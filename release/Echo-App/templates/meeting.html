@@ -33,8 +33,8 @@
         <section class="workspace-intro">
             <h1>{{ ui('Record and transcribe meetings — fully local.', 'Vergaderingen opnemen en uitschrijven — volledig lokaal.') }}</h1>
             <p>{{ ui(
-                'Echo records what comes out of your speakers (Teams, Zoom, Meet…) plus optionally your microphone, and transcribes it with Whisper on this PC. Audio and text never leave your computer.',
-                'Echo neemt op wat uit je speakers komt (Teams, Zoom, Meet…) plus optioneel je microfoon, en schrijft het uit met Whisper op deze pc. Audio en tekst verlaten je computer nooit.'
+                'Echo records what comes out of your speakers (Teams, Zoom, Meet…) plus optionally your microphone, transcribes it with Whisper and summarises it with Ollama — all on this PC. Audio and text never leave your computer.',
+                'Echo neemt op wat uit je speakers komt (Teams, Zoom, Meet…) plus optioneel je microfoon, schrijft het uit met Whisper en vat het samen met Ollama — allemaal op deze pc. Audio en tekst verlaten je computer nooit.'
             ) }}</p>
         </section>
         <p id="meeting-error" role="alert"></p>
@@ -70,7 +70,33 @@
                     'Uses the Whisper model, device and precision from Echo settings. With an NVIDIA GPU (device “cuda”), an hour of audio takes a few minutes.',
                     'Gebruikt het Whisper-model, apparaat en de precisie uit de Echo-instellingen. Met een NVIDIA-GPU (apparaat “cuda”) duurt een uur audio een paar minuten.'
                 ) }}</p>
+                <h2>{{ ui('Summary & action items', 'Samenvatting & actiepunten') }}</h2>
+                <label for="meeting-model">{{ ui('Local Ollama model', 'Lokaal Ollama-model') }}</label>
+                <select id="meeting-model"><option value="">{{ ui('Loading…', 'Laden…') }}</option></select>
+                <label><input id="meeting-autosummary" type="checkbox" checked> {{ ui('Summarise automatically after transcribing', 'Automatisch samenvatten na uitschrijven') }}</label>
+                <p id="meeting-model-help" class="field-help">{{ ui(
+                    'Ollama makes a short summary, the decisions and a “who does what” list — on this PC; nothing goes to the cloud. Bigger models (e.g. llama3.1) give better minutes than small ones.',
+                    'Ollama maakt een korte samenvatting, de besluiten en een lijst “wie doet wat” — op deze pc; er gaat niets naar de cloud. Grotere modellen (bijv. llama3.1) maken betere notulen dan kleine.'
+                ) }}</p>
             </section>
+        </section>
+        <section class="workspace-panel" aria-labelledby="meeting-auto-title">
+            <form id="meeting-auto-form" class="input-card">
+                <h2 id="meeting-auto-title">{{ ui('Start automatically when a call begins', 'Automatisch starten bij een call') }}</h2>
+                <p class="field-help">{{ ui(
+                    'Echo checks every 5 seconds whether Teams, Zoom, Webex, Slack or Skype is using your microphone. After 10 seconds in a call it starts recording; 30 seconds after the call ends it stops, transcribes and summarises with the settings above. Browser meetings (Meet in Chrome/Edge) are not detected — start those by hand.',
+                    'Echo kijkt elke 5 seconden of Teams, Zoom, Webex, Slack of Skype je microfoon gebruikt. Na 10 seconden in een call start de opname; 30 seconden na het einde van de call stopt Echo, schrijft het uit en vat het samen met de instellingen hierboven. Browservergaderingen (Meet in Chrome/Edge) worden niet herkend — start die met de hand.'
+                ) }}</p>
+                <label><input id="meeting-auto-enabled" type="checkbox"> {{ ui('Record calls automatically', 'Calls automatisch opnemen') }}</label>
+                <label><input id="meeting-auto-consent" type="checkbox"> {{ ui(
+                    'At the start of every call I will say: “My AI assistant is listening in to take the minutes.” and I stop the recording if someone objects.',
+                    'Aan het begin van elke call zeg ik: “Mijn AI-assistent luistert mee om de notulen te maken.” en ik stop de opname als iemand bezwaar heeft.'
+                ) }}</label>
+                <div class="rec-indicator"><span id="meeting-auto-dot" class="rec-dot"></span><span id="meeting-auto-state"></span></div>
+                <div class="button-row">
+                    <button id="meeting-auto-save" class="primary-button">{{ ui('Save', 'Opslaan') }}</button>
+                </div>
+            </form>
         </section>
         <section class="workspace-panel" aria-labelledby="meeting-list-title">
             <h2 id="meeting-list-title">{{ ui('Saved meetings', 'Opgeslagen vergaderingen') }}</h2>

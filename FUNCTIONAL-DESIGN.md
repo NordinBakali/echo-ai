@@ -241,6 +241,19 @@ timestamped text and subtitle file, optionally labeled "You" / "Others".
 tracks share one timeline after silences, transcription works without network
 access, and deleting a meeting removes its audio and transcript.
 
+### Journey J — Get meeting minutes and record calls automatically (Priority: P2)
+
+After transcription, the user picks a locally installed language model and gets
+a short summary, the decisions and a "who does what" list. Optionally the user
+enables automatic recording after confirming they will announce it at the start
+of every call; Echo then starts when a supported meeting app uses the
+microphone and stops, transcribes and summarizes after the call ends.
+
+**Independent test:** verify no transcript content is sent to a non-local or
+cloud model, invented timestamps are dropped, automatic mode cannot be enabled
+without the announcement confirmation, a short microphone drop-out does not end
+the recording, and a manually started recording is never stopped automatically.
+
 ## 6. Functional requirements
 
 ### Assistant and interaction
@@ -318,6 +331,14 @@ access, and deleting a meeting removes its audio and transcript.
 - **REQ-026:** Meeting transcription MUST run locally, produce timestamped text
   and subtitle output, report progress and errors, and continue on the CPU when
   GPU libraries are unavailable.
+- **REQ-027:** Meeting summaries MUST use only a verified local model, treat the
+  transcript as untrusted data, list decisions and action items with owner,
+  deadline and transcript time without inventing them, and cover the whole
+  transcript without silently omitting parts.
+- **REQ-028:** Automatic call recording MUST be off by default, require the
+  user's confirmation that participants will be informed, announce each
+  automatic start to the user, only stop recordings it started itself, and be
+  switchable off at any time.
 
 ### Web automation, scanning, and exposure checks
 

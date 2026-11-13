@@ -44,6 +44,8 @@ import echo_local_analysis as lokale_analyse
 import echo_web_automation as webautomatisering
 import echo_osint as osint_controle
 import echo_meeting_recorder as vergaderopname
+import echo_meeting_summary as vergadersamenvatting
+import echo_meeting_trigger as vergadertrigger
 from website_scanner import website_scanner
 
 try:
@@ -123,8 +125,14 @@ VERGADERING = vergaderopname.MeetingRecorder(
     model_loader=lambda: laad_whisper_model(),
     fallback_loader=lambda: laad_whisper_cpu_model(),
     notify=lambda en, nl: registreer_notificatie(tekst_voor_taal(en, nl), uitspreken=False),
+    summarizer=vergadersamenvatting.summarize,
 )
 atexit.register(VERGADERING.shutdown)
+VERGADER_AUTO = vergadertrigger.AutoRecorder(
+    VERGADERING, vergaderopname.DATA_DIR / "auto.json",
+    notify=lambda en, nl, spreek=False: registreer_notificatie(tekst_voor_taal(en, nl), uitspreken=spreek),
+)
+atexit.register(VERGADER_AUTO.stop)
 WEBAUTOMATISERING_TOKEN = secrets.token_urlsafe(32)
 WEBAUTOMATISERING = webautomatisering.WebAutomation(
     webautomatisering.Store(webautomatisering.DATA_DIR / "state.sqlite3"),
@@ -19033,13 +19041,22 @@ def vergadering_pagina():
     )
 
 
+def vergadering_status():
+    return {**VERGADERING.snapshot(), "auto": VERGADER_AUTO.snapshot()}
+
+
 @app.route('/api/vergadering/<actie>', methods=['GET', 'POST'])
 def vergadering_api(actie):
     nl = gebruik_nederlands()
     try:
         if request.method == "GET":
             if actie == "status":
-                return jsonify({"status": "success", "meeting": VERGADERING.snapshot()})
+                return jsonify({"status": "success", "meeting": vergadering_status()})
+            if actie == "models":
+                try:
+                    return jsonify({"status": "success", "models": lokale_analyse.installed_models()})
+                except lokale_analyse.AnalysisError as exc:
+                    return jsonify({"status": "error", "models": [], "message": exc.localized(nl)}), exc.status
             return jsonify({"status": "error", "message": "Unknown meeting endpoint."}), 404
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
@@ -19048,13 +19065,19 @@ def vergadering_api(actie):
             VERGADERING.start(data["authorized"], data.get("microphone", True), data.get("title", ""))
         elif actie == "stop" and not data:
             VERGADERING.stop()
-        elif actie == "transcribe" and set(data) == {"id", "language", "separate"}:
-            VERGADERING.transcribe(data["id"], data["language"], data["separate"])
+        elif actie == "transcribe" and {"id", "language", "separate"} <= set(data) <= {"id", "language", "separate", "summary_model"}:
+            VERGADERING.transcribe(data["id"], data["language"], data["separate"],
+                                   summary_model=data.get("summary_model") or None)
+        elif actie == "summarize" and set(data) == {"id", "model"}:
+            VERGADERING.summarize(data["id"], data["model"])
         elif actie == "delete" and set(data) == {"id"}:
             VERGADERING.delete(data["id"])
+        elif actie == "auto" and set(data) == {"authorized", "enabled", "microphone", "language", "separate", "model"}:
+            VERGADER_AUTO.configure(data["authorized"], data["enabled"], data["microphone"],
+                                    data["language"], data["separate"], data["model"])
         else:
             raise vergaderopname.MeetingError("Invalid meeting action.", "Ongeldige vergaderactie.")
-        return jsonify({"status": "success", "meeting": VERGADERING.snapshot()})
+        return jsonify({"status": "success", "meeting": vergadering_status()})
     except vergaderopname.MeetingError as exc:
         return jsonify({"status": "error", "message": exc.localized(nl)}), exc.status
     except OSError:
@@ -19067,7 +19090,7 @@ def vergadering_api(actie):
 
 @app.route('/api/vergadering/transcript/<meeting_id>.<soort>')
 def vergadering_transcript(meeting_id, soort):
-    if soort not in {"txt", "srt"}:
+    if soort not in {"txt", "srt", "md"}:
         return jsonify({"status": "error", "message": "Unknown format."}), 404
     try:
         pad = VERGADERING.transcript(meeting_id, soort)
@@ -21210,6 +21233,9 @@ if __name__ == '__main__':
 
     if not auto_reload or is_reloader_child:
         start_website_audit_schedule_monitor()
+
+    if (not auto_reload or is_reloader_child) and VERGADER_AUTO.settings["enabled"] and not (ECHO_DEMO_MODE or ECHO_ENTERPRISE_MODE):
+        VERGADER_AUTO.start()
 
     if moet_auto_openen(auto_open, auto_reload, open_on_reload):
         threading.Timer(1.0, lambda: open_echo_interface(url, window_mode)).start()

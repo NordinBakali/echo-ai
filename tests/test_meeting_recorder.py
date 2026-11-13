@@ -193,3 +193,203 @@ def test_routes_require_local_token_and_run_full_flow(client, recorder):
     assert transcript.status_code == 200 and "seg1" in transcript.get_data(as_text=True)
     assert client.get("/api/vergadering/transcript/..%2Fx.txt").status_code == 404
     assert client.post("/api/vergadering/delete", json={"id": meeting_id}, headers=headers).json["meeting"]["meetings"] == []
+
+# ----- summary, call detection and automatic recording -----
+import json
+
+import echo_meeting_summary as summary
+import echo_meeting_trigger as trigger
+
+
+def fake_ollama(calls, items=None):
+    def request(endpoint, payload, timeout=0):
+        calls.append(payload)
+        merge = "partial meeting notes" in payload["messages"][0]["content"]
+        content = {
+            "summary": "Totaal." if merge else f"Deel {len(calls)}.",
+            "decisions": ["Release vrijdag"],
+            "action_items": items if items is not None else [
+                {"who": "Sanne", "what": "Rapport | sturen", "due": "vrijdag", "timestamp": "00:00:01"},
+                {"who": "", "what": "Iets", "due": "", "timestamp": "09:99:99"},
+                {"who": "X", "what": " ", "due": "", "timestamp": ""},
+            ],
+        }
+        return {"done": True, "done_reason": "stop", "message": {"content": json.dumps(content)}}
+    return request
+
+
+def test_summary_validates_items_and_merges_long_transcripts():
+    calls = []
+    short = "Titel — 2026\n\n[00:00:01] Anderen: Sanne stuurt vrijdag het rapport.\n"
+    report = summary.summarize(short, "llama3.1", True, request=fake_ollama(calls), verify=lambda name, minimum: 8192)
+    assert len(calls) == 1 and calls[0]["options"]["num_ctx"] == 8192
+    assert "UNTRUSTED" in calls[0]["messages"][0]["content"] and "Sanne stuurt" in calls[0]["messages"][1]["content"]
+    assert report["action_items"] == [
+        {"who": "Sanne", "what": "Rapport | sturen", "due": "vrijdag", "timestamp": "00:00:01"},
+        {"who": "Onbekend", "what": "Iets", "due": "", "timestamp": ""},  # invented timestamp dropped
+    ]
+    md = summary.markdown(report, "Titel", "2026", True)
+    assert "| Sanne | Rapport \\| sturen | vrijdag | 00:00:01 |" in md and "## Besluiten" in md
+
+    calls.clear()
+    long = "T\n\n" + "\n".join(f"[00:{i // 60:02d}:{i % 60:02d}] Jij: " + "woord " * 60 for i in range(100))
+    progress = []
+    report = summary.summarize(long, "llama3.1", True, progress=progress.append,
+                               request=fake_ollama(calls), verify=lambda name, minimum: 8192)
+    assert len(calls) == 4 and report["summary"] == "Totaal."  # 3 excerpts + 1 merge
+    assert "Excerpt 1 of 3" in calls[0]["messages"][1]["content"]
+    assert progress == sorted(progress) and progress[-1] < 1
+    with pytest.raises(summary.local.AnalysisError):
+        summary.summarize(short, "gpt-oss:20b-cloud", True, request=fake_ollama([]), verify=lambda n, m: 8192)
+
+
+def test_transcribe_then_summarize_writes_minutes(recorder):
+    seen = []
+
+    def summarizer(text, model, dutch, progress):
+        seen.append((model, dutch, "seg1" in text))
+        progress(0.5)
+        return {"model": model, "chunks": 1, "summary": "Kort.", "decisions": [],
+                "action_items": [{"who": "Jij", "what": "Mailen", "due": "", "timestamp": ""}]}
+
+    recorder.summarizer = summarizer
+    meeting_id = recorder.start(True, microphone=False)
+    recorder.fake.clock.now += 1
+    recorder.stop()
+    recorder.transcribe(meeting_id, "nl", False, background=False, summary_model="llama3.1")
+    meta = recorder.meetings()[0]
+    assert seen == [("llama3.1", True, True)] and meta["has_summary"] and meta["action_items"] == 1
+    assert "| Jij | Mailen |" in recorder.transcript(meeting_id, "md").read_text(encoding="utf-8")
+
+    recorder.summarizer = lambda *a, **k: (_ for _ in ()).throw(summary.local.AnalysisError("Ollama down", "Ollama uit", 503))
+    recorder.summarize(meeting_id, "llama3.1", background=False)
+    meta = recorder.meetings()[0]
+    assert meta["summary_error"] == "Ollama down" and meta["status"] == "transcribed" and not recorder.jobs
+
+
+class FakeRegistry:
+    HKEY_CURRENT_USER = "HKCU"
+
+    def __init__(self, tree):
+        self.tree = tree
+
+    def OpenKey(self, parent, name):
+        path = name if parent == "HKCU" else parent.path + "\\" + name
+        if path not in self.tree:
+            raise OSError(path)
+        registry = self
+
+        class Key:
+            def __init__(self):
+                self.path = path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        key = Key()
+        key.registry = registry
+        return key
+
+    def EnumKey(self, key, index):
+        children = sorted(k[len(key.path) + 1:] for k in self.tree
+                          if k.startswith(key.path + "\\") and "\\" not in k[len(key.path) + 1:])
+        if index >= len(children):
+            raise OSError("done")
+        return children[index]
+
+
+def test_active_call_apps_reads_microphone_usage(monkeypatch):
+    base = trigger.CONSENT_STORE
+    tree = {
+        base: {}, base + "\\NonPackaged": {},
+        base + "\\MSTeams_8wekyb3d8bbwe": {"LastUsedTimeStart": 5, "LastUsedTimeStop": 0},
+        base + "\\SpotifyAB.SpotifyMusic_x": {"LastUsedTimeStart": 5, "LastUsedTimeStop": 0},
+        base + "\\NonPackaged\\C:#Program Files#Zoom#bin#Zoom.exe": {"LastUsedTimeStart": 5, "LastUsedTimeStop": 9},
+        base + "\\NonPackaged\\C:#Program Files#Google#Chrome#chrome.exe": {"LastUsedTimeStart": 5, "LastUsedTimeStop": 0},
+    }
+    registry = FakeRegistry(tree)
+
+    def query(key, name):
+        values = tree[key.path]
+        if name not in values:
+            raise OSError(name)
+        return values[name], 4
+
+    monkeypatch.setattr(trigger, "winreg", type("W", (), {"QueryValueEx": staticmethod(query)}))
+    assert trigger.active_call_apps(registry) == ["Microsoft Teams"]
+    tree[base + "\\NonPackaged\\C:#Program Files#Zoom#bin#Zoom.exe"]["LastUsedTimeStop"] = 0
+    assert trigger.active_call_apps(registry) == ["Microsoft Teams", "Zoom"]
+
+
+def test_auto_recorder_starts_and_finishes_calls(recorder, tmp_path):
+    apps, notes, finished = [], [], []
+    auto = trigger.AutoRecorder(recorder, tmp_path / "auto.json", detector=lambda: list(apps),
+                                clock=recorder.fake.clock, notify=lambda en, nl, speak=False: notes.append((nl, speak)))
+    auto.start = lambda: None  # tests drive poll() directly
+    with pytest.raises(meeting.MeetingError):
+        auto.configure(False, True, False, "nl", False, "llama3.1")
+    auto.configure(True, True, False, "nl", False, "llama3.1")
+    assert json.loads((tmp_path / "auto.json").read_text())["model"] == "llama3.1"
+    recorder.transcribe = lambda *a, **k: finished.append((a, k))
+
+    apps.append("Microsoft Teams")
+    auto.poll()
+    recorder.fake.clock.now += 5
+    auto.poll()
+    assert recorder.snapshot()["recording"] is None  # not before 10 seconds in a call
+    recorder.fake.clock.now += 5
+    auto.poll()
+    meeting_id = recorder.snapshot()["recording"]["id"]
+    assert auto.snapshot()["auto_meeting"] == meeting_id and "Mijn AI-assistent luistert mee" in notes[0][0] and notes[0][1]
+    apps.clear()
+    auto.poll()
+    recorder.fake.clock.now += 29
+    auto.poll()
+    assert recorder.snapshot()["recording"]  # short drop-outs do not end the recording
+    recorder.fake.clock.now += 1
+    auto.poll()
+    assert recorder.snapshot()["recording"] is None
+    assert finished == [((meeting_id, "nl", False), {"summary_model": "llama3.1"})]
+
+    manual = recorder.start(True, microphone=False)  # a manual recording is never stopped automatically
+    apps.append("Zoom")
+    recorder.fake.clock.now += 20
+    auto.poll()
+    apps.clear()
+    recorder.fake.clock.now += 60
+    auto.poll()
+    auto.poll()
+    assert recorder.snapshot()["recording"]["id"] == manual
+    assert trigger.AutoRecorder(recorder, tmp_path / "auto.json").settings["enabled"] is True
+
+
+def test_routes_summary_models_and_auto(client, recorder, monkeypatch, tmp_path):
+    headers = {"X-Echo-Meeting-Token": server.VERGADERING_TOKEN}
+    auto = trigger.AutoRecorder(recorder, tmp_path / "auto.json", detector=lambda: [])
+    auto.start = lambda: None
+    monkeypatch.setattr(server, "VERGADER_AUTO", auto)
+    monkeypatch.setattr(server.lokale_analyse, "installed_models", lambda: ["llama3.1"])
+    assert client.get("/api/vergadering/models").json["models"] == ["llama3.1"]
+    status = client.get("/api/vergadering/status").json["meeting"]
+    assert status["auto"]["enabled"] is False
+    body = {"authorized": False, "enabled": True, "microphone": True, "language": "nl", "separate": False, "model": ""}
+    assert client.post("/api/vergadering/auto", json=body, headers=headers).status_code == 400
+    assert client.post("/api/vergadering/auto", json=dict(body, authorized=True)).status_code == 403
+    saved = client.post("/api/vergadering/auto", json=dict(body, authorized=True), headers=headers)
+    assert saved.status_code == 200 and saved.json["meeting"]["auto"]["enabled"] is True
+
+    recorder.summarizer = lambda text, model, dutch, progress: {
+        "model": model, "chunks": 1, "summary": "Kort.", "decisions": ["Ja"], "action_items": []}
+    meeting_id = recorder.start(True, microphone=False)
+    recorder.fake.clock.now += 1
+    recorder.stop()
+    assert client.post("/api/vergadering/summarize", json={"id": meeting_id, "model": "llama3.1"}, headers=headers).status_code == 409
+    recorder.transcribe(meeting_id, "nl", False, background=False)
+    monkeypatch.setattr(recorder, "summarize", lambda mid, model: recorder.__class__.summarize(recorder, mid, model, background=False))
+    done = client.post("/api/vergadering/summarize", json={"id": meeting_id, "model": "llama3.1"}, headers=headers)
+    assert done.status_code == 200 and done.json["meeting"]["meetings"][0]["has_summary"]
+    md = client.get(f"/api/vergadering/transcript/{meeting_id}.md")
+    assert md.status_code == 200 and "- Ja" in md.get_data(as_text=True)

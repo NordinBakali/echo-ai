@@ -605,8 +605,48 @@ worden nergens naartoe gestuurd.
    Whisper (`faster-whisper`) draait lokaal; met een NVIDIA-GPU gaat een uur in
    enkele minuten. Ontbreken CUDA-bibliotheken (zoals `cublas64_12.dll`), dan
    schakelt Echo automatisch over op de CPU (trager, wel correct).
-6. Bekijk het resultaat met **Tonen**, of download **.txt** (met tijdstempels)
-   of **.srt** (ondertitels). **Verwijderen** wist audio én tekst.
+6. Bekijk het resultaat met **Transcriptie tonen**, of download **.txt** (met
+   tijdstempels) of **.srt** (ondertitels). **Verwijderen** wist audio, tekst en
+   samenvatting.
+
+### Samenvatting & actiepunten (lokaal met Ollama)
+
+1. Installeer Ollama en een model, bijvoorbeeld in een terminal:
+   `ollama pull llama3.1` (beter) of `ollama pull qwen2.5:3b` (sneller, minder
+   nauwkeurig). Zorg dat Ollama draait.
+2. Kies op de vergaderpagina bij **Lokaal Ollama-model** je model. Met
+   **Automatisch samenvatten na uitschrijven** aan, maakt Echo na het uitschrijven
+   meteen de notulen. Anders klik je **Samenvatten** bij een vergadering.
+3. **Samenvatting tonen** of **.md** geeft: een korte samenvatting, de besluiten
+   en een tabel **Wie | Wat | Deadline | Tijd**. Lange vergaderingen worden in
+   stukken samengevat en daarna samengevoegd; er wordt niets stil weggelaten.
+
+Echo praat alleen met Ollama op `127.0.0.1` en weigert cloudmodellen. Er is
+bewust geen OpenAI/Claude-optie: dan zou wat anderen in de vergadering zeggen
+naar een extern bedrijf gaan. Het transcript wordt behandeld als onbetrouwbare
+tekst (instructies erin worden genegeerd), namen en deadlines worden niet
+verzonnen (`Onbekend` als niet duidelijk) en tijdstempels die niet in het
+transcript staan worden weggelaten. Controleer de notulen altijd voordat je ze
+deelt.
+
+### Automatisch opnemen bij een call
+
+1. Vink in **Automatisch starten bij een call** aan: **Calls automatisch
+   opnemen** en de bevestiging dat je aan het begin van elke call zegt:
+   *"Mijn AI-assistent luistert mee om de notulen te maken."* Klik **Opslaan**.
+2. Echo kijkt elke 5 seconden in Windows welke app je microfoon gebruikt. Is dat
+   Teams, Zoom, Webex, Slack of Skype langer dan 10 seconden, dan start de opname
+   en zegt Echo je die herinnering voor.
+3. 30 seconden nadat de call de microfoon loslaat stopt Echo, schrijft uit en
+   vat samen met de taal-, microfoon- en modelinstellingen van de pagina.
+
+Grenzen: browservergaderingen (Meet/Teams in Chrome of Edge) worden niet
+herkend; start die met de hand. Een handmatig gestarte opname wordt nooit
+automatisch gestopt. De instelling blijft bewaard na een herstart van Echo;
+zet hem uit met hetzelfde vinkje. Opnemen van gesprekken met anderen mag
+alleen met een geldige grondslag (bijvoorbeeld toestemming); informeer
+deelnemers altijd vooraf en stop als iemand bezwaar heeft. Dit is geen
+juridisch advies.
 
 Tips en grenzen:
 

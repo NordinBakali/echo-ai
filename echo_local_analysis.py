@@ -95,6 +95,37 @@ def installed_models() -> list[str]:
     return sorted(set(names))
 
 
+def verify_local_model(name: str, min_context: int) -> int:
+    """Refuse anything that is not an installed, local text model; returns its context length."""
+    if name not in installed_models():
+        raise AnalysisError(
+            "This model is not installed locally. Download a local model yourself first (for example: ollama pull llama3.1).",
+            "Dit model is niet lokaal geïnstalleerd. Download eerst zelf een lokaal model (bijvoorbeeld: ollama pull llama3.1).",
+            503,
+        )
+    details = local_request("show", {"model": name})
+    info = details.get("model_info")
+    if (
+        details.get("remote_host") or details.get("remote_model")
+        or not isinstance(info, dict) or not info.get("general.architecture")
+        or not isinstance(details.get("capabilities"), list)
+        or "completion" not in details["capabilities"]
+    ):
+        raise AnalysisError(
+            "Echo could not verify a local text model. Cloud/remote models are refused before any content is sent.",
+            "Echo kon geen lokaal tekstmodel bevestigen. Cloud-/externe modellen worden geweigerd voordat er inhoud wordt verstuurd.",
+            403,
+        )
+    architecture = info["general.architecture"]
+    context = info.get(f"{architecture}.context_length")
+    if type(context) is not int or context < min_context:
+        raise AnalysisError(
+            f"Choose a local text model with at least a {min_context // 1024}K context window.",
+            f"Kies een lokaal tekstmodel met minimaal een {min_context // 1024}K-contextvenster.",
+        )
+    return context
+
+
 def validate_files(files: object) -> list[dict[str, str]]:
     if not isinstance(files, list) or not 1 <= len(files) <= MAX_FILES:
         raise AnalysisError("Select 1 to 5 text or log files.", "Kies 1 tot 5 tekst- of logbestanden.")
@@ -141,32 +172,7 @@ def analyze(files: object, model: object, authorized: object, dutch: bool = Fals
     if not ANALYSIS_LOCK.acquire(blocking=False):
         raise AnalysisError("Another local analysis is running.", "Er loopt al een lokale analyse.", 409)
     try:
-        if name not in installed_models():
-            raise AnalysisError(
-                "This model is not installed locally. Download a local model yourself before analyzing files.",
-                "Dit model is niet lokaal geïnstalleerd. Download zelf een lokaal model voordat je bestanden analyseert.",
-                503,
-            )
-        details = local_request("show", {"model": name})
-        info = details.get("model_info")
-        if (
-            details.get("remote_host") or details.get("remote_model")
-            or not isinstance(info, dict) or not info.get("general.architecture")
-            or not isinstance(details.get("capabilities"), list)
-            or "completion" not in details["capabilities"]
-        ):
-            raise AnalysisError(
-                "Echo could not verify a local text model. Cloud/remote models are refused before file content is sent.",
-                "Echo kon geen lokaal tekstmodel bevestigen. Cloud-/externe modellen worden geweigerd voordat bestandsinhoud wordt verstuurd.",
-                403,
-            )
-        architecture = info["general.architecture"]
-        context = info.get(f"{architecture}.context_length")
-        if type(context) is not int or context < 32768:
-            raise AnalysisError(
-                "Choose a local text model with at least a 32K context window.",
-                "Kies een lokaal tekstmodel met minimaal een 32K-contextvenster.",
-            )
+        verify_local_model(name, 32768)
         numbered = [{"name": file["name"], "content": "\n".join(
             f"{index}: {line}" for index, line in enumerate(file["text"].splitlines(), 1)
         )} for file in selected]
