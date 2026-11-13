@@ -206,12 +206,17 @@
             }
         }
         const live = auto.enabled && auto.call_apps.length > 0;
+        const pending = live && !auto.auto_meeting && auto.starts_in !== null && !auto.skipped;
         $('auto-dot').classList.toggle('live', live && !!auto.auto_meeting);
+        $('auto-skip').hidden = !(live && !auto.auto_meeting && !auto.skipped);
         $('auto-state').textContent = !auto.supported ? text('Call detection only works on Windows.', 'Calldetectie werkt alleen op Windows.')
             : auto.error ? `${text('Problem', 'Probleem')}: ${auto.error}`
             : !auto.enabled ? text('Off', 'Uit')
             : auto.auto_meeting ? text(`In a ${auto.call_apps.join(', ')} call — recording`, `In een ${auto.call_apps.join(', ')}-call — opname loopt`)
-            : live ? text(`${auto.call_apps.join(', ')} call detected — starting soon…`, `${auto.call_apps.join(', ')}-call gedetecteerd — opname start zo…`)
+            : live && auto.skipped ? text(`${auto.call_apps.join(', ')} call — not recorded`, `${auto.call_apps.join(', ')}-call — wordt niet opgenomen`)
+            : pending ? text(`Announce the recording now: “My AI assistant is listening in to take the minutes.” Recording starts in ${auto.starts_in} s — nothing is recorded yet.`,
+                `Kondig de opname nu aan: “Mijn AI-assistent luistert mee om de notulen te maken.” Opname start over ${auto.starts_in} s — er wordt nog niets opgenomen.`)
+            : live ? text(`${auto.call_apps.join(', ')} call detected — you will be asked to announce the recording first…`, `${auto.call_apps.join(', ')}-call gedetecteerd — je krijgt eerst een seintje om de opname aan te kondigen…`)
             : text('On — waiting for a call', 'Aan — wacht op een call');
     }
 
@@ -220,6 +225,7 @@
         run('start', { authorized: $('consent').checked, microphone: $('mic').checked, title: $('title').value.trim() });
     });
     $('stop').addEventListener('click', () => run('stop', {}));
+    $('auto-skip').addEventListener('click', () => run('skip', {}));
     $('consent').addEventListener('change', updateButtons);
     $('auto-enabled').addEventListener('change', updateButtons);
     $('auto-consent').addEventListener('change', updateButtons);

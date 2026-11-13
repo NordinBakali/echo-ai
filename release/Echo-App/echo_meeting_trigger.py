@@ -21,7 +21,10 @@ DESKTOP_APPS = {
 }
 POLL_SECONDS = 5
 START_AFTER_SECONDS = 10
+ANNOUNCE_SECONDS = 15  # time between the spoken announcement and the first recorded audio
 STOP_AFTER_SECONDS = 30
+ANNOUNCEMENT_EN = "My AI assistant is listening in to take the minutes."
+ANNOUNCEMENT_NL = "Mijn AI-assistent luistert mee om de notulen te maken."
 
 
 def _in_use(key):
@@ -78,7 +81,8 @@ class AutoRecorder:
         self.notify = notify or (lambda en, nl, speak=False: None)
         self.lock = threading.Lock()
         self.settings = self._load()
-        self.call_since = self.quiet_since = None
+        self.call_since = self.quiet_since = self.announced_at = None
+        self.skipped = False
         self.apps, self.meeting_id, self.error = [], None, None
         self.thread = None
         self.halt = threading.Event()
@@ -110,7 +114,8 @@ class AutoRecorder:
             tmp = self.settings_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.settings, indent=2), encoding="utf-8")
             os.replace(tmp, self.settings_path)
-            self.call_since = self.quiet_since = None
+            self.call_since = self.quiet_since = self.announced_at = None
+            self.skipped = False
             if not enabled:
                 self.meeting_id, self.apps = None, []  # a running recording stays; stop it by hand
         if enabled:
@@ -120,9 +125,22 @@ class AutoRecorder:
 
     def snapshot(self):
         with self.lock:
+            starts_in = None
+            if self.announced_at is not None and self.meeting_id is None and not self.skipped:
+                starts_in = max(0, round(ANNOUNCE_SECONDS - (self.clock() - self.announced_at)))
             return {**self.settings, "running": bool(self.thread and self.thread.is_alive()),
                     "call_apps": list(self.apps), "auto_meeting": self.meeting_id, "error": self.error,
+                    "announced": self.announced_at is not None, "starts_in": starts_in, "skipped": self.skipped,
                     "supported": winreg is not None or self.detector is not active_call_apps}
+
+    def skip(self):
+        """Do not record the current call (e.g. someone objected); recording resumes for the next call."""
+        from echo_meeting_recorder import MeetingError
+        with self.lock:
+            if not self.apps or self.meeting_id is not None:
+                raise MeetingError("There is no pending automatic recording to skip.",
+                                   "Er is geen automatische opname die nog moet starten.", 409)
+            self.skipped = True
 
     def start(self):
         with self.lock:
@@ -147,7 +165,8 @@ class AutoRecorder:
             settings = dict(self.settings)
         if not settings["enabled"]:
             with self.lock:
-                self.apps, self.call_since, self.quiet_since = [], None, None
+                self.apps, self.call_since, self.quiet_since, self.announced_at = [], None, None, None
+                self.skipped = False
             return
         try:
             apps = self.detector()
@@ -162,19 +181,35 @@ class AutoRecorder:
                 self.quiet_since = None
                 self.call_since = self.call_since if self.call_since is not None else now
             else:
-                self.call_since = None
+                self.call_since = self.announced_at = None
+                self.skipped = False
                 self.quiet_since = self.quiet_since if self.quiet_since is not None else now
             ours = self.meeting_id
             current = self.recorder.snapshot()["recording"]
-            should_start = (apps and ours is None and current is None
-                            and now - self.call_since >= START_AFTER_SECONDS)
+            idle = bool(apps) and ours is None and current is None and not self.skipped
+            should_announce = (idle and self.announced_at is None
+                               and now - self.call_since >= START_AFTER_SECONDS)
+            should_start = (idle and self.announced_at is not None
+                            and now - self.announced_at >= ANNOUNCE_SECONDS)
+            if should_announce:
+                self.announced_at = now
             should_stop = (not apps and ours is not None and now - self.quiet_since >= STOP_AFTER_SECONDS)
         if ours is not None and (current is None or current["id"] != ours):
             # Stopped by hand (or the 4-hour limit): never take over a recording we did not start.
             with self.lock:
                 self.meeting_id = None
+                self.skipped = True  # do not restart within the same call
             return
-        if should_start:
+        if should_announce:
+            # Nothing is recorded yet: participants are told first and can object before audio is captured.
+            self.notify(
+                f"{apps[0]} call detected. Tell the participants now: \"{ANNOUNCEMENT_EN}\" "
+                f"Echo starts recording in {ANNOUNCE_SECONDS} seconds; choose 'Do not record' if someone objects.",
+                f"{apps[0]}-call gedetecteerd. Zeg nu tegen de deelnemers: \"{ANNOUNCEMENT_NL}\" "
+                f"Echo begint over {ANNOUNCE_SECONDS} seconden met opnemen; kies 'Niet opnemen' als iemand bezwaar heeft.",
+                True,
+            )
+        elif should_start:
             try:
                 meeting_id = self.recorder.start(True, settings["microphone"], f"{apps[0]} — auto")
             except MeetingError as exc:
@@ -183,11 +218,8 @@ class AutoRecorder:
                 return
             with self.lock:
                 self.meeting_id = meeting_id
-            self.notify(
-                f"{apps[0]} call detected: Echo is recording. Tell the participants: \"My AI assistant is listening in to take the minutes.\"",
-                f"{apps[0]}-call gedetecteerd: Echo neemt op. Zeg tegen de deelnemers: \"Mijn AI-assistent luistert mee om de notulen te maken.\"",
-                True,
-            )
+            self.notify(f"Echo is now recording the {apps[0]} call.",
+                        f"Echo neemt de {apps[0]}-call nu op.", False)
         elif should_stop:
             with self.lock:
                 self.meeting_id = None

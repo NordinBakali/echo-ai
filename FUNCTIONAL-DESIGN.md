@@ -246,13 +246,17 @@ access, and deleting a meeting removes its audio and transcript.
 After transcription, the user picks a locally installed language model and gets
 a short summary, the decisions and a "who does what" list. Optionally the user
 enables automatic recording after confirming they will announce it at the start
-of every call; Echo then starts when a supported meeting app uses the
-microphone and stops, transcribes and summarizes after the call ends.
+of every call; when a supported meeting app uses the microphone, Echo first
+reminds the user out loud to announce the recording, waits 15 seconds (during
+which the user can choose "Do not record"), and only then starts recording. It
+stops, transcribes and summarizes after the call ends.
 
 **Independent test:** verify no transcript content is sent to a non-local or
 cloud model, invented timestamps are dropped, automatic mode cannot be enabled
-without the announcement confirmation, a short microphone drop-out does not end
-the recording, and a manually started recording is never stopped automatically.
+without the announcement confirmation, no audio is recorded before the
+announcement and grace period, "Do not record" prevents recording for that call,
+a short microphone drop-out does not end the recording, and a manually started
+recording is never stopped automatically.
 
 ## 6. Functional requirements
 
@@ -336,9 +340,10 @@ the recording, and a manually started recording is never stopped automatically.
   deadline and transcript time without inventing them, and cover the whole
   transcript without silently omitting parts.
 - **REQ-028:** Automatic call recording MUST be off by default, require the
-  user's confirmation that participants will be informed, announce each
-  automatic start to the user, only stop recordings it started itself, and be
-  switchable off at any time.
+  user's confirmation that participants will be informed, prompt the user to
+  announce the recording before any audio is captured, wait a grace period in
+  which the user can decline recording for that call, only stop recordings it
+  started itself, and be switchable off at any time.
 
 ### Web automation, scanning, and exposure checks
 

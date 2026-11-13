@@ -339,11 +339,20 @@ def test_auto_recorder_starts_and_finishes_calls(recorder, tmp_path):
     auto.poll()
     recorder.fake.clock.now += 5
     auto.poll()
-    assert recorder.snapshot()["recording"] is None  # not before 10 seconds in a call
+    assert recorder.snapshot()["recording"] is None and notes == []  # not before 10 seconds in a call
     recorder.fake.clock.now += 5
     auto.poll()
+    # The announcement comes first; nothing is recorded until participants have been told.
+    assert recorder.snapshot()["recording"] is None
+    assert len(notes) == 1 and "Mijn AI-assistent luistert mee" in notes[0][0] and notes[0][1] is True
+    assert auto.snapshot()["starts_in"] == trigger.ANNOUNCE_SECONDS
+    recorder.fake.clock.now += trigger.ANNOUNCE_SECONDS - 1
+    auto.poll()
+    assert recorder.snapshot()["recording"] is None
+    recorder.fake.clock.now += 1
+    auto.poll()
     meeting_id = recorder.snapshot()["recording"]["id"]
-    assert auto.snapshot()["auto_meeting"] == meeting_id and "Mijn AI-assistent luistert mee" in notes[0][0] and notes[0][1]
+    assert auto.snapshot()["auto_meeting"] == meeting_id and len(notes) == 2 and notes[1][1] is False
     apps.clear()
     auto.poll()
     recorder.fake.clock.now += 29
@@ -366,6 +375,33 @@ def test_auto_recorder_starts_and_finishes_calls(recorder, tmp_path):
     assert trigger.AutoRecorder(recorder, tmp_path / "auto.json").settings["enabled"] is True
 
 
+def test_auto_recorder_skip_prevents_recording_until_next_call(recorder, tmp_path):
+    apps = []
+    auto = trigger.AutoRecorder(recorder, tmp_path / "auto.json", detector=lambda: list(apps), clock=recorder.fake.clock)
+    auto.start = lambda: None
+    auto.configure(True, True, False, "nl", False, "")
+    with pytest.raises(meeting.MeetingError):
+        auto.skip()  # no call yet
+    apps.append("Zoom")
+    auto.poll()
+    recorder.fake.clock.now += 10
+    auto.poll()
+    assert auto.snapshot()["announced"] is True
+    auto.skip()  # someone objected after the announcement
+    recorder.fake.clock.now += 60
+    auto.poll()
+    assert recorder.snapshot()["recording"] is None and auto.snapshot()["skipped"] is True
+    apps.clear()
+    auto.poll()  # call ended: the next call is handled normally again
+    apps.append("Zoom")
+    auto.poll()
+    recorder.fake.clock.now += 10
+    auto.poll()
+    recorder.fake.clock.now += trigger.ANNOUNCE_SECONDS
+    auto.poll()
+    assert recorder.snapshot()["recording"] is not None
+
+
 def test_routes_summary_models_and_auto(client, recorder, monkeypatch, tmp_path):
     headers = {"X-Echo-Meeting-Token": server.VERGADERING_TOKEN}
     auto = trigger.AutoRecorder(recorder, tmp_path / "auto.json", detector=lambda: [])
@@ -380,6 +416,7 @@ def test_routes_summary_models_and_auto(client, recorder, monkeypatch, tmp_path)
     assert client.post("/api/vergadering/auto", json=dict(body, authorized=True)).status_code == 403
     saved = client.post("/api/vergadering/auto", json=dict(body, authorized=True), headers=headers)
     assert saved.status_code == 200 and saved.json["meeting"]["auto"]["enabled"] is True
+    assert client.post("/api/vergadering/skip", json={}, headers=headers).status_code == 409  # no call to skip
 
     recorder.summarizer = lambda text, model, dutch, progress: {
         "model": model, "chunks": 1, "summary": "Kort.", "decisions": ["Ja"], "action_items": []}

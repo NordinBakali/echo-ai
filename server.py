@@ -19075,6 +19075,8 @@ def vergadering_api(actie):
         elif actie == "auto" and set(data) == {"authorized", "enabled", "microphone", "language", "separate", "model"}:
             VERGADER_AUTO.configure(data["authorized"], data["enabled"], data["microphone"],
                                     data["language"], data["separate"], data["model"])
+        elif actie == "skip" and not data:
+            VERGADER_AUTO.skip()
         else:
             raise vergaderopname.MeetingError("Invalid meeting action.", "Ongeldige vergaderactie.")
         return jsonify({"status": "success", "meeting": vergadering_status()})

@@ -632,17 +632,22 @@ deelt.
 ### Automatisch opnemen bij een call
 
 1. Vink in **Automatisch starten bij een call** aan: **Calls automatisch
-   opnemen** en de bevestiging dat je aan het begin van elke call zegt:
+   opnemen** en de bevestiging dat je vóór de opname begint zegt:
    *"Mijn AI-assistent luistert mee om de notulen te maken."* Klik **Opslaan**.
 2. Echo kijkt elke 5 seconden in Windows welke app je microfoon gebruikt. Is dat
-   Teams, Zoom, Webex, Slack of Skype langer dan 10 seconden, dan start de opname
-   en zegt Echo je die herinnering voor.
+   Teams, Zoom, Webex, Slack of Skype langer dan 10 seconden, dan geeft Echo je
+   eerst hardop een seintje om de opname aan te kondigen. Er wordt dan nog
+   **niets** opgenomen. Pas 15 seconden later start de opname. Heeft iemand
+   bezwaar, klik dan **Niet opnemen**: die call wordt dan niet opgenomen.
+   Echo's stem hoor jij; zeg de zin zelf in de call, zodat de deelnemers hem
+   ook echt horen.
 3. 30 seconden nadat de call de microfoon loslaat stopt Echo, schrijft uit en
    vat samen met de taal-, microfoon- en modelinstellingen van de pagina.
 
 Grenzen: browservergaderingen (Meet/Teams in Chrome of Edge) worden niet
 herkend; start die met de hand. Een handmatig gestarte opname wordt nooit
-automatisch gestopt. De instelling blijft bewaard na een herstart van Echo;
+automatisch gestopt. Stop je een automatische opname zelf, dan start Echo in
+dezelfde call niet opnieuw. De instelling blijft bewaard na een herstart van Echo;
 zet hem uit met hetzelfde vinkje. Opnemen van gesprekken met anderen mag
 alleen met een geldige grondslag (bijvoorbeeld toestemming); informeer
 deelnemers altijd vooraf en stop als iemand bezwaar heeft. Dit is geen
