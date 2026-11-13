@@ -332,8 +332,12 @@ start en scan daarna opnieuw.
 **Snellere herkenning:** Echo verwerkt handgebaren met een doeltempo van 20 beelden
 per seconde; de schets wordt tijdens gebruik ook maximaal 20 keer per seconde
 vernieuwd. De werkelijke snelheid en verwerkingstijd staan onder de schets.
-De camera wordt continu uitgelezen zonder wachtrij van oude beelden; houdingsanalyse
-draait op 5 controles per seconde om meer rekentijd voor je handen over te houden.
+De camera wordt continu uitgelezen zonder wachtrij van oude beelden; een frame dat
+al klaarligt wordt meteen verwerkt. Houdingsanalyse draait op een eigen achtergrondthread
+(5 controles per seconde) zodat die de handherkenning nooit ophoudt. Zolang de
+camera-assistent draait, zet Echo de Windows-energiebesparing (EcoQoS) voor zijn eigen
+proces uit; anders kan Windows de herkenning ruim drie keer vertragen als het
+Echo-venster op de achtergrond staat. Na het stoppen beslist Windows weer zelf.
 Je kunt je open hand eerst stilhouden en daarna vegen zonder een timerreset af te
 wachten. De bewuste vuistduur van 0,8 seconden en de pauze van twee seconden tussen
 acties blijven tegen onbedoelde bediening bestaan. Bij weinig licht of een trage

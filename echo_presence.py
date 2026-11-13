@@ -243,16 +243,20 @@ class CameraSource:
 
     def read(self):
         with self._condition:
-            sequence = self._sequence
+            return self.read_newer(self._sequence)[0]
+
+    def read_newer(self, after: int):
+        """Return the latest frame newer than `after` without waiting if one is already pending."""
+        with self._condition:
             ready = self._condition.wait_for(
-                lambda: self._sequence > sequence or self._error is not None or self._stop.is_set(),
+                lambda: self._sequence > after or self._error is not None or self._stop.is_set(),
                 timeout=CAMERA_FRAME_TIMEOUT,
             )
             if self._error is not None:
                 raise PresenceError(self._error.code) from self._error
             if not ready or self._stop.is_set() or self._frame is None:
                 raise PresenceError("camera_read")
-            return self._frame.copy()
+            return self._frame.copy(), self._sequence
 
     def close(self) -> None:
         with self._lock:

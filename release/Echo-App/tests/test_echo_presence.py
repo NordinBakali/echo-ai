@@ -1,4 +1,5 @@
 import threading
+import time
 from queue import Queue
 from unittest.mock import Mock
 
@@ -175,6 +176,29 @@ def test_camera_never_reuses_a_cached_frame_when_capture_stalls(monkeypatch):
             assert source._condition.wait_for(lambda: source._sequence == 1, timeout=1)
         with pytest.raises(presence.PresenceError, match="Camera frames"):
             source.read()
+    finally:
+        frames.put((False, None))
+        source.close()
+    capture.release.assert_called_once()
+
+
+def test_reader_gets_a_pending_newer_frame_without_waiting_but_never_the_same_frame_twice(monkeypatch):
+    frames = Queue()
+    frames.put((True, np.full((2, 2, 3), 7, dtype=np.uint8)))
+    capture = Mock()
+    capture.read.side_effect = lambda: frames.get(timeout=3)
+    monkeypatch.setattr(cv2, "VideoCapture", Mock(return_value=capture))
+    monkeypatch.setattr(presence, "CAMERA_FRAME_TIMEOUT", 0.2)
+    source = presence.CameraSource.acquire(0)
+    try:
+        with source._condition:
+            assert source._condition.wait_for(lambda: source._sequence == 1, timeout=1)
+        started = time.monotonic()
+        frame, sequence = source.read_newer(0)
+        assert time.monotonic() - started < 0.1
+        assert (int(frame[0, 0, 0]), sequence) == (7, 1)
+        with pytest.raises(presence.PresenceError, match="Camera frames"):
+            source.read_newer(sequence)
     finally:
         frames.put((False, None))
         source.close()

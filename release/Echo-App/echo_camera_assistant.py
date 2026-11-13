@@ -727,6 +727,27 @@ class GestureTracker:
         return action
 
 
+def set_power_throttling(enabled: bool) -> bool:
+    """Toggle Windows EcoQoS for this process; throttled inference is roughly 3x slower."""
+    if sys.platform != "win32":
+        return False
+
+    class PowerThrottlingState(ctypes.Structure):
+        _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG), ("StateMask", wintypes.ULONG)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetProcessInformation.restype = wintypes.BOOL
+    # ControlMask 0 hands the choice back to Windows; ControlMask 1 with StateMask 0 opts out of EcoQoS.
+    state = PowerThrottlingState(1, 0 if enabled else 1, 0)
+    process_power_throttling = 4
+    if not kernel32.SetProcessInformation(kernel32.GetCurrentProcess(), process_power_throttling, ctypes.byref(state), ctypes.sizeof(state)):
+        LOGGER.debug("Power throttling change failed: %s", ctypes.get_last_error())
+        return False
+    return True
+
+
 def desktop_available() -> bool:
     if sys.platform != "win32":
         return False
@@ -820,6 +841,15 @@ class LandmarkDetector:
             raise CameraAssistantError("dependency") from exc
         self.mp = mp
         self.resources = ExitStack()
+        self.timestamp = 0
+        self.sequence = 0
+        self.next_pose = 0.0
+        self.body: list[Point] = []
+        self._pose_condition = threading.Condition()
+        self._pose_job: tuple[object, int] | None = None
+        self._pose_error: Exception | None = None
+        self._pose_closed = False
+        self._pose_thread: threading.Thread | None = None
         try:
             if stop is not None and stop.is_set():
                 raise DetectionStopped()
@@ -831,6 +861,8 @@ class LandmarkDetector:
                     min_pose_detection_confidence=0.7, min_pose_presence_confidence=0.7,
                 )
             )) if settings.posture else None
+            if self.pose:
+                self.resources.callback(self._stop_pose_worker)
             if stop is not None and stop.is_set():
                 raise DetectionStopped()
             self.hand = self.resources.enter_context(vision.GestureRecognizer.create_from_options(
@@ -844,28 +876,67 @@ class LandmarkDetector:
                 raise DetectionStopped()
             self.source = CameraSource.acquire(settings.camera_index)
             self.resources.callback(self.source.close)
+            if self.pose:
+                # Posture runs beside gestures so a slow pose frame never delays a hand frame.
+                self._pose_thread = threading.Thread(target=self._pose_loop, name="echo-camera-pose", daemon=True)
+                self._pose_thread.start()
         except (DetectionStopped, PresenceError, CameraAssistantError, OSError, RuntimeError, ValueError):
             self.resources.close()
             raise
-        self.timestamp = 0
-        self.next_pose = 0.0
-        self.body: list[Point] = []
+
+    def _pose_loop(self) -> None:
+        while True:
+            with self._pose_condition:
+                self._pose_condition.wait_for(lambda: self._pose_job is not None or self._pose_closed)
+                if self._pose_closed:
+                    return
+                image, timestamp = self._pose_job
+                self._pose_job = None
+            try:
+                self._detect_pose(image, timestamp)
+            except (RuntimeError, ValueError) as exc:
+                with self._pose_condition:
+                    self._pose_error = exc
+                return
+
+    def _detect_pose(self, image, timestamp: int) -> None:
+        pose = self.pose.detect_for_video(image, timestamp)
+        self.body = [
+            Point(p.x, p.y, p.z, p.visibility or 0)
+            for p in pose.pose_landmarks[0]
+        ] if pose.pose_landmarks else []
+
+    def _queue_pose(self, image, timestamp: int) -> None:
+        if self._pose_thread is None:
+            self._detect_pose(image, timestamp)
+            return
+        with self._pose_condition:
+            if self._pose_error is not None:
+                raise self._pose_error
+            # Replace a waiting job: posture only needs the newest frame.
+            self._pose_job = (image, timestamp)
+            self._pose_condition.notify()
+
+    def _stop_pose_worker(self) -> None:
+        with self._pose_condition:
+            self._pose_closed = True
+            self._pose_job = None
+            self._pose_condition.notify_all()
+        if self._pose_thread is not None and self._pose_thread.is_alive():
+            self._pose_thread.join(timeout=3)
 
     def read(self) -> tuple[list[Point], list[tuple[str, list[Point], str, float]]]:
         cv2 = self.source.cv2
         try:
-            frame = cv2.cvtColor(cv2.flip(self.source.read(), 1), cv2.COLOR_BGR2RGB)
+            raw, self.sequence = self.source.read_newer(self.sequence)
+            frame = cv2.cvtColor(cv2.flip(raw, 1), cv2.COLOR_BGR2RGB)
             image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB, data=frame)
             now = time.monotonic()
             self.timestamp = max(self.timestamp + 1, int(now * 1000))
-            result = self.hand.recognize_for_video(image, self.timestamp) if self.hand else None
             if self.pose and now >= self.next_pose:
-                pose = self.pose.detect_for_video(image, self.timestamp)
-                self.body = [
-                    Point(p.x, p.y, p.z, p.visibility or 0)
-                    for p in pose.pose_landmarks[0]
-                ] if pose.pose_landmarks else []
                 self.next_pose = now + POSTURE_FRAME_SECONDS
+                self._queue_pose(image, self.timestamp)
+            result = self.hand.recognize_for_video(image, self.timestamp) if self.hand else None
             hands = []
             for index, landmarks in enumerate(result.hand_landmarks[:2] if result else []):
                 categories = result.handedness[index] if index < len(result.handedness) else []
@@ -1067,6 +1138,7 @@ class CameraAssistantMonitor:
 
     def _run(self) -> None:
         detector = None
+        throttling_changed = set_power_throttling(False)
         try:
             detector = LandmarkDetector(self._settings, self._stop)
             while not self._stop.is_set():
@@ -1102,6 +1174,8 @@ class CameraAssistantMonitor:
                 self._error_nl = exc.localized(True) if isinstance(exc, (PresenceError, CameraAssistantError)) else "De camera-assistent is gestopt door een verwerkingsfout. Controleer het Echo-logboek."
                 self._phase = "error"
         finally:
+            if throttling_changed:
+                set_power_throttling(True)
             try:
                 if detector:
                     detector.close()

@@ -622,18 +622,24 @@ def test_monitor_cadence_includes_processing_time(monkeypatch, camera_observatio
     camera.close.assert_called_once()
 
 
+def bare_detector(frame=None):
+    detector = coach.LandmarkDetector.__new__(coach.LandmarkDetector)
+    detector.source = Mock(cv2=cv2)
+    detector.source.read_newer.return_value = (np.zeros((480, 640, 3), dtype=np.uint8) if frame is None else frame, 1)
+    detector.mp = SimpleNamespace(Image=lambda **_kwargs: object(), ImageFormat=SimpleNamespace(SRGB=1))
+    detector.timestamp, detector.sequence, detector.next_pose, detector.body = 0, 0, 0.0, []
+    detector._pose_thread = None
+    return detector
+
+
 def test_pose_sampling_leaves_capacity_for_hands_and_expires_missing_pose(monkeypatch, camera_observation):
     clock = [0.0]
     monkeypatch.setattr(coach, "time", SimpleNamespace(monotonic=lambda: clock[0]))
-    detector = coach.LandmarkDetector.__new__(coach.LandmarkDetector)
-    detector.source = Mock(cv2=cv2)
-    detector.source.read.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
-    detector.mp = SimpleNamespace(Image=lambda **_kwargs: object(), ImageFormat=SimpleNamespace(SRGB=1))
+    detector = bare_detector()
     detector.pose = Mock()
     detector.pose.detect_for_video.return_value = SimpleNamespace(pose_landmarks=[camera_observation()[0]])
     detector.hand = Mock()
     detector.hand.recognize_for_video.return_value = SimpleNamespace(hand_landmarks=[], handedness=[], gestures=[])
-    detector.timestamp, detector.next_pose, detector.body = 0, 0.0, []
     for i in range(40):
         clock[0] = i / 20
         assert len(detector.read()[0]) == 33
@@ -644,14 +650,49 @@ def test_pose_sampling_leaves_capacity_for_hands_and_expires_missing_pose(monkey
     assert detector.read() == ([], [])
 
 
+def test_slow_posture_runs_beside_hand_frames_and_uses_newest_frame(camera_observation):
+    detector = bare_detector()
+    started, release = threading.Event(), threading.Event()
+
+    def slow_pose(_image, _timestamp):
+        started.set()
+        release.wait(2)
+        return SimpleNamespace(pose_landmarks=[camera_observation()[0]])
+
+    detector.pose = Mock()
+    detector.pose.detect_for_video.side_effect = slow_pose
+    detector.hand = Mock()
+    detector.hand.recognize_for_video.return_value = SimpleNamespace(hand_landmarks=[], handedness=[], gestures=[])
+    detector._pose_condition = threading.Condition()
+    detector._pose_job, detector._pose_error, detector._pose_closed = None, None, False
+    detector._pose_thread = threading.Thread(target=detector._pose_loop, daemon=True)
+    detector._pose_thread.start()
+    try:
+        began = time.monotonic()
+        detector.read()
+        assert started.wait(1)
+        for _ in range(4):
+            detector.next_pose = 0.0
+            detector.read()
+        assert time.monotonic() - began < 1
+        assert detector.hand.recognize_for_video.call_count == 5
+        assert detector.pose.detect_for_video.call_count == 1
+        release.set()
+        deadline = time.monotonic() + 2
+        while (len(detector.body) != 33 or detector.pose.detect_for_video.call_count < 2) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(detector.body) == 33
+        assert detector.pose.detect_for_video.call_count == 2, "Waiting pose frames are replaced by the newest one"
+    finally:
+        release.set()
+        detector._stop_pose_worker()
+    assert not detector._pose_thread.is_alive()
+
+
 def test_detector_returns_both_hands_sorted_with_unique_sides(hand_points):
-    detector = coach.LandmarkDetector.__new__(coach.LandmarkDetector)
-    detector.source = Mock(cv2=cv2)
-    detector.source.read.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
-    detector.mp = SimpleNamespace(Image=lambda **_kwargs: object(), ImageFormat=SimpleNamespace(SRGB=1))
+    detector = bare_detector()
     detector.pose = None
     detector.hand = Mock()
-    detector.timestamp, detector.next_pose, detector.body = 0, 0.0, []
 
     def landmarks(kind, x):
         return [SimpleNamespace(x=p.x, y=p.y, z=p.z) for p in hand_points(kind, x)]
@@ -913,7 +954,7 @@ def test_real_models_run_on_synthetic_pixels_without_camera_or_network(monkeypat
     if not all((coach.MODEL_DIR / data[0]).exists() for data in coach.MODELS.values()):
         pytest.skip("Optional model-runtime check requires previously downloaded model assets")
     camera = Mock(cv2=cv2)
-    camera.read.return_value = np.zeros((480, 640, 3), dtype=np.uint8)
+    camera.read_newer.return_value = (np.zeros((480, 640, 3), dtype=np.uint8), 1)
     monkeypatch.setattr(coach.CameraSource, "acquire", Mock(return_value=camera))
     monkeypatch.setattr(coach.urllib.request, "urlopen", lambda *_args, **_kwargs: pytest.fail("No download expected"))
     detector = coach.LandmarkDetector(coach.Settings())
